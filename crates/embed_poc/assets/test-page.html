@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tolaria Phase 0 Spike WebView</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body {
+        background: #fafafa;
+        color: #1f2328;
+        font: 15px/1.5 -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+        padding: 24px;
+      }
+      h1 { font-size: 18px; margin: 0 0 16px; }
+      .row { display: flex; gap: 12px; margin-bottom: 12px; align-items: center; }
+      label { width: 110px; font-size: 13px; color: #57606a; }
+      textarea, input[type="text"] {
+        flex: 1;
+        font: inherit;
+        padding: 8px 10px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        background: #ffffff;
+        color: inherit;
+      }
+      textarea { min-height: 120px; resize: vertical; }
+      button {
+        font: inherit;
+        padding: 6px 14px;
+        border-radius: 6px;
+        border: 1px solid #1f6feb;
+        background: #1f6feb;
+        color: #ffffff;
+        cursor: pointer;
+      }
+      button:active { transform: translateY(1px); }
+      pre {
+        font: 12px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+        background: #f6f8fa;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        padding: 8px 10px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Phase 0 Spike WebView</h1>
+
+    <div class="row">
+      <label for="ta">Textarea</label>
+      <textarea id="ta" rows="6" cols="60" autofocus placeholder="type here — used in IME / focus tests in task #7"></textarea>
+    </div>
+
+    <div class="row">
+      <label for="single-line">Single line</label>
+      <input id="single-line" type="text" placeholder="single-line input" />
+    </div>
+
+    <div class="row">
+      <label></label>
+      <button id="btn">Click me</button>
+    </div>
+
+    <div class="row">
+      <label>Last IPC</label>
+      <pre id="log">(no IPC sent yet)</pre>
+    </div>
+
+    <script>
+      // Minimal stub of the eventual `window.tolariaShell.*` bridge — task #7
+      // fleshes out focus / IME / save event types. For task #4 we only need
+      // a callable channel that doesn't crash if devtools are unavailable.
+      const post = (k, v) => {
+        const payload = JSON.stringify({ k, v });
+        try {
+          window.ipc?.postMessage?.(payload);
+        } catch (err) {
+          console.warn("ipc.postMessage failed", err);
+        }
+        const log = document.getElementById("log");
+        if (log) log.textContent = payload;
+      };
+
+      window.tolariaPoc = { log: post };
+
+      document.getElementById("btn")?.addEventListener("click", () => {
+        post("button_click", Date.now());
+      });
+    </script>
+  </body>
+</html>

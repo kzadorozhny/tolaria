@@ -46,7 +46,13 @@ gpui = { git = "https://github.com/zed-industries/zed" }
 gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "a5268cd640da080d9d383856ee62990dfb23d6f0" }
 gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "a5268cd640da080d9d383856ee62990dfb23d6f0", package = "gpui-wry" }
-wry = "0.45"
+# `gpui-wry` internally depends on `wry = { version = "0.53.3", package = "lb-wry" }`
+# (longbridge's fork that adds GPUI-friendly bounds tracking). We MUST pin the
+# same source/version here so the `wry::WebView` we construct in embed_poc has
+# the same type as the one `gpui_wry::WebView::new` accepts — using upstream
+# wry would surface as a type-mismatch on the constructor.
+wry = { version = "0.53.3", package = "lb-wry" }
+raw-window-handle = "0.6"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"

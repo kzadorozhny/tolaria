@@ -1,15 +1,15 @@
-//! Two-pane sidebar layout for the ADR-0115 Phase 0 spike (task #3).
+//! Two-pane sidebar layout for the ADR-0115 Phase 0 spike (tasks #3 + #4).
 //!
 //! Wraps gpui-component's `h_resizable` primitive so the draggable splitter
-//! and clamping are handled upstream. The view itself only owns
-//! (i) the `ResizableState` entity backing the splitter so we can read panel
-//!     sizes from event callbacks, and
-//! (ii) the previous viewport size so window-resize logs deduplicate against
-//!      pure window-move events (which also fire `observe_window_bounds`).
+//! and clamping are handled upstream. The right pane hosts the embedded
+//! WKWebView entity created in `crate::webview` — gpui-wry's `Element`
+//! impl re-applies `set_bounds(...)` on every prepaint, so the splitter
+//! drag already drives the webview's NSView geometry (task #5 verifies the
+//! tightness of this and bolts on explicit logging).
 //!
-//! Two log streams feed task #5's validation script — both on the
-//! `embed_poc::frame` log target so a single `RUST_LOG=embed_poc::frame=info`
-//! captures only frame-sync evidence and nothing else:
+//! Two `frame_event` log streams feed task #5's validation script — both on
+//! the `embed_poc::frame` target so a single `RUST_LOG=embed_poc::frame=info`
+//! captures only frame-sync evidence:
 //!   - `frame_event kind=sidebar_resize ...` on every committed splitter drag
 //!     (via `ResizablePanelGroup::on_resize`, which only fires at drag end).
 //!   - `frame_event kind=window_resize ...` on every OS window content-area
@@ -21,6 +21,7 @@ use gpui::{
     Window, div, px, rgb,
 };
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
+use gpui_wry::WebView;
 
 const SIDEBAR_DEFAULT: f32 = 240.0;
 const SIDEBAR_MIN: f32 = 160.0;
@@ -29,11 +30,16 @@ const FRAME_TARGET: &str = "embed_poc::frame";
 
 pub struct RootView {
     resizable_state: Entity<ResizableState>,
+    webview: Entity<WebView>,
     last_viewport: Size<Pixels>,
 }
 
 impl RootView {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        webview: Entity<WebView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let resizable_state = cx.new(|_| ResizableState::default());
 
         cx.observe_window_bounds(window, |this, window, cx| {
@@ -43,6 +49,7 @@ impl RootView {
 
         Self {
             resizable_state,
+            webview,
             last_viewport: window.viewport_size(),
         }
     }
@@ -65,6 +72,7 @@ impl RootView {
 impl Render for RootView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.resizable_state.clone();
+        let webview = self.webview.clone();
         div().size_full().bg(rgb(0x1e1f24)).child(
             h_resizable("sidebar-layout")
                 .with_state(&state)
@@ -75,7 +83,7 @@ impl Render for RootView {
                         .flex_none()
                         .child(sidebar_panel()),
                 )
-                .child(resizable_panel().child(content_panel()))
+                .child(resizable_panel().child(content_panel(webview)))
                 .on_resize(|state, window, cx| log_sidebar_resize(state, window, cx)),
         )
     }
@@ -110,14 +118,8 @@ fn sidebar_panel() -> impl IntoElement {
         .child("Sidebar")
 }
 
-fn content_panel() -> impl IntoElement {
-    div()
-        .size_full()
-        .bg(rgb(0x12141a))
-        .text_color(rgb(0x9aa0a6))
-        .p_3()
-        .text_sm()
-        .child("editor goes here")
+fn content_panel(webview: Entity<WebView>) -> impl IntoElement {
+    div().size_full().bg(rgb(0x12141a)).child(webview)
 }
 
 fn same_size(a: Size<Pixels>, b: Size<Pixels>) -> bool {

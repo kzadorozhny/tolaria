@@ -15,6 +15,8 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod layout;
+#[cfg(target_os = "macos")]
+mod webview;
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -58,7 +60,8 @@ mod macos {
             };
 
             let opened = cx.open_window(opts, |window, cx| {
-                cx.new(|cx| RootView::new(window, cx))
+                let webview = crate::webview::spawn_test_webview(window, cx);
+                cx.new(|cx| RootView::new(webview, window, cx))
             });
 
             if let Err(err) = opened {
