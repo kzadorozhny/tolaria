@@ -16,6 +16,8 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod layout;
 #[cfg(target_os = "macos")]
+mod menus;
+#[cfg(target_os = "macos")]
 mod webview;
 
 #[cfg(target_os = "macos")]
@@ -26,12 +28,13 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod macos {
     use gpui::{
-        App, AppContext, Bounds, SharedString, TitlebarOptions, WindowBounds, WindowOptions, px,
-        size,
+        App, AppContext, Bounds, KeyBinding, SharedString, TitlebarOptions, WindowBounds,
+        WindowOptions, px, size,
     };
     use gpui_platform::application;
 
     use crate::layout::RootView;
+    use crate::menus::{Quit, Save, app_menus};
 
     const WINDOW_TITLE: &str = "Tolaria Phase 0 Spike";
     const WINDOW_WIDTH: f32 = 1200.0;
@@ -46,6 +49,22 @@ mod macos {
             // gpui-component reads a Theme global from the App; without this
             // call, primitives like `h_resizable` panic on first render.
             gpui_component::init(cx);
+
+            // ADR-0115 §6: install the native menu BEFORE the window opens so
+            // AppKit picks the accelerators up immediately, then register the
+            // global action handlers + keybindings for Save/Quit. Edit-menu
+            // entries are `MenuItem::os_action(...)` so AppKit's standard
+            // selector chain (cut:/copy:/paste:/undo:/redo:/selectAll:) keeps
+            // routing into the focused WKWebView untouched.
+            cx.on_action(|_: &Save, _cx| {
+                log::info!(target: "embed_poc::menu", "cmd_s_fired");
+            });
+            cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.bind_keys([
+                KeyBinding::new("cmd-s", Save, None),
+                KeyBinding::new("cmd-q", Quit, None),
+            ]);
+            cx.set_menus(app_menus());
 
             let bounds =
                 Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
