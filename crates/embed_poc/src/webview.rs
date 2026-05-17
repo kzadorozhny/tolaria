@@ -36,6 +36,8 @@ use wry::{
 
 const TEST_PAGE_HTML: &str = include_str!("../assets/test-page.html");
 const IPC_TARGET: &str = "embed_poc::ipc";
+const FOCUS_TARGET: &str = "embed_poc::focus";
+const IME_TARGET: &str = "embed_poc::ime";
 const FRAME_TARGET: &str = "embed_poc::frame";
 
 /// 0.5-logical-pixel epsilon per ADR-0115 §4.
@@ -54,7 +56,7 @@ pub fn spawn_test_webview(window: &mut Window, cx: &mut App) -> Entity<WebView> 
             .with_devtools(true)
             .with_ipc_handler(|req| {
                 let body = req.body();
-                log::info!(target: IPC_TARGET, "ipc raw={body}");
+                dispatch_ipc(body);
             });
 
         let webview = builder
@@ -190,6 +192,58 @@ impl Element for InstrumentedWebView {
         _: &mut Window,
         _: &mut App,
     ) {
+    }
+}
+
+/// Parse the `{k, v}` IPC envelope emitted by the test page and re-emit
+/// normalized log lines on the appropriate target. Falls back to
+/// `ipc raw=...` on parse failure so the validation script in task #8
+/// can still grep the raw stream.
+fn dispatch_ipc(body: &str) {
+    let Ok(envelope) = serde_json::from_str::<serde_json::Value>(body) else {
+        log::info!(target: IPC_TARGET, "ipc raw={body}");
+        return;
+    };
+
+    let kind = envelope.get("k").and_then(|v| v.as_str()).unwrap_or("?");
+    let value = envelope.get("v").cloned().unwrap_or(serde_json::Value::Null);
+
+    match kind {
+        "focus" | "blur" => {
+            let state = if kind == "focus" { "in" } else { "out" };
+            let target = value.as_str().unwrap_or("?");
+            log::info!(
+                target: FOCUS_TARGET,
+                "webview_focus state={state} target={target}"
+            );
+        }
+        "composition" => {
+            let phase = value
+                .get("phase")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?");
+            let data = value
+                .get("data")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let value_len = value
+                .get("value")
+                .and_then(|v| v.as_str())
+                .map(|s| s.chars().count())
+                .unwrap_or(0);
+            log::info!(
+                target: IME_TARGET,
+                "ime phase={phase} data={data:?} value_len={value_len}"
+            );
+        }
+        "keydown" => {
+            let key = value.get("key").and_then(|v| v.as_str()).unwrap_or("?");
+            let mods = value.get("mods").and_then(|v| v.as_str()).unwrap_or("");
+            log::info!(target: IPC_TARGET, "keydown key={key} mods={mods}");
+        }
+        _ => {
+            log::info!(target: IPC_TARGET, "ipc raw={body}");
+        }
     }
 }
 

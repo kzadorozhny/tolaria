@@ -43,6 +43,8 @@
         border-radius: 6px;
         padding: 8px 10px;
         white-space: pre-wrap;
+        max-height: 140px;
+        overflow: auto;
       }
     </style>
   </head>
@@ -51,7 +53,7 @@
 
     <div class="row">
       <label for="ta">Textarea</label>
-      <textarea id="ta" rows="6" cols="60" autofocus placeholder="type here — used in IME / focus tests in task #7"></textarea>
+      <textarea id="ta" rows="6" cols="60" autofocus placeholder="type here — exercises focus + IME composition logging"></textarea>
     </div>
 
     <div class="row">
@@ -70,9 +72,8 @@
     </div>
 
     <script>
-      // Minimal stub of the eventual `window.tolariaShell.*` bridge — task #7
-      // fleshes out focus / IME / save event types. For task #4 we only need
-      // a callable channel that doesn't crash if devtools are unavailable.
+      // The bridge — every event the Rust side cares about flows through
+      // window.tolariaPoc.log(kind, value) and out via wry's IPC channel.
       const post = (k, v) => {
         const payload = JSON.stringify({ k, v });
         try {
@@ -81,10 +82,63 @@
           console.warn("ipc.postMessage failed", err);
         }
         const log = document.getElementById("log");
-        if (log) log.textContent = payload;
+        if (log) {
+          const line = payload + "\n" + (log.textContent ?? "");
+          log.textContent = line.length > 2000 ? line.slice(0, 2000) : line;
+        }
       };
 
       window.tolariaPoc = { log: post };
+
+      const ta = document.getElementById("ta");
+      const singleLine = document.getElementById("single-line");
+
+      const attachFocusTracking = (el, targetName) => {
+        el?.addEventListener("focus", () => post("focus", targetName));
+        el?.addEventListener("blur", () => post("blur", targetName));
+      };
+      attachFocusTracking(ta, "textarea");
+      attachFocusTracking(singleLine, "single-line");
+
+      // IME composition events. `value` carries the current textarea contents
+      // so the Rust side can confirm the buffer matches expectations on
+      // commit. Phase strings match the DOM event names so they read clean
+      // in the stdout stream.
+      const attachComposition = (el, _targetName) => {
+        const emit = (phase) => (event) => {
+          post("composition", {
+            phase,
+            data: event.data ?? "",
+            value: el?.value ?? "",
+          });
+        };
+        el?.addEventListener("compositionstart", emit("compositionstart"));
+        el?.addEventListener("compositionupdate", emit("compositionupdate"));
+        el?.addEventListener("compositionend", emit("compositionend"));
+      };
+      attachComposition(ta, "textarea");
+      attachComposition(singleLine, "single-line");
+
+      // Non-printing keys (and any chord with a modifier) are forwarded so
+      // we can distinguish "menu intercepted Cmd+S" from "webview swallowed
+      // Cmd+S". Plain printable characters are filtered out to keep stdout
+      // legible during normal typing.
+      const isPrintable = (e) =>
+        e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey;
+      const forwardKey = (e) => {
+        if (isPrintable(e)) return;
+        const mods = [
+          e.metaKey ? "cmd" : null,
+          e.ctrlKey ? "ctrl" : null,
+          e.altKey ? "alt" : null,
+          e.shiftKey ? "shift" : null,
+        ]
+          .filter(Boolean)
+          .join("+");
+        post("keydown", { key: e.key, mods });
+      };
+      ta?.addEventListener("keydown", forwardKey);
+      singleLine?.addEventListener("keydown", forwardKey);
 
       document.getElementById("btn")?.addEventListener("click", () => {
         post("button_click", Date.now());

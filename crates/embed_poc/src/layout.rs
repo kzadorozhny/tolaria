@@ -19,8 +19,8 @@
 //!     actually changes the WebView's bounds.
 
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Pixels, Render, Size, Styled,
-    Window, div, px, rgb,
+    App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Render, Size, Styled, Window, div, px, rgb,
 };
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_wry::WebView;
@@ -31,11 +31,13 @@ const SIDEBAR_DEFAULT: f32 = 240.0;
 const SIDEBAR_MIN: f32 = 160.0;
 const SIDEBAR_MAX: f32 = 480.0;
 const FRAME_TARGET: &str = "embed_poc::frame";
+const FOCUS_TARGET: &str = "embed_poc::focus";
 
 pub struct RootView {
     resizable_state: Entity<ResizableState>,
     webview: Entity<WebView>,
     webview_last_bounds: FrameSyncState,
+    sidebar_focus: FocusHandle,
     last_viewport: Size<Pixels>,
 }
 
@@ -46,9 +48,25 @@ impl RootView {
         cx: &mut Context<Self>,
     ) -> Self {
         let resizable_state = cx.new(|_| ResizableState::default());
+        let sidebar_focus = cx.focus_handle();
 
         cx.observe_window_bounds(window, |this, window, cx| {
             this.log_window_resize(window, cx);
+        })
+        .detach();
+
+        cx.on_focus(&sidebar_focus, window, |_, _, _| {
+            log::info!(
+                target: FOCUS_TARGET,
+                "gpui_focus state=in target=sidebar"
+            );
+        })
+        .detach();
+        cx.on_blur(&sidebar_focus, window, |_, _, _| {
+            log::info!(
+                target: FOCUS_TARGET,
+                "gpui_focus state=out target=sidebar"
+            );
         })
         .detach();
 
@@ -56,6 +74,7 @@ impl RootView {
             resizable_state,
             webview,
             webview_last_bounds: new_frame_sync_state(),
+            sidebar_focus,
             last_viewport: window.viewport_size(),
         }
     }
@@ -80,6 +99,7 @@ impl Render for RootView {
         let state = self.resizable_state.clone();
         let webview = self.webview.clone();
         let last_bounds = self.webview_last_bounds.clone();
+        let sidebar_focus = self.sidebar_focus.clone();
         div().size_full().bg(rgb(0x1e1f24)).child(
             h_resizable("sidebar-layout")
                 .with_state(&state)
@@ -88,7 +108,7 @@ impl Render for RootView {
                         .size(px(SIDEBAR_DEFAULT))
                         .size_range(px(SIDEBAR_MIN)..px(SIDEBAR_MAX))
                         .flex_none()
-                        .child(sidebar_panel()),
+                        .child(sidebar_panel(sidebar_focus)),
                 )
                 .child(resizable_panel().child(content_panel(webview, last_bounds)))
                 .on_resize(|state, window, cx| log_sidebar_resize(state, window, cx)),
@@ -115,8 +135,9 @@ fn log_sidebar_resize(state: &Entity<ResizableState>, window: &mut Window, cx: &
     );
 }
 
-fn sidebar_panel() -> impl IntoElement {
+fn sidebar_panel(focus: FocusHandle) -> impl IntoElement {
     div()
+        .track_focus(&focus)
         .size_full()
         .bg(rgb(0x282a36))
         .text_color(rgb(0xe6e6e6))
