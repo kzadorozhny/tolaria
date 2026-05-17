@@ -153,8 +153,46 @@ fn content_panel(webview: Entity<WebView>, last_bounds: FrameSyncState) -> impl 
         .child(InstrumentedWebView::new(webview, last_bounds))
 }
 
-fn same_size(a: Size<Pixels>, b: Size<Pixels>) -> bool {
+pub(crate) fn same_size(a: Size<Pixels>, b: Size<Pixels>) -> bool {
     const EPSILON: f32 = 0.5;
     (f32::from(a.width) - f32::from(b.width)).abs() < EPSILON
         && (f32::from(a.height) - f32::from(b.height)).abs() < EPSILON
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::px;
+
+    fn s(w: f32, h: f32) -> Size<Pixels> {
+        Size::new(px(w), px(h))
+    }
+
+    #[test]
+    fn same_size_is_reflexive() {
+        let r = s(1200.0, 800.0);
+        assert!(same_size(r, r));
+    }
+
+    #[test]
+    fn same_size_ignores_sub_epsilon_drift() {
+        // Window-bounds observers fire on pure window *moves* too; suppressing
+        // sub-pixel size diffs keeps `frame_event kind=window_resize` quiet
+        // when the user is only repositioning the window.
+        assert!(same_size(s(1200.0, 800.0), s(1200.4, 800.4)));
+    }
+
+    #[test]
+    fn same_size_detects_one_pixel_resize() {
+        assert!(!same_size(s(1200.0, 800.0), s(1201.0, 800.0)));
+        assert!(!same_size(s(1200.0, 800.0), s(1200.0, 801.0)));
+    }
+
+    #[test]
+    fn same_size_uses_strict_epsilon() {
+        // Exactly 0.5 px diff must NOT be suppressed — matches close_enough
+        // in webview.rs, so the layout and webview guards agree on what
+        // counts as "the same size."
+        assert!(!same_size(s(1200.0, 800.0), s(1200.5, 800.0)));
+    }
 }

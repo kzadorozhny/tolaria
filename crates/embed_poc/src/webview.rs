@@ -195,14 +195,20 @@ impl Element for InstrumentedWebView {
     }
 }
 
-/// Parse the `{k, v}` IPC envelope emitted by the test page and re-emit
-/// normalized log lines on the appropriate target. Falls back to
-/// `ipc raw=...` on parse failure so the validation script in task #8
-/// can still grep the raw stream.
-fn dispatch_ipc(body: &str) {
+/// Structured result of parsing the `{k, v}` envelope the test page sends
+/// over wry's IPC channel. Extracted as a pure function so the dispatch
+/// table can be unit-tested without spinning up GPUI, AppKit, or wry.
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub(crate) enum ParsedIpc {
+    WebviewFocus { state: &'static str, target: String },
+    Ime { phase: String, data: String, value_len: usize },
+    Keydown { key: String, mods: String },
+    Raw { body: String },
+}
+
+pub(crate) fn parse_ipc_body(body: &str) -> ParsedIpc {
     let Ok(envelope) = serde_json::from_str::<serde_json::Value>(body) else {
-        log::info!(target: IPC_TARGET, "ipc raw={body}");
-        return;
+        return ParsedIpc::Raw { body: body.to_string() };
     };
 
     let kind = envelope.get("k").and_then(|v| v.as_str()).unwrap_or("?");
@@ -211,46 +217,197 @@ fn dispatch_ipc(body: &str) {
     match kind {
         "focus" | "blur" => {
             let state = if kind == "focus" { "in" } else { "out" };
-            let target = value.as_str().unwrap_or("?");
-            log::info!(
-                target: FOCUS_TARGET,
-                "webview_focus state={state} target={target}"
-            );
+            let target = value.as_str().unwrap_or("?").to_string();
+            ParsedIpc::WebviewFocus { state, target }
         }
         "composition" => {
             let phase = value
                 .get("phase")
                 .and_then(|v| v.as_str())
-                .unwrap_or("?");
+                .unwrap_or("?")
+                .to_string();
             let data = value
                 .get("data")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
+                .unwrap_or("")
+                .to_string();
             let value_len = value
                 .get("value")
                 .and_then(|v| v.as_str())
                 .map(|s| s.chars().count())
                 .unwrap_or(0);
+            ParsedIpc::Ime { phase, data, value_len }
+        }
+        "keydown" => {
+            let key = value
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?")
+                .to_string();
+            let mods = value
+                .get("mods")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            ParsedIpc::Keydown { key, mods }
+        }
+        _ => ParsedIpc::Raw { body: body.to_string() },
+    }
+}
+
+/// Emit the log line that corresponds to a parsed IPC event. Kept
+/// separate from `parse_ipc_body` so tests can assert on the parsed
+/// structure without grepping captured logs.
+fn dispatch_ipc(body: &str) {
+    match parse_ipc_body(body) {
+        ParsedIpc::WebviewFocus { state, target } => {
+            log::info!(
+                target: FOCUS_TARGET,
+                "webview_focus state={state} target={target}"
+            );
+        }
+        ParsedIpc::Ime { phase, data, value_len } => {
             log::info!(
                 target: IME_TARGET,
                 "ime phase={phase} data={data:?} value_len={value_len}"
             );
         }
-        "keydown" => {
-            let key = value.get("key").and_then(|v| v.as_str()).unwrap_or("?");
-            let mods = value.get("mods").and_then(|v| v.as_str()).unwrap_or("");
+        ParsedIpc::Keydown { key, mods } => {
             log::info!(target: IPC_TARGET, "keydown key={key} mods={mods}");
         }
-        _ => {
+        ParsedIpc::Raw { body } => {
             log::info!(target: IPC_TARGET, "ipc raw={body}");
         }
     }
 }
 
-fn close_enough(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
+pub(crate) fn close_enough(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
     let dx = (f32::from(a.origin.x) - f32::from(b.origin.x)).abs();
     let dy = (f32::from(a.origin.y) - f32::from(b.origin.y)).abs();
     let dw = (f32::from(a.size.width) - f32::from(b.size.width)).abs();
     let dh = (f32::from(a.size.height) - f32::from(b.size.height)).abs();
     dx < EPSILON && dy < EPSILON && dw < EPSILON && dh < EPSILON
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Point, Size as GpuiSize, px};
+
+    fn b(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
+        Bounds::new(Point::new(px(x), px(y)), GpuiSize::new(px(w), px(h)))
+    }
+
+    #[test]
+    fn close_enough_is_reflexive() {
+        let r = b(10.0, 20.0, 300.0, 400.0);
+        assert!(close_enough(r, r));
+    }
+
+    #[test]
+    fn close_enough_accepts_sub_epsilon_drift() {
+        let a = b(10.0, 20.0, 300.0, 400.0);
+        let drifted = b(10.4, 20.4, 300.4, 400.4);
+        assert!(close_enough(a, drifted), "drift below 0.5 px must be treated as same bounds");
+    }
+
+    #[test]
+    fn close_enough_rejects_one_pixel_diff() {
+        let a = b(10.0, 20.0, 300.0, 400.0);
+        let moved = b(11.0, 20.0, 300.0, 400.0);
+        assert!(!close_enough(a, moved));
+    }
+
+    #[test]
+    fn close_enough_rejects_diff_at_exact_epsilon_boundary() {
+        let a = b(10.0, 20.0, 300.0, 400.0);
+        let at_boundary = b(10.5, 20.0, 300.0, 400.0);
+        assert!(
+            !close_enough(a, at_boundary),
+            "guard uses strict < EPSILON; exactly 0.5 px diff must NOT be suppressed"
+        );
+    }
+
+    #[test]
+    fn close_enough_rejects_size_drift() {
+        let a = b(0.0, 0.0, 300.0, 400.0);
+        let resized = b(0.0, 0.0, 301.0, 400.0);
+        assert!(!close_enough(a, resized));
+    }
+
+    #[test]
+    fn parse_ipc_focus_event() {
+        assert_eq!(
+            parse_ipc_body(r#"{"k":"focus","v":"textarea"}"#),
+            ParsedIpc::WebviewFocus { state: "in", target: "textarea".into() }
+        );
+    }
+
+    #[test]
+    fn parse_ipc_blur_event() {
+        assert_eq!(
+            parse_ipc_body(r#"{"k":"blur","v":"single-line"}"#),
+            ParsedIpc::WebviewFocus { state: "out", target: "single-line".into() }
+        );
+    }
+
+    #[test]
+    fn parse_ipc_ime_compositionstart_empty() {
+        assert_eq!(
+            parse_ipc_body(
+                r#"{"k":"composition","v":{"phase":"compositionstart","data":"","value":""}}"#
+            ),
+            ParsedIpc::Ime {
+                phase: "compositionstart".into(),
+                data: "".into(),
+                value_len: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ipc_ime_value_len_counts_chars_not_bytes() {
+        // 5 chars, 15 UTF-8 bytes. README's PASS criterion requires the
+        // char count, otherwise CJK compositions report `value_len=15`
+        // and the validation script counts them as failures.
+        let parsed = parse_ipc_body(
+            r#"{"k":"composition","v":{"phase":"compositionend","data":"こんにちは","value":"こんにちは"}}"#,
+        );
+        assert_eq!(
+            parsed,
+            ParsedIpc::Ime {
+                phase: "compositionend".into(),
+                data: "こんにちは".into(),
+                value_len: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_ipc_keydown() {
+        assert_eq!(
+            parse_ipc_body(r#"{"k":"keydown","v":{"key":"s","mods":"meta"}}"#),
+            ParsedIpc::Keydown { key: "s".into(), mods: "meta".into() }
+        );
+    }
+
+    #[test]
+    fn parse_ipc_unknown_kind_falls_back_to_raw() {
+        let body = r#"{"k":"button_click","v":42}"#;
+        assert_eq!(parse_ipc_body(body), ParsedIpc::Raw { body: body.into() });
+    }
+
+    #[test]
+    fn parse_ipc_malformed_json_falls_back_to_raw() {
+        let body = "this is not json";
+        assert_eq!(parse_ipc_body(body), ParsedIpc::Raw { body: body.into() });
+    }
+
+    #[test]
+    fn parse_ipc_focus_with_missing_v_uses_question_mark_target() {
+        assert_eq!(
+            parse_ipc_body(r#"{"k":"focus"}"#),
+            ParsedIpc::WebviewFocus { state: "in", target: "?".into() }
+        );
+    }
 }

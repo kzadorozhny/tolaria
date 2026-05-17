@@ -335,6 +335,64 @@ When something looks wrong, the source of truth for each subsystem:
 - **Focus listener API** — Zed's `crates/gpui/src/app/context.rs:547–660`
   for `on_focus` / `on_blur` / `on_focus_in` / `on_focus_out` signatures.
 
+## Automated QA
+
+Two complementary layers cover what's automatable on macOS:
+
+### 1. Rust unit tests (`cargo test -p embed_poc`)
+
+Cover the pure helpers behind the four scenarios — they run in seconds,
+need no display, and never pop a window:
+
+- `close_enough` (the 0.5-px epsilon guard from ADR-0115 §4 used by
+  `InstrumentedWebView::prepaint`) and `same_size` (the layout-side
+  twin used to dedupe pure window moves) — five tests each cover
+  reflexivity, sub-epsilon drift, boundary diffs, and supra-epsilon
+  diffs.
+- `parse_ipc_body` (extracted from `dispatch_ipc` so it's testable
+  without a real wry channel) — seven tests cover focus/blur/IME/
+  keydown envelopes, malformed JSON, and the CJK char-count
+  invariant the IME scenario relies on (`value_len` must count
+  characters, not UTF-8 bytes).
+
+Run:
+
+```sh
+cargo test -p embed_poc
+```
+
+A regression here means the QA scripts will report spurious failures
+even if the manual scenarios behave correctly.
+
+### 2. macOS QA shell scripts (`scripts/qa*.sh`)
+
+Drive a live spike instance with `osascript` (and `defaults` for the
+IME detection), grep the stdout log for the documented patterns, and
+write a row per scenario to `RESULTS.md`. Run from the repo root:
+
+```sh
+cargo build -p embed_poc      # one-time; the driver builds for you too
+crates/embed_poc/scripts/qa.sh
+```
+
+What's automated, per scenario:
+
+| Scenario | Automated | Still manual |
+| --- | --- | --- |
+| 1. Focus handoff | Webview-internal Tab traversal: textarea → single-line and back (Shift+Tab). | Sidebar↔webview boundary clicks — `osascript` cannot click at screen coordinates. |
+| 2. IME composition | If Japanese Hiragana is enabled and Ctrl+Space is the IM switcher, the script types `konnichiha` and verifies the full compositionstart → compositionend chain with `value_len=5`. Otherwise emits MANUAL. | Composition mid-drag and any IM whose switcher isn't Ctrl+Space. |
+| 3. Frame sync | OS window resize via System Events; greps for paired `frame_event kind=window_resize` + `frame_sync x=`. | Sidebar splitter drag — needs mouse coordinates. |
+| 4. Cmd+S delivery | Send Cmd+S while textarea has firstResponder; assert `cmd_s_fired`. Bonus check: Cmd+A / Cmd+C must NOT trigger Save (would indicate menu over-capture). | None — fully automated. |
+
+Per-scenario scripts also exist (`qa-focus.sh`, `qa-ime.sh`,
+`qa-frame-sync.sh`, `qa-cmd-s.sh`) for targeted debugging; each can
+run standalone or be reused by the driver. Each emits a single
+tab-separated result line: `STATUS\tSCENARIO\tDETAIL`.
+
+Granting permission once: System Settings → Privacy & Security →
+**Accessibility** *and* **Automation** → enable for the terminal that
+runs the script. Without these, every scenario degrades to SKIP.
+
 ## Reporting back
 
 When you finish a validation pass, fill in `RESULTS.md` (see the
