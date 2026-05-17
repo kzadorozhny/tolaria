@@ -40,8 +40,12 @@ const FOCUS_TARGET: &str = "embed_poc::focus";
 const IME_TARGET: &str = "embed_poc::ime";
 const FRAME_TARGET: &str = "embed_poc::frame";
 
-/// 0.5-logical-pixel epsilon per ADR-0115 §4.
-const EPSILON: f32 = 0.5;
+/// 0.5-logical-pixel epsilon per ADR-0115 §4. Single source of truth
+/// shared between `close_enough` (Bounds-level dedupe inside
+/// `InstrumentedWebView::prepaint`) and `layout::same_size`
+/// (Size-level dedupe inside `observe_window_bounds`). When the ADR
+/// changes the tolerance, only this constant moves.
+pub(crate) const FRAME_EPSILON: f32 = 0.5;
 
 /// Construct the spike's WebView entity — built `as_child` of the current
 /// `NSWindow`'s content view so it sits next to GPUI's Metal renderer.
@@ -70,11 +74,11 @@ pub fn spawn_test_webview(window: &mut Window, cx: &mut App) -> Entity<WebView> 
 /// Shared state tracking the bounds we last pushed to `wry::WebView`.
 /// Lives on `RootView` so it survives across render passes; cloned into
 /// each freshly-constructed `InstrumentedWebView` element.
+///
+/// `FrameSyncState::default()` is the canonical constructor — it
+/// produces `Rc::new(Cell::new(None))`, which is exactly the starting
+/// state.
 pub type FrameSyncState = Rc<Cell<Option<Bounds<Pixels>>>>;
-
-pub fn new_frame_sync_state() -> FrameSyncState {
-    Rc::new(Cell::new(None))
-}
 
 /// Custom Element wrapping a `WebView` entity that adds:
 ///   1. Epsilon-compare guard (0.5 px) so noop `set_bounds` calls are
@@ -169,7 +173,14 @@ impl Element for InstrumentedWebView {
         // WebView derefs to wry::WebView, so set_bounds resolves to the
         // underlying wry call. Keeping the WebView entity in RootView
         // ensures the Rc<wry::WebView> + its NSView stay alive.
-        let _ = self.webview.read(cx).set_bounds(Rect {
+        //
+        // On Err we must NOT advance `last_bounds` — otherwise the
+        // epsilon guard above would suppress the next prepaint and the
+        // NSView would stay stuck at whatever wry actually managed to
+        // commit (often the pre-resize geometry). A warn on a frame-sync
+        // path is rare; if it starts firing repeatedly that's the
+        // signal that ADR-0115 §4 needs revisiting.
+        let rect = Rect {
             size: dpi::Size::Logical(LogicalSize {
                 width: bounds.size.width.into(),
                 height: bounds.size.height.into(),
@@ -178,7 +189,14 @@ impl Element for InstrumentedWebView {
                 bounds.origin.x.into(),
                 bounds.origin.y.into(),
             )),
-        });
+        };
+        if let Err(e) = self.webview.read(cx).set_bounds(rect) {
+            log::warn!(
+                target: FRAME_TARGET,
+                "frame_sync set_bounds failed: {e:?}; not advancing last_bounds"
+            );
+            return;
+        }
         self.last_bounds.set(Some(bounds));
     }
 
@@ -195,12 +213,34 @@ impl Element for InstrumentedWebView {
     }
 }
 
+/// Two-state focus indicator for `ParsedIpc::WebviewFocus`. Replaces
+/// the previous `state: &'static str` (`"in"` / `"out"`) so the
+/// dispatch site gets exhaustive matching from the compiler and the
+/// log mapping has a single source of truth.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum WebviewFocusState {
+    In,
+    Out,
+}
+
+impl WebviewFocusState {
+    /// String used in the `webview_focus state=…` log line. Keeping
+    /// this mapping next to the enum means the log format and the
+    /// type stay in sync.
+    fn as_log_str(self) -> &'static str {
+        match self {
+            Self::In => "in",
+            Self::Out => "out",
+        }
+    }
+}
+
 /// Structured result of parsing the `{k, v}` envelope the test page sends
 /// over wry's IPC channel. Extracted as a pure function so the dispatch
 /// table can be unit-tested without spinning up GPUI, AppKit, or wry.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum ParsedIpc {
-    WebviewFocus { state: &'static str, target: String },
+    WebviewFocus { state: WebviewFocusState, target: String },
     Ime { phase: String, data: String, value_len: usize },
     Keydown { key: String, mods: String },
     Raw { body: String },
@@ -216,7 +256,11 @@ pub(crate) fn parse_ipc_body(body: &str) -> ParsedIpc {
 
     match kind {
         "focus" | "blur" => {
-            let state = if kind == "focus" { "in" } else { "out" };
+            let state = if kind == "focus" {
+                WebviewFocusState::In
+            } else {
+                WebviewFocusState::Out
+            };
             let target = value.as_str().unwrap_or("?").to_string();
             ParsedIpc::WebviewFocus { state, target }
         }
@@ -263,7 +307,8 @@ fn dispatch_ipc(body: &str) {
         ParsedIpc::WebviewFocus { state, target } => {
             log::info!(
                 target: FOCUS_TARGET,
-                "webview_focus state={state} target={target}"
+                "webview_focus state={} target={target}",
+                state.as_log_str()
             );
         }
         ParsedIpc::Ime { phase, data, value_len } => {
@@ -286,7 +331,7 @@ pub(crate) fn close_enough(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
     let dy = (f32::from(a.origin.y) - f32::from(b.origin.y)).abs();
     let dw = (f32::from(a.size.width) - f32::from(b.size.width)).abs();
     let dh = (f32::from(a.size.height) - f32::from(b.size.height)).abs();
-    dx < EPSILON && dy < EPSILON && dw < EPSILON && dh < EPSILON
+    dx < FRAME_EPSILON && dy < FRAME_EPSILON && dw < FRAME_EPSILON && dh < FRAME_EPSILON
 }
 
 #[cfg(test)]
@@ -321,10 +366,10 @@ mod tests {
     #[test]
     fn close_enough_rejects_diff_at_exact_epsilon_boundary() {
         let a = b(10.0, 20.0, 300.0, 400.0);
-        let at_boundary = b(10.5, 20.0, 300.0, 400.0);
+        let at_boundary = b(10.0 + FRAME_EPSILON, 20.0, 300.0, 400.0);
         assert!(
             !close_enough(a, at_boundary),
-            "guard uses strict < EPSILON; exactly 0.5 px diff must NOT be suppressed"
+            "guard uses strict < FRAME_EPSILON; a diff of exactly FRAME_EPSILON must NOT be suppressed"
         );
     }
 
@@ -339,7 +384,10 @@ mod tests {
     fn parse_ipc_focus_event() {
         assert_eq!(
             parse_ipc_body(r#"{"k":"focus","v":"textarea"}"#),
-            ParsedIpc::WebviewFocus { state: "in", target: "textarea".into() }
+            ParsedIpc::WebviewFocus {
+                state: WebviewFocusState::In,
+                target: "textarea".into(),
+            }
         );
     }
 
@@ -347,7 +395,10 @@ mod tests {
     fn parse_ipc_blur_event() {
         assert_eq!(
             parse_ipc_body(r#"{"k":"blur","v":"single-line"}"#),
-            ParsedIpc::WebviewFocus { state: "out", target: "single-line".into() }
+            ParsedIpc::WebviewFocus {
+                state: WebviewFocusState::Out,
+                target: "single-line".into(),
+            }
         );
     }
 
@@ -407,7 +458,19 @@ mod tests {
     fn parse_ipc_focus_with_missing_v_uses_question_mark_target() {
         assert_eq!(
             parse_ipc_body(r#"{"k":"focus"}"#),
-            ParsedIpc::WebviewFocus { state: "in", target: "?".into() }
+            ParsedIpc::WebviewFocus {
+                state: WebviewFocusState::In,
+                target: "?".into(),
+            }
         );
+    }
+
+    #[test]
+    fn webview_focus_state_log_str_is_in_and_out() {
+        // Lock the log-line format the README documents — the dispatch
+        // path interpolates these literals directly into the
+        // `webview_focus state=…` line.
+        assert_eq!(WebviewFocusState::In.as_log_str(), "in");
+        assert_eq!(WebviewFocusState::Out.as_log_str(), "out");
     }
 }

@@ -30,7 +30,7 @@ use gpui::{
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_wry::WebView;
 
-use crate::webview::{FrameSyncState, InstrumentedWebView, new_frame_sync_state};
+use crate::webview::{FRAME_EPSILON, FrameSyncState, InstrumentedWebView};
 
 const SIDEBAR_DEFAULT: f32 = 240.0;
 const SIDEBAR_MIN: f32 = 160.0;
@@ -96,7 +96,7 @@ impl RootView {
         Self {
             resizable_state,
             webview,
-            webview_last_bounds: new_frame_sync_state(),
+            webview_last_bounds: FrameSyncState::default(),
             sidebar_focus,
             last_viewport: window.viewport_size(),
         }
@@ -188,9 +188,8 @@ fn content_panel(webview: Option<Entity<WebView>>, last_bounds: FrameSyncState) 
 }
 
 pub(crate) fn same_size(a: Size<Pixels>, b: Size<Pixels>) -> bool {
-    const EPSILON: f32 = 0.5;
-    (f32::from(a.width) - f32::from(b.width)).abs() < EPSILON
-        && (f32::from(a.height) - f32::from(b.height)).abs() < EPSILON
+    (f32::from(a.width) - f32::from(b.width)).abs() < FRAME_EPSILON
+        && (f32::from(a.height) - f32::from(b.height)).abs() < FRAME_EPSILON
 }
 
 #[cfg(test)]
@@ -226,10 +225,14 @@ mod tests {
 
     #[test]
     fn same_size_uses_strict_epsilon() {
-        // Exactly 0.5 px diff must NOT be suppressed — matches `close_enough`
-        // in webview.rs, so the layout and webview guards agree on what
-        // counts as "the same size."
-        assert!(!same_size(s(1200.0, 800.0), s(1200.5, 800.0)));
+        // A diff of exactly FRAME_EPSILON must NOT be suppressed.
+        // `same_size` and `close_enough` now share `FRAME_EPSILON`, so
+        // the layout and webview guards agree on what counts as "the
+        // same size" by construction.
+        assert!(!same_size(
+            s(1200.0, 800.0),
+            s(1200.0 + FRAME_EPSILON, 800.0),
+        ));
     }
 
     // --- in-process GPUI tests against the test platform ---
