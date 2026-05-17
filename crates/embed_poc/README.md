@@ -362,18 +362,3 @@ on: `close_enough` and `same_size` (epsilon guards), `parse_ipc_body`
 
 A regression in any of these will turn red under `cargo test -p embed_poc`
 before the manual validation pass even starts.
-
-## Reporting back
-
-When you finish a validation pass, fill in `RESULTS.md` (see the
-skeleton next to this README) with one row per goal:
-
-- The macOS build (Sonoma 14.x / Sequoia 15.x / etc.).
-- The pass/fail verdict per goal.
-- Any FAIL example you actually hit, copy-pasted from stdout.
-- Any "known limitation" you encountered.
-
-Then ping team-lead with the results. The ADR re-evaluation trigger
-fires on any FAIL in goals 1 / 2 / 3 / 4 — at which point ADR-0115's
-*Alternatives considered* (specifically the native-GPUI-editor option)
-needs to be reopened.
