@@ -1,20 +1,22 @@
-//! Two-pane sidebar layout for the ADR-0115 Phase 0 spike (tasks #3 + #4).
+//! Two-pane sidebar layout for the ADR-0115 Phase 0 spike (tasks #3 + #4 + #5).
 //!
 //! Wraps gpui-component's `h_resizable` primitive so the draggable splitter
 //! and clamping are handled upstream. The right pane hosts the embedded
-//! WKWebView entity created in `crate::webview` — gpui-wry's `Element`
-//! impl re-applies `set_bounds(...)` on every prepaint, so the splitter
-//! drag already drives the webview's NSView geometry (task #5 verifies the
-//! tightness of this and bolts on explicit logging).
+//! WKWebView via `InstrumentedWebView` (see `crate::webview`), which adds
+//! the ADR-0115 §4 epsilon-compare guard and frame-sync logging on top of
+//! gpui-wry's default behavior.
 //!
-//! Two `frame_event` log streams feed task #5's validation script — both on
-//! the `embed_poc::frame` target so a single `RUST_LOG=embed_poc::frame=info`
+//! Three log streams feed task #8's validation script — all on the
+//! `embed_poc::frame` target so a single `RUST_LOG=embed_poc::frame=info`
 //! captures only frame-sync evidence:
-//!   - `frame_event kind=sidebar_resize ...` on every committed splitter drag
-//!     (via `ResizablePanelGroup::on_resize`, which only fires at drag end).
-//!   - `frame_event kind=window_resize ...` on every OS window content-area
-//!     size change (via `cx.observe_window_bounds`, deduped against window
-//!     moves).
+//!   - `frame_event kind=sidebar_resize ...` on every committed splitter
+//!     drag (`ResizablePanelGroup::on_resize`, fires at drag end).
+//!   - `frame_event kind=window_resize ...` on every OS window
+//!     content-area size change (`cx.observe_window_bounds`, deduped
+//!     against pure window moves with a 0.5 px epsilon).
+//!   - `frame_sync x= y= w= h=` info / `frame_sync_skip ...` debug from
+//!     `InstrumentedWebView::prepaint`, one entry per repaint that
+//!     actually changes the WebView's bounds.
 
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Pixels, Render, Size, Styled,
@@ -22,6 +24,8 @@ use gpui::{
 };
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_wry::WebView;
+
+use crate::webview::{FrameSyncState, InstrumentedWebView, new_frame_sync_state};
 
 const SIDEBAR_DEFAULT: f32 = 240.0;
 const SIDEBAR_MIN: f32 = 160.0;
@@ -31,6 +35,7 @@ const FRAME_TARGET: &str = "embed_poc::frame";
 pub struct RootView {
     resizable_state: Entity<ResizableState>,
     webview: Entity<WebView>,
+    webview_last_bounds: FrameSyncState,
     last_viewport: Size<Pixels>,
 }
 
@@ -50,6 +55,7 @@ impl RootView {
         Self {
             resizable_state,
             webview,
+            webview_last_bounds: new_frame_sync_state(),
             last_viewport: window.viewport_size(),
         }
     }
@@ -73,6 +79,7 @@ impl Render for RootView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.resizable_state.clone();
         let webview = self.webview.clone();
+        let last_bounds = self.webview_last_bounds.clone();
         div().size_full().bg(rgb(0x1e1f24)).child(
             h_resizable("sidebar-layout")
                 .with_state(&state)
@@ -83,7 +90,7 @@ impl Render for RootView {
                         .flex_none()
                         .child(sidebar_panel()),
                 )
-                .child(resizable_panel().child(content_panel(webview)))
+                .child(resizable_panel().child(content_panel(webview, last_bounds)))
                 .on_resize(|state, window, cx| log_sidebar_resize(state, window, cx)),
         )
     }
@@ -118,8 +125,11 @@ fn sidebar_panel() -> impl IntoElement {
         .child("Sidebar")
 }
 
-fn content_panel(webview: Entity<WebView>) -> impl IntoElement {
-    div().size_full().bg(rgb(0x12141a)).child(webview)
+fn content_panel(webview: Entity<WebView>, last_bounds: FrameSyncState) -> impl IntoElement {
+    div()
+        .size_full()
+        .bg(rgb(0x12141a))
+        .child(InstrumentedWebView::new(webview, last_bounds))
 }
 
 fn same_size(a: Size<Pixels>, b: Size<Pixels>) -> bool {
