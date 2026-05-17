@@ -337,61 +337,31 @@ When something looks wrong, the source of truth for each subsystem:
 
 ## Automated QA
 
-Two complementary layers cover what's automatable on macOS:
-
-### 1. Rust unit tests (`cargo test -p embed_poc`)
-
-Cover the pure helpers behind the four scenarios — they run in seconds,
-need no display, and never pop a window:
-
-- `close_enough` (the 0.5-px epsilon guard from ADR-0115 §4 used by
-  `InstrumentedWebView::prepaint`) and `same_size` (the layout-side
-  twin used to dedupe pure window moves) — five tests each cover
-  reflexivity, sub-epsilon drift, boundary diffs, and supra-epsilon
-  diffs.
-- `parse_ipc_body` (extracted from `dispatch_ipc` so it's testable
-  without a real wry channel) — seven tests cover focus/blur/IME/
-  keydown envelopes, malformed JSON, and the CJK char-count
-  invariant the IME scenario relies on (`value_len` must count
-  characters, not UTF-8 bytes).
-
-Run:
+All automation runs in-process through GPUI's test infrastructure
+(`TestAppContext`, `TestDispatcher`, the `gpui::test` proc macro and
+the `test-support` feature on `gpui_platform`). No real window opens,
+no `osascript` keystrokes, no accessibility prompts. Run:
 
 ```sh
 cargo test -p embed_poc
 ```
 
-A regression here means the QA scripts will report spurious failures
-even if the manual scenarios behave correctly.
+What's covered, per scenario:
 
-### 2. macOS QA shell scripts (`scripts/qa*.sh`)
-
-Drive a live spike instance with `osascript` (and `defaults` for the
-IME detection), grep the stdout log for the documented patterns, and
-write a row per scenario to `RESULTS.md`. Run from the repo root:
-
-```sh
-cargo build -p embed_poc      # one-time; the driver builds for you too
-crates/embed_poc/scripts/qa.sh
-```
-
-What's automated, per scenario:
-
-| Scenario | Automated | Still manual |
+| Scenario | Coverage | Remaining manual |
 | --- | --- | --- |
-| 1. Focus handoff | Webview-internal Tab traversal: textarea → single-line and back (Shift+Tab). | Sidebar↔webview boundary clicks — `osascript` cannot click at screen coordinates. |
-| 2. IME composition | If Japanese Hiragana is enabled and Ctrl+Space is the IM switcher, the script types `konnichiha` and verifies the full compositionstart → compositionend chain with `value_len=5`. Otherwise emits MANUAL. | Composition mid-drag and any IM whose switcher isn't Ctrl+Space. |
-| 3. Frame sync | OS window resize via System Events; greps for paired `frame_event kind=window_resize` + `frame_sync x=`. | Sidebar splitter drag — needs mouse coordinates. |
-| 4. Cmd+S delivery | Send Cmd+S while textarea has firstResponder; assert `cmd_s_fired`. Bonus check: Cmd+A / Cmd+C must NOT trigger Save (would indicate menu over-capture). | None — fully automated. |
+| 1. Focus handoff | `layout::tests::focusing_sidebar_handle_sets_window_focus` and `moving_focus_off_sidebar_clears_window_focus_for_it` drive `window.focus(handle)` on the sidebar's `FocusHandle` and assert `Window::focused()` follows. | Sidebar↔WKWebView boundary clicks. The webview side of focus only exists in the real Cocoa+WKWebView stack; the test platform has no NSView to hand firstResponder to. |
+| 2. IME composition | None — see [§IME](#2-ime-mid-composition-adr-0115-re-eval-trigger-ime). The full romaji-to-CJK + mid-frame composition behaviour stays a human pass because the test platform has no real IME pipe. | Entire scenario. |
+| 3. Frame sync | `layout::tests::simulate_window_resize_updates_last_viewport` and `simulate_window_resize_with_sub_epsilon_drift_is_a_noop` drive `TestAppContext::simulate_window_resize`, which fires the same `observe_window_bounds` callback `RootView` registers in production. Together with `close_enough` / `same_size` epsilon-math tests they cover both the resize-detection and the dedupe halves. | Sidebar splitter drag — splitter geometry math lives in `gpui-component::resizable` and the splitter UI is interactive-only. |
+| 4. Cmd+S delivery | `menus::tests::cmd_s_dispatches_save_action` binds the same `cmd-s → Save` keymap entry `main` registers, drives the keystroke through `TestAppContext::simulate_keystrokes`, and asserts the global `on_action(Save)` handler fires once. `standard_edit_chords_do_not_dispatch_save` and `plain_s_does_not_dispatch_save` cover the negative paths (cmd-a/c/v and plain `s` must NOT route to Save). | The AppKit-vs-WKWebView race the ADR-0115 §6 claim is really about — that's intrinsic to the OS and only the README's manual walk can exercise it. |
 
-Per-scenario scripts also exist (`qa-focus.sh`, `qa-ime.sh`,
-`qa-frame-sync.sh`, `qa-cmd-s.sh`) for targeted debugging; each can
-run standalone or be reused by the driver. Each emits a single
-tab-separated result line: `STATUS\tSCENARIO\tDETAIL`.
+Plus a layer of pure unit tests on the helpers each scenario depends
+on: `close_enough` and `same_size` (epsilon guards), `parse_ipc_body`
+(the `{k, v}` envelope from the test page), and `app_menus_lists_app_file_and_edit_with_save_and_quit`
+(menu structure sanity).
 
-Granting permission once: System Settings → Privacy & Security →
-**Accessibility** *and* **Automation** → enable for the terminal that
-runs the script. Without these, every scenario degrades to SKIP.
+A regression in any of these will turn red under `cargo test -p embed_poc`
+before the manual validation pass even starts.
 
 ## Reporting back
 

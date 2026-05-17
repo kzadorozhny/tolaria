@@ -50,3 +50,14 @@ raw-window-handle.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true
 objc2-foundation.workspace = true
+
+# `test-support` gates `gpui::TestAppContext`, `VisualTestContext`, the
+# `gpui::test` macro's `run_test` helper, and the deterministic
+# `TestDispatcher` / `TestPlatform` plumbing. Pulling it through
+# `gpui_platform` ALSO pulls `gpui_macos/test-support` and
+# `gpui/test-support` per the feature passthrough at
+# `gpui_platform/Cargo.toml:17`. Adding it under `[dev-dependencies]`
+# keeps the binary build lean — the test scaffolding only links into
+# `cargo test`, not `cargo build`.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }

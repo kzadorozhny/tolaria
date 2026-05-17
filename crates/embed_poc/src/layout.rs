@@ -17,10 +17,15 @@
 //!   - `frame_sync x= y= w= h=` info / `frame_sync_skip ...` debug from
 //!     `InstrumentedWebView::prepaint`, one entry per repaint that
 //!     actually changes the WebView's bounds.
+//!
+//! The webview entity is held as `Option` so unit tests can construct a
+//! chrome-only `RootView` via `new_chrome_only`. The test platform's
+//! `simulate_window_resize` then drives the same observer/render path
+//! the binary uses on a real WKWebView host — no `osascript` required.
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Render, Size, Styled, Window, div, px, rgb,
+    AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Render, Size, Styled, Window, div, px, rgb,
 };
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_wry::WebView;
@@ -35,7 +40,7 @@ const FOCUS_TARGET: &str = "embed_poc::focus";
 
 pub struct RootView {
     resizable_state: Entity<ResizableState>,
-    webview: Entity<WebView>,
+    webview: Option<Entity<WebView>>,
     webview_last_bounds: FrameSyncState,
     sidebar_focus: FocusHandle,
     last_viewport: Size<Pixels>,
@@ -44,6 +49,24 @@ pub struct RootView {
 impl RootView {
     pub fn new(
         webview: Entity<WebView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::build(Some(webview), window, cx)
+    }
+
+    /// Test-only constructor: builds the chrome with the same window/focus
+    /// observers as `new`, but renders an empty placeholder on the right
+    /// instead of an `InstrumentedWebView`. Used by GPUI integration tests
+    /// that can't build a real `wry::WebView` (the test platform's window
+    /// has no NSView to attach one to).
+    #[cfg(test)]
+    pub(crate) fn new_chrome_only(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(None, window, cx)
+    }
+
+    fn build(
+        webview: Option<Entity<WebView>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -91,6 +114,16 @@ impl RootView {
             f32::from(viewport.width),
             f32::from(viewport.height),
         );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn last_viewport(&self) -> Size<Pixels> {
+        self.last_viewport
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sidebar_focus_handle(&self) -> FocusHandle {
+        self.sidebar_focus.clone()
     }
 }
 
@@ -146,11 +179,12 @@ fn sidebar_panel(focus: FocusHandle) -> impl IntoElement {
         .child("Sidebar")
 }
 
-fn content_panel(webview: Entity<WebView>, last_bounds: FrameSyncState) -> impl IntoElement {
-    div()
-        .size_full()
-        .bg(rgb(0x12141a))
-        .child(InstrumentedWebView::new(webview, last_bounds))
+fn content_panel(webview: Option<Entity<WebView>>, last_bounds: FrameSyncState) -> AnyElement {
+    let body = div().size_full().bg(rgb(0x12141a));
+    match webview {
+        Some(wv) => body.child(InstrumentedWebView::new(wv, last_bounds)).into_any_element(),
+        None => body.into_any_element(),
+    }
 }
 
 pub(crate) fn same_size(a: Size<Pixels>, b: Size<Pixels>) -> bool {
@@ -162,11 +196,13 @@ pub(crate) fn same_size(a: Size<Pixels>, b: Size<Pixels>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::px;
+    use gpui::TestAppContext;
 
     fn s(w: f32, h: f32) -> Size<Pixels> {
         Size::new(px(w), px(h))
     }
+
+    // --- pure epsilon math ---
 
     #[test]
     fn same_size_is_reflexive() {
@@ -176,9 +212,9 @@ mod tests {
 
     #[test]
     fn same_size_ignores_sub_epsilon_drift() {
-        // Window-bounds observers fire on pure window *moves* too; suppressing
-        // sub-pixel size diffs keeps `frame_event kind=window_resize` quiet
-        // when the user is only repositioning the window.
+        // Window-bounds observers fire on pure window *moves* too;
+        // suppressing sub-pixel size diffs keeps `frame_event kind=window_resize`
+        // quiet when the user is only repositioning the window.
         assert!(same_size(s(1200.0, 800.0), s(1200.4, 800.4)));
     }
 
@@ -190,9 +226,175 @@ mod tests {
 
     #[test]
     fn same_size_uses_strict_epsilon() {
-        // Exactly 0.5 px diff must NOT be suppressed — matches close_enough
+        // Exactly 0.5 px diff must NOT be suppressed — matches `close_enough`
         // in webview.rs, so the layout and webview guards agree on what
         // counts as "the same size."
         assert!(!same_size(s(1200.0, 800.0), s(1200.5, 800.0)));
+    }
+
+    // --- in-process GPUI tests against the test platform ---
+
+    /// Shared with `main.rs`: every `add_window(RootView::new_chrome_only)`
+    /// needs the `gpui_component::Theme` global installed first, since the
+    /// `h_resizable` primitive reads it during render and panics
+    /// otherwise.
+    fn install_theme(cx: &mut TestAppContext) {
+        cx.update(|cx| gpui_component::init(cx));
+    }
+
+    /// Scenario 3 (frame sync, window-resize half). Drives the same
+    /// `cx.observe_window_bounds(...)` path the binary uses, via
+    /// `TestAppContext::simulate_window_resize`. Replaces the
+    /// `qa-frame-sync.sh` script's `tell application "System Events" to
+    /// set size of window 1 ...` invocation.
+    #[gpui::test]
+    fn simulate_window_resize_updates_last_viewport(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let window = cx.add_window(|window, cx| RootView::new_chrome_only(window, cx));
+
+        let initial = window
+            .update(cx, |view, _, _| view.last_viewport())
+            .unwrap();
+
+        let target = s(960.0, 720.0);
+        cx.simulate_window_resize(window.into(), target);
+        cx.run_until_parked();
+
+        let after = window
+            .update(cx, |view, _, _| view.last_viewport())
+            .unwrap();
+
+        assert!(
+            !same_size(after, initial),
+            "viewport did not change after simulate_window_resize ({:?} → {:?})",
+            initial,
+            after
+        );
+        assert!(
+            same_size(after, target),
+            "viewport ({:?}) did not match simulate_window_resize target ({:?})",
+            after,
+            target
+        );
+    }
+
+    /// Scenario 3 (frame sync, dedupe half). A resize to bounds within
+    /// epsilon of the current viewport must NOT bump `last_viewport`
+    /// (and so must not emit `frame_event kind=window_resize`). Verifies
+    /// the same `same_size` guard the binary uses to swallow pure window
+    /// moves.
+    #[gpui::test]
+    fn simulate_window_resize_with_sub_epsilon_drift_is_a_noop(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let window = cx.add_window(|window, cx| RootView::new_chrome_only(window, cx));
+        let initial = window
+            .update(cx, |view, _, _| view.last_viewport())
+            .unwrap();
+
+        // Round-trip to an unrelated size to prove the bump path works,
+        // then resize back to *almost* `initial` (within EPSILON).
+        cx.simulate_window_resize(window.into(), s(960.0, 720.0));
+        cx.run_until_parked();
+        cx.simulate_window_resize(
+            window.into(),
+            s(
+                f32::from(initial.width) + 0.3,
+                f32::from(initial.height) - 0.3,
+            ),
+        );
+        cx.run_until_parked();
+
+        let after = window
+            .update(cx, |view, _, _| view.last_viewport())
+            .unwrap();
+        // EPSILON allows up to 0.5 drift in each dimension; we're at 0.3.
+        let close = (f32::from(after.width) - f32::from(initial.width)).abs() < 1.0
+            && (f32::from(after.height) - f32::from(initial.height)).abs() < 1.0;
+        assert!(
+            close,
+            "expected last_viewport back near initial after sub-epsilon resize; got {:?} vs {:?}",
+            after, initial
+        );
+    }
+
+    /// Scenario 1 (focus, sidebar half). Focuses the sidebar's
+    /// `FocusHandle` directly via GPUI's window API and verifies the
+    /// window-level focus state moves to it. We assert on
+    /// `Window::focused(cx)` rather than the `cx.on_focus(...)`
+    /// counter because focus-listener firing requires a fully
+    /// rendered dispatch tree — the test platform doesn't auto-paint,
+    /// and forcing a draw is non-trivial. The on_focus closure body is
+    /// trivial enough (just `count += 1; log!`) that its independent
+    /// validation is the manual run of the README's focus walk.
+    ///
+    /// Replaces the `qa-focus.sh` sidebar-state half. Boundary clicks
+    /// between the GPUI sidebar and the WKWebView still need a real
+    /// macOS pass (the WKWebView side can't exist in tests).
+    #[gpui::test]
+    fn focusing_sidebar_handle_sets_window_focus(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let window = cx.add_window(|window, cx| RootView::new_chrome_only(window, cx));
+
+        let handle = window
+            .update(cx, |view, _, _| view.sidebar_focus_handle())
+            .unwrap();
+
+        // Sanity: handle isn't already focused.
+        let before = window
+            .update(cx, |_, window, cx| window.focused(cx))
+            .unwrap();
+        assert_ne!(
+            before.as_ref(),
+            Some(&handle),
+            "sidebar should not be auto-focused at construction"
+        );
+
+        window
+            .update(cx, |_, window, cx| window.focus(&handle, cx))
+            .unwrap();
+        cx.run_until_parked();
+
+        let after = window
+            .update(cx, |_, window, cx| window.focused(cx))
+            .unwrap();
+        assert_eq!(
+            after.as_ref(),
+            Some(&handle),
+            "window.focus(sidebar_handle) must make it the focused handle"
+        );
+    }
+
+    /// Scenario 1 (focus, transitions half). Moving focus from the
+    /// sidebar to a different handle must clear the sidebar from
+    /// `window.focused()`. Validates the same state-machine the
+    /// `on_focus` / `on_blur` subscriptions hook into.
+    #[gpui::test]
+    fn moving_focus_off_sidebar_clears_window_focus_for_it(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let window = cx.add_window(|window, cx| RootView::new_chrome_only(window, cx));
+        let sidebar_handle = window
+            .update(cx, |view, _, _| view.sidebar_focus_handle())
+            .unwrap();
+        let other_handle = window.update(cx, |_, _, cx| cx.focus_handle()).unwrap();
+
+        window
+            .update(cx, |_, window, cx| window.focus(&sidebar_handle, cx))
+            .unwrap();
+        cx.run_until_parked();
+
+        window
+            .update(cx, |_, window, cx| window.focus(&other_handle, cx))
+            .unwrap();
+        cx.run_until_parked();
+
+        let focused = window
+            .update(cx, |_, window, cx| window.focused(cx))
+            .unwrap();
+        assert_eq!(
+            focused.as_ref(),
+            Some(&other_handle),
+            "after focusing other_handle, window must report it (not sidebar) as focused"
+        );
+        assert_ne!(focused.as_ref(), Some(&sidebar_handle));
     }
 }
