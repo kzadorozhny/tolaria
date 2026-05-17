@@ -1,0 +1,55 @@
+# Workspace root for the ADR-0115 native GPUI chrome spike.
+#
+# The existing Tauri shell under `src-tauri/` is intentionally excluded so the
+# spike is purely additive — Phase 0 must not disturb the shipping app.
+# `editor-host/` is also excluded so a future Vite/JS editor project can live
+# at the repo root without being parsed as a Rust crate.
+
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+exclude = ["src-tauri", "editor-host"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.77.2"
+license = "AGPL-3.0-or-later"
+
+# GPUI dependency pinning per ADR-0115 §7.
+#
+# `gpui` and `gpui_platform` cannot carry an explicit `rev =` here because
+# `gpui-component` (pulled in below) depends on them via the same git URL
+# without a rev, and Cargo forbids reconciling two git sources that share a
+# URL but differ in rev specification (`[patch]` rejects same-source-to-same-
+# source overrides). Sharing the rev-less spec lets Cargo unify both onto one
+# source; reproducibility comes from the committed `Cargo.lock` (which locks
+# both to the same resolved sha — verify with `grep -A1 'name = "gpui"'
+# Cargo.lock`).
+#
+# Reference shas at the time of pinning (2026-05-17):
+#   - zed-industries/zed `main`           → f2df3f9e18fa3bbbdab20086bd98395c97a46116
+#   - longbridge/gpui-component HEAD     → a5268cd640da080d9d383856ee62990dfb23d6f0
+#
+# `gpui-component` IS pinned by rev because it lives in its own git repo, so
+# the same-source restriction does not apply. HEAD is chosen because the
+# upstream `crates/webview/` crate (package name `gpui-wry`) that wraps
+# `wry::WebView` with built-in `set_bounds()` frame sync — and that tasks
+# #4 / #5 build on — exists ONLY on HEAD. It is absent from v0.5.1 and
+# ADR-0115 §7's named v0.5.2 tag does not yet exist upstream. Re-pin to the
+# v0.5.2 sha once it ships.
+[workspace.dependencies]
+gpui = { git = "https://github.com/zed-industries/zed" }
+# `runtime_shaders` flips gpui_macos's build script from an offline `xcrun metal`
+# pre-compile to runtime shader compilation. This is required on hosts that
+# only ship Apple Command Line Tools (no full Xcode → no `metal` utility) —
+# which is the configuration on the spike dev machine and on most CI runners.
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "a5268cd640da080d9d383856ee62990dfb23d6f0" }
+gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "a5268cd640da080d9d383856ee62990dfb23d6f0", package = "gpui-wry" }
+wry = "0.45"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"

@@ -44,6 +44,9 @@ final_selection.py
 .claude-blocked
 src-tauri/target
 
+# ADR-0115 Phase 0 spike workspace artifacts
+/target/
+
 # Generated mcp-server bundle (built by scripts/bundle-mcp-server.mjs)
 src-tauri/resources/mcp-server/
 
