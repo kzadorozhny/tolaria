@@ -1,15 +1,20 @@
 //! Phase 0 spike entry point for ADR-0115.
 //!
-//! Task #2 keeps this binary deliberately minimal: open a single GPUI window
-//! with a placeholder body. Sidebar chrome (#3), WKWebView embedding (#4),
-//! frame sync (#5), native menus (#6), and focus/IME instrumentation (#7)
-//! land in their own commits.
+//! Task #3 wires the placeholder body from task #2 into a two-pane layout:
+//! draggable sidebar on the left, "editor goes here" placeholder on the
+//! right. The actual WKWebView lands in task #4; frame sync against the
+//! splitter lands in task #5. Sidebar drags and window resizes both emit
+//! `frame_event ...` log lines on the `embed_poc::frame` target so task #5's
+//! validation script can grep for them.
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
     eprintln!("embed_poc is macOS-only (ADR-0115 Phase 0 spike); skipping on this platform.");
     std::process::exit(2);
 }
+
+#[cfg(target_os = "macos")]
+mod layout;
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -19,40 +24,16 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod macos {
     use gpui::{
-        App, Bounds, Context, Render, SharedString, TitlebarOptions, Window, WindowBounds,
-        WindowOptions, div, prelude::*, px, rgb, size,
+        App, AppContext, Bounds, SharedString, TitlebarOptions, WindowBounds, WindowOptions, px,
+        size,
     };
     use gpui_platform::application;
+
+    use crate::layout::RootView;
 
     const WINDOW_TITLE: &str = "Tolaria Phase 0 Spike";
     const WINDOW_WIDTH: f32 = 1200.0;
     const WINDOW_HEIGHT: f32 = 800.0;
-
-    struct SpikeRoot {
-        title: SharedString,
-    }
-
-    impl Render for SpikeRoot {
-        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap_2()
-                .bg(rgb(0x1e1f24))
-                .text_color(rgb(0xe6e6e6))
-                .text_xl()
-                .child(self.title.clone())
-                .child(
-                    div()
-                        .text_color(rgb(0x9aa0a6))
-                        .text_sm()
-                        .child("ADR-0115 · Phase 0 · embed_poc"),
-                )
-        }
-    }
 
     pub fn run() {
         let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -60,6 +41,10 @@ mod macos {
         log::info!("embed_poc starting (ADR-0115 Phase 0)");
 
         application().run(|cx: &mut App| {
+            // gpui-component reads a Theme global from the App; without this
+            // call, primitives like `h_resizable` panic on first render.
+            gpui_component::init(cx);
+
             let bounds =
                 Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
 
@@ -72,10 +57,8 @@ mod macos {
                 ..Default::default()
             };
 
-            let opened = cx.open_window(opts, |_, cx| {
-                cx.new(|_| SpikeRoot {
-                    title: SharedString::from(WINDOW_TITLE),
-                })
+            let opened = cx.open_window(opts, |window, cx| {
+                cx.new(|cx| RootView::new(window, cx))
             });
 
             if let Err(err) = opened {
