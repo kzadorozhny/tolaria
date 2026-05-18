@@ -58,6 +58,17 @@ impl NoteId {
     pub fn get(self) -> u64 {
         self.0
     }
+
+    /// Fabricate a [`NoteId`] from a raw integer.  Production code obtains
+    /// `NoteId`s exclusively from [`Vault`]'s constructors and rescan paths;
+    /// this constructor exists so downstream crates (`editor_bridge`,
+    /// `note_item`) can build deterministic test fixtures without going
+    /// through a serde round-trip.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_raw(n: u64) -> Self {
+        Self(n)
+    }
 }
 
 /// Coarse category of a vault entry.

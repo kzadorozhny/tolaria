@@ -18,7 +18,7 @@ MVP cut definition.  Original full roadmap preserved in §A of
 | 2c — Chrome wiring + TOLARIA_MOCK | ✅ done | `3131ccc7` | +3 (118) | — (integration wave; touched 5 existing crates) |
 | 2d — Big panels | ✅ done | `6d96cca8` | +31 (149) | `sidebar_panel`, `note_list_pane`, `inspector_panel`, `ai_panel`, `search_panel`, `settings_panel`, `diff_view` |
 | **3-MVP — Vault service (minimal)** | ✅ done | `ad1581cb` | +9 (158) | `vault` (open dir, list, read, save, rescan; sync IO; markdown-only; shape-compatible with `mock_fixtures::MockVault`) |
-| **4-MVP — Editor host integration** | ⏳ planned | — | — | `editor_host/` Vite project (carry-over from `src/`); `editor_bridge` crate; `note_item` crate (per-note `WKWebView` via `gpui-wry`) |
+| **4-MVP — Editor host integration** | ✅ done | _pending commit_ | +29 (187) | `editor_bridge`, `note_item`; `editor-host/` Vite project |
 | **5-MVP — MVP wiring + launch** | ⏳ planned | — | — | `tolaria --vault <path>` CLI arg; swap `sidebar_panel` / `note_list_pane` from `MockVault` to real `vault::Vault` global; open-note → spawn `note_item` in center Pane |
 | **— MVP CUT** | | | | App opens local vault, navigates, renders + saves notes.  Tauri stack still parallel. |
 | 6 — Remaining chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` |
@@ -107,6 +107,20 @@ First service crate.  Public API mirrors `mock_fixtures::MockVault` so chrome pa
 - 9 tests: opens_empty_vault, indexes_markdown_files, skips_hidden_directories, skips_non_markdown_files, save_writes_to_disk_and_updates_byte_size, save_unknown_id_returns_not_found, rescan_preserves_ids_for_unchanged_paths, rescan_drops_vanished_notes, open_nonexistent_dir_errors
 
 Review pass: 1 MUST + 4 SHOULD applied (metadata-refresh failure now `log::warn!` instead of silent swallow; `NoteId` docstring spells out monotonic-never-reused-not-persisted contract; `save_sync` test backdoor so tests assert on `Result` directly; `save` signature takes `&str` instead of `String`; `note_ids_vec()` dedups between `notes()` and the test accessor).
+
+### Phase 4-MVP — Editor host integration
+
+Three deliverables wire the embedded editor into the native shell.  Phase 5-MVP glues the IPC routing back into GPUI entities.
+
+**`editor_bridge` crate (4a, `8c31dd32`)** — typed JSON envelope.  `ToHost` (native → editor): NoteOpen, FocusEditor, SaveRequest, ThemeSet.  `FromHost` (editor → native): Ready, Dirty, Save, Saved, LinkClick, Keydown.  `{ "k": "<kind>", "v": <payload> }` shape via `#[serde(tag, content, rename_all = "snake_case")]`.  Typed `Mods { alt, ctrl, meta, shift }` with `skip_serializing_if` so `Cmd+S` sends just `{"meta":true}`.  `vault::NoteId` gains `#[derive(Serialize, Deserialize)] + #[serde(transparent)]` so IDs travel as bare integers and are typed across the boundary.  `BridgeError::{Encode,Decode}` carries the `serde_json::Error` source chain.  17 in-process tests including snake_case lock-in for every variant.
+
+Review pass: 2 MUST + 5 SHOULD applied — `thiserror.workspace = true`; reuse `vault::NoteId` instead of bare `u64`; `#[source]` on `BridgeError`; typed `Mods` struct (was stringly-typed); symmetric encode/decode helpers; `WKWebView` rustdoc backticks; `#![warn(missing_docs)]` + struct-level docs.
+
+**`editor-host/` Vite project (4b)** — minimal markdown editor inside the WKWebView.  Single-file output via `vite-plugin-singlefile` so `dist/index.html` is fully self-contained (~3.95 kB) and `crates/note_item` embeds it via `include_str!()`.  `src/bridge.ts` mirrors the Rust enums as discriminated unions (TS literal-tag dispatch); `src/editor.ts` is a `<textarea>` MVP that emits Dirty/Save/Keydown and accepts NoteOpen/FocusEditor/SaveRequest/ThemeSet.  BlockNote+CodeMirror carry-over from `src/` deferred to post-MVP.
+
+**`note_item` crate (4c)** — `workspace::Item` implementation owning a per-note WKWebView.  Pure-logic `apply_from_host(&mut self, FromHost) -> Outcome` dispatches Dirty/Save/Saved/LinkClick/Keydown; `Outcome::{None, PersistSave{body}, NavigateLink(LinkTarget)}` describes follow-up effects.  `LinkTarget::classify` discriminates wikilinks from URLs (`http(s)://`, `mailto:`).  macOS `new_with_webview` returns `Result<Self>` (no panics on user-triggered paths).  `InstrumentedWebView` mirrors `embed_poc`'s 0.5px epsilon-guard pattern with `set_bounds` failures now logged at `warn!`.  All macOS-specific code lives in `mod macos { … }` to keep cfg-gates from scattering.  12 tests cover dispatch + classification + HTML embedding.
+
+Review pass: 2 MUST + 5 SHOULD applied — `spawn_webview` / `new_with_webview` return `Result` (was panicking via `.expect`); macOS code consolidated into `mod macos` (was scattered cfg blocks); `path()` returns `&Path` (was `&PathBuf`); `Outcome::PersistSave` drops redundant `id`; `LinkTarget` enum (was stringly-typed `target`); `set_bounds` failure logs `warn!`; `apply_from_host` arm duplication factored into `check_own` helper.  `vault::NoteId::from_raw` added as a `#[doc(hidden)]` test constructor so downstream crates don't depend on the serde round-trip.
 
 ---
 

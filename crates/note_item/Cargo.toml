@@ -1,0 +1,31 @@
+[package]
+name = "note_item"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Per-note WKWebView Item hosting the embedded editor (ADR-0115 Phase 4-MVP)."
+
+[dependencies]
+anyhow.workspace = true
+editor_bridge = { path = "../editor_bridge" }
+log.workspace = true
+serde_json.workspace = true
+vault = { path = "../vault" }
+workspace = { path = "../workspace" }
+gpui.workspace = true
+gpui-component.workspace = true
+
+# WKWebView graph is macOS-only; on other platforms the crate ships a
+# stub `NoteItem` without a `WebView` so workspace builds stay clean.
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-wry.workspace = true
+wry.workspace = true
+raw-window-handle.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }

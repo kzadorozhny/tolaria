@@ -4340,6 +4340,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "note_item"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "editor_bridge",
+ "gpui",
+ "gpui-component",
+ "gpui-wry",
+ "gpui_platform",
+ "lb-wry",
+ "log",
+ "raw-window-handle",
+ "serde_json",
+ "vault",
+ "workspace",
+]
+
+[[package]]
 name = "note_list_pane"
 version = "0.1.0"
 dependencies = [

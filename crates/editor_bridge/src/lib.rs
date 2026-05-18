@@ -249,9 +249,7 @@ mod tests {
     use super::*;
 
     fn nid(n: u64) -> NoteId {
-        // NoteId's only constructor is private to `vault`; serde
-        // round-trips through the bare-integer wire form, so use that.
-        serde_json::from_str(&n.to_string()).expect("u64 → NoteId")
+        NoteId::from_raw(n)
     }
 
     #[test]

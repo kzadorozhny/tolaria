@@ -1,0 +1,620 @@
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+//! Per-note WKWebView `Item` hosting the embedded editor (ADR-0115
+//! Phase 4-MVP).
+//!
+//! A [`NoteItem`] owns:
+//!
+//! - the note's metadata (id, title, on-disk path) cloned from
+//!   [`vault::Note`] at construction time;
+//! - a dirty flag toggled by [`apply_from_host`][NoteItem::apply_from_host]
+//!   in response to [`editor_bridge::FromHost::Dirty`] / `Save` / `Saved`;
+//! - on macOS, an `Entity<gpui_wry::WebView>` that renders the
+//!   `editor-host/dist/index.html` bundle inside a sibling NSView.
+//!
+//! The macOS `WebView` is constructed via [`NoteItem::new_with_webview`].
+//! All other platforms construct via [`NoteItem::new_for_tests`], which
+//! skips the WebView entirely so workspace CI builds stay clean.
+//!
+//! # IPC routing
+//!
+//! The wry IPC handler currently parses each incoming message into a
+//! [`editor_bridge::FromHost`] and logs it.  Phase 5-MVP will wire the
+//! parsed messages back into the GPUI entity (channel + foreground
+//! task) so `Dirty` / `Save` mutate `self` and trigger vault writes —
+//! the [`apply_from_host`][NoteItem::apply_from_host] pure-logic
+//! handler already implements the state update, so Phase 5-MVP only
+//! needs to bridge the thread boundary.
+//!
+//! # Bundled editor host
+//!
+//! `EDITOR_HOST_HTML` embeds `editor-host/dist/index.html` via
+//! `include_str!` so Cargo builds do not require a JS toolchain.
+//! Rebuild the dist with `pnpm --ignore-workspace build` from
+//! `editor-host/` after editing the TypeScript sources.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+use editor_bridge::{FromHost, NoteOpen, ToHost};
+use gpui::{
+    div, App, Context, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window,
+};
+use vault::{Note, NoteId};
+use workspace::Item;
+
+#[cfg(target_os = "macos")]
+pub use macos::FRAME_EPSILON;
+#[cfg(target_os = "macos")]
+use macos::{spawn_webview, FrameSyncState, InstrumentedWebView};
+
+/// Embedded editor host bundle.  Built by Vite at
+/// `editor-host/dist/index.html`.  Loaded into every `NoteItem`'s
+/// WKWebView via `wry::WebViewBuilder::with_html`.
+pub const EDITOR_HOST_HTML: &str = include_str!("../../../editor-host/dist/index.html");
+
+// ---------------------------------------------------------------------------
+// Outcome
+// ---------------------------------------------------------------------------
+
+/// Classified link target from [`Outcome::NavigateLink`].  Lets the
+/// caller dispatch into `vault::search_titles` (for wikilinks) or
+/// `cx.open_url` (for external URLs) without re-parsing the string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+    /// In-vault wikilink (`MyNote`).
+    Wikilink(String),
+    /// External URL (`http://`, `https://`, etc.).
+    Url(String),
+}
+
+impl LinkTarget {
+    /// Classify a raw `editor_bridge::LinkClick.target` string.
+    /// Anything with a scheme prefix is treated as a URL; everything
+    /// else is a wikilink.
+    #[must_use]
+    pub fn classify(target: String) -> Self {
+        let is_url = target.starts_with("http://")
+            || target.starts_with("https://")
+            || target.starts_with("mailto:");
+        if is_url {
+            Self::Url(target)
+        } else {
+            Self::Wikilink(target)
+        }
+    }
+}
+
+/// Outcome of [`NoteItem::apply_from_host`].  Lets the caller (the IPC
+/// dispatch loop) know what side-effects to schedule — the pure-logic
+/// handler itself never touches `vault` or the WebView.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// No external action needed; internal state (e.g. `dirty`) may
+    /// have changed.
+    None,
+    /// Caller should call `vault.save(self.id(), &body)`.  The
+    /// `NoteId` is intentionally absent — by construction
+    /// `apply_from_host` only emits this when the incoming id
+    /// matches `self.id`, so the caller already has the correct id
+    /// via [`NoteItem::id`].
+    PersistSave {
+        /// Body that should land on disk.
+        body: String,
+    },
+    /// Caller should resolve a wikilink target or open an external URL.
+    NavigateLink(LinkTarget),
+}
+
+// ---------------------------------------------------------------------------
+// NoteItem
+// ---------------------------------------------------------------------------
+
+/// `Item` implementation owning a per-note WKWebView.
+pub struct NoteItem {
+    id: NoteId,
+    title: SharedString,
+    path: PathBuf,
+    dirty: bool,
+    #[cfg(target_os = "macos")]
+    macos: MacosState,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct MacosState {
+    webview: Option<gpui::Entity<gpui_wry::WebView>>,
+    last_bounds: FrameSyncState,
+}
+
+impl NoteItem {
+    /// Create a `NoteItem` without a WebView — for cross-platform CI
+    /// tests and host-less unit tests of the pure-logic surface.
+    #[must_use]
+    pub fn new_for_tests(note: Note) -> Self {
+        Self {
+            id: note.id,
+            title: note.title,
+            path: note.path,
+            dirty: false,
+            #[cfg(target_os = "macos")]
+            macos: MacosState::default(),
+        }
+    }
+
+    /// Vault note identifier.
+    #[must_use]
+    pub fn id(&self) -> NoteId {
+        self.id
+    }
+
+    /// On-disk path to the note (informational; persistence still goes
+    /// through `vault::Vault::save`).
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Apply an incoming [`FromHost`] message to `self` and return the
+    /// follow-up action the caller must schedule.  Pure logic — no
+    /// `cx`, no IO, no async — so the dispatch state machine is fully
+    /// unit-testable.
+    pub fn apply_from_host(&mut self, msg: FromHost) -> Outcome {
+        match msg {
+            FromHost::Ready => Outcome::None,
+            FromHost::Dirty(r) => {
+                if self.check_own("Dirty", r.id) {
+                    self.dirty = true;
+                }
+                Outcome::None
+            }
+            FromHost::Saved(r) => {
+                if self.check_own("Saved", r.id) {
+                    self.dirty = false;
+                }
+                Outcome::None
+            }
+            FromHost::Save(s) => {
+                if !self.check_own("Save", s.id) {
+                    return Outcome::None;
+                }
+                self.dirty = false;
+                Outcome::PersistSave { body: s.body }
+            }
+            FromHost::LinkClick(l) => Outcome::NavigateLink(LinkTarget::classify(l.target)),
+            FromHost::Keydown(_) => Outcome::None,
+        }
+    }
+
+    /// `true` if `got` matches this item's id; logs a warning and
+    /// returns `false` otherwise.  Centralises the foreign-id check
+    /// so the `apply_from_host` arms can't drift apart.
+    fn check_own(&self, kind: &str, got: NoteId) -> bool {
+        if got == self.id {
+            return true;
+        }
+        log::warn!(
+            "note_item::apply_from_host: ignoring {kind} for foreign id {got:?} \
+             (this NoteItem owns {own:?})",
+            own = self.id,
+        );
+        false
+    }
+
+    /// Build the [`ToHost::NoteOpen`] message that should be the first
+    /// thing the editor receives after it announces `Ready`.
+    ///
+    /// `body` is read from disk by the caller before construction so
+    /// `NoteItem::new_for_tests` stays purely synchronous.
+    #[must_use]
+    pub fn initial_note_open(&self, body: String) -> ToHost {
+        ToHost::NoteOpen(NoteOpen {
+            id: self.id,
+            path: self.path.display().to_string(),
+            body,
+        })
+    }
+}
+
+impl Item for NoteItem {
+    fn tab_content_text(&self, _cx: &App) -> SharedString {
+        self.title.clone()
+    }
+
+    fn can_save(&self) -> bool {
+        true
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn save(&mut self, _cx: &mut Context<Self>) -> Task<Result<()>> {
+        // Phase 5-MVP: send `ToHost::SaveRequest` into the WebView,
+        // then resolve when the matching `FromHost::Save` arrives and
+        // `vault::Vault::save` resolves.  For Phase 4-MVP the editor
+        // already persists on Cmd+S autonomously, so a top-level save
+        // is a no-op.
+        Task::ready(Ok(()))
+    }
+}
+
+impl Render for NoteItem {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let container = div().size_full();
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(webview) = self.macos.webview.clone() {
+                return container.child(InstrumentedWebView::new(
+                    webview,
+                    self.macos.last_bounds.clone(),
+                ));
+            }
+        }
+        container
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl NoteItem {
+    /// Build a `NoteItem` with a live WKWebView hosting the embedded
+    /// editor.  macOS only.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the window handle is unavailable (no
+    /// foreground window during a race) or if `wry::WebViewBuilder`
+    /// fails to construct the underlying NSView (sandbox restriction,
+    /// headless CI host, …).  Both are recoverable — the caller
+    /// should surface a toast rather than panic.
+    pub fn new_with_webview(note: Note, window: &mut Window, cx: &mut App) -> Result<Self> {
+        let webview = spawn_webview(note.id, window, cx)?;
+        Ok(Self {
+            id: note.id,
+            title: note.title,
+            path: note.path,
+            dirty: false,
+            macos: MacosState {
+                webview: Some(webview),
+                last_bounds: FrameSyncState::default(),
+            },
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// macOS WebView glue
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::{NoteId, EDITOR_HOST_HTML};
+    use anyhow::{Context as _, Result};
+    use gpui::{
+        App, AppContext, Bounds, Context, Element, ElementId, Entity, GlobalElementId, IntoElement,
+        LayoutId, Pixels, Size as GpuiSize, Style, Window,
+    };
+    use gpui_wry::WebView;
+    use raw_window_handle::HasWindowHandle;
+    use std::{cell::Cell, rc::Rc};
+    use wry::{
+        dpi::{self, LogicalPosition, LogicalSize},
+        Rect, WebViewBuilder,
+    };
+
+    /// 0.5-logical-pixel epsilon per ADR-0115 §4.  Mirrors
+    /// `embed_poc::webview::FRAME_EPSILON` — the bytes-identical value
+    /// keeps the two crates' frame-sync behaviour observably the same.
+    pub const FRAME_EPSILON: f32 = 0.5;
+
+    /// Shared bounds-tracking state used by [`InstrumentedWebView`] to
+    /// dedupe no-op `set_bounds` calls.  Default constructs the empty
+    /// state (`Rc::new(Cell::new(None))`).
+    pub type FrameSyncState = Rc<Cell<Option<Bounds<Pixels>>>>;
+
+    /// Build the per-note WKWebView with the embedded editor host
+    /// bundle pre-loaded.  The IPC handler logs each parsed
+    /// [`editor_bridge::FromHost`] message; Phase 5-MVP swaps the
+    /// logger for a channel that routes messages back to the
+    /// `NoteItem` entity.
+    ///
+    /// # Errors
+    ///
+    /// - No window handle available (no foreground window during a race).
+    /// - `wry::WebViewBuilder::build_as_child` failure.
+    pub fn spawn_webview(id: NoteId, window: &mut Window, cx: &mut App) -> Result<Entity<WebView>> {
+        let handle = window
+            .window_handle()
+            .context("window handle unavailable while building NoteItem WebView")?;
+
+        let webview_raw = WebViewBuilder::new()
+            .with_html(EDITOR_HOST_HTML)
+            .with_ipc_handler(move |req| {
+                let body = req.body();
+                match editor_bridge::decode_from_host(body) {
+                    Ok(msg) => log::info!(
+                        target: "note_item::ipc",
+                        "ipc id={id:?} msg={msg:?}",
+                    ),
+                    Err(e) => log::warn!(
+                        target: "note_item::ipc",
+                        "ipc id={id:?} decode_failed body={body:?} err={e}",
+                    ),
+                }
+            })
+            .build_as_child(&handle)
+            .context("wry::WebViewBuilder::build_as_child failed")?;
+
+        Ok(cx.new(|cx: &mut Context<WebView>| WebView::new(webview_raw, window, cx)))
+    }
+
+    /// Custom `Element` mirroring `embed_poc::InstrumentedWebView`.
+    /// Wraps a [`WebView`] entity with an epsilon-compare guard so
+    /// no-op `set_bounds` calls don't ping the underlying NSView.
+    pub struct InstrumentedWebView {
+        webview: Entity<WebView>,
+        last_bounds: FrameSyncState,
+    }
+
+    impl InstrumentedWebView {
+        /// Wrap a [`WebView`] entity in the frame-sync-deduped Element.
+        /// `last_bounds` is the shared bounds-tracking cell that lets
+        /// the epsilon guard survive across render passes (created
+        /// once per `NoteItem` in `NoteItem::new_with_webview`).
+        pub fn new(webview: Entity<WebView>, last_bounds: FrameSyncState) -> Self {
+            Self {
+                webview,
+                last_bounds,
+            }
+        }
+    }
+
+    impl IntoElement for InstrumentedWebView {
+        type Element = Self;
+        fn into_element(self) -> Self::Element {
+            self
+        }
+    }
+
+    impl Element for InstrumentedWebView {
+        type RequestLayoutState = ();
+        type PrepaintState = ();
+
+        fn id(&self) -> Option<ElementId> {
+            None
+        }
+
+        fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+            None
+        }
+
+        fn request_layout(
+            &mut self,
+            _: Option<&GlobalElementId>,
+            _: Option<&gpui::InspectorElementId>,
+            window: &mut Window,
+            cx: &mut App,
+        ) -> (LayoutId, Self::RequestLayoutState) {
+            let style = Style {
+                size: GpuiSize::full(),
+                flex_shrink: 1.0,
+                ..Default::default()
+            };
+            (window.request_layout(style, [], cx), ())
+        }
+
+        fn prepaint(
+            &mut self,
+            _: Option<&GlobalElementId>,
+            _: Option<&gpui::InspectorElementId>,
+            bounds: Bounds<Pixels>,
+            _: &mut Self::RequestLayoutState,
+            _: &mut Window,
+            cx: &mut App,
+        ) -> Self::PrepaintState {
+            let prev = self.last_bounds.get();
+            if prev.map(|p| close_enough(p, bounds)).unwrap_or(false) {
+                return;
+            }
+            let rect = Rect {
+                size: dpi::Size::Logical(LogicalSize {
+                    width: bounds.size.width.into(),
+                    height: bounds.size.height.into(),
+                }),
+                position: dpi::Position::Logical(LogicalPosition::new(
+                    bounds.origin.x.into(),
+                    bounds.origin.y.into(),
+                )),
+            };
+            // On Err do NOT advance `last_bounds` — the epsilon guard
+            // would suppress the next prepaint and the NSView would
+            // stay stuck at the pre-resize geometry.  Log so the
+            // visual stutter has a paper trail.
+            if let Err(e) = self.webview.read(cx).set_bounds(rect) {
+                log::warn!(
+                    target: "note_item::frame_sync",
+                    "set_bounds failed; geometry will retry on next prepaint err={e:?}",
+                );
+                return;
+            }
+            self.last_bounds.set(Some(bounds));
+        }
+
+        fn paint(
+            &mut self,
+            _: Option<&GlobalElementId>,
+            _: Option<&gpui::InspectorElementId>,
+            _: Bounds<Pixels>,
+            _: &mut Self::RequestLayoutState,
+            _: &mut Self::PrepaintState,
+            _: &mut Window,
+            _: &mut App,
+        ) {
+        }
+    }
+
+    fn close_enough(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
+        let dx = (f32::from(a.origin.x) - f32::from(b.origin.x)).abs();
+        let dy = (f32::from(a.origin.y) - f32::from(b.origin.y)).abs();
+        let dw = (f32::from(a.size.width) - f32::from(b.size.width)).abs();
+        let dh = (f32::from(a.size.height) - f32::from(b.size.height)).abs();
+        dx < FRAME_EPSILON && dy < FRAME_EPSILON && dw < FRAME_EPSILON && dh < FRAME_EPSILON
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use editor_bridge::{Keydown, LinkClick, NoteRef, NoteSave};
+    use std::path::PathBuf;
+
+    fn fresh_note(id: u64) -> Note {
+        Note {
+            id: NoteId::from_raw(id),
+            title: SharedString::from(format!("Note {id}")),
+            path: PathBuf::from(format!("/v/n-{id}.md")),
+            kind: vault::NoteKind::Markdown,
+            modified: Utc::now(),
+            byte_size: 0,
+        }
+    }
+
+    #[test]
+    fn apply_dirty_sets_dirty_flag() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        assert!(!item.is_dirty());
+        let outcome = item.apply_from_host(FromHost::Dirty(NoteRef { id: item.id }));
+        assert_eq!(outcome, Outcome::None);
+        assert!(item.is_dirty());
+    }
+
+    #[test]
+    fn apply_save_clears_dirty_and_yields_persist_outcome() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        item.apply_from_host(FromHost::Dirty(NoteRef { id: item.id }));
+        assert!(item.is_dirty());
+        let outcome = item.apply_from_host(FromHost::Save(NoteSave {
+            id: item.id,
+            body: "new body".into(),
+        }));
+        assert_eq!(
+            outcome,
+            Outcome::PersistSave {
+                body: "new body".into(),
+            }
+        );
+        assert!(!item.is_dirty(), "save must clear dirty");
+    }
+
+    #[test]
+    fn apply_saved_clears_dirty_without_persist() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        item.apply_from_host(FromHost::Dirty(NoteRef { id: item.id }));
+        let outcome = item.apply_from_host(FromHost::Saved(NoteRef { id: item.id }));
+        assert_eq!(outcome, Outcome::None);
+        assert!(!item.is_dirty());
+    }
+
+    #[test]
+    fn apply_link_click_classifies_wikilink() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        let outcome = item.apply_from_host(FromHost::LinkClick(LinkClick {
+            target: "OtherNote".into(),
+        }));
+        assert_eq!(
+            outcome,
+            Outcome::NavigateLink(LinkTarget::Wikilink("OtherNote".into())),
+        );
+    }
+
+    #[test]
+    fn apply_link_click_classifies_https_url() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        let outcome = item.apply_from_host(FromHost::LinkClick(LinkClick {
+            target: "https://example.com".into(),
+        }));
+        assert_eq!(
+            outcome,
+            Outcome::NavigateLink(LinkTarget::Url("https://example.com".into())),
+        );
+    }
+
+    #[test]
+    fn apply_link_click_classifies_mailto() {
+        let outcome = LinkTarget::classify("mailto:a@b.com".into());
+        assert_eq!(outcome, LinkTarget::Url("mailto:a@b.com".into()));
+    }
+
+    #[test]
+    fn apply_keydown_is_no_op_for_state_but_still_returns_none() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        let outcome = item.apply_from_host(FromHost::Keydown(Keydown {
+            key: "s".into(),
+            mods: Default::default(),
+        }));
+        assert_eq!(outcome, Outcome::None);
+        assert!(!item.is_dirty());
+    }
+
+    #[test]
+    fn apply_foreign_id_dirty_does_not_mark_self_dirty() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        let outcome = item.apply_from_host(FromHost::Dirty(NoteRef {
+            id: NoteId::from_raw(999),
+        }));
+        assert_eq!(outcome, Outcome::None);
+        assert!(
+            !item.is_dirty(),
+            "foreign-id Dirty must not mark this NoteItem dirty"
+        );
+    }
+
+    #[test]
+    fn apply_foreign_id_save_does_not_emit_persist_outcome() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        let outcome = item.apply_from_host(FromHost::Save(NoteSave {
+            id: NoteId::from_raw(999),
+            body: "x".into(),
+        }));
+        assert_eq!(outcome, Outcome::None, "foreign-id Save must not persist");
+    }
+
+    #[test]
+    fn initial_note_open_carries_path_and_id() {
+        let item = NoteItem::new_for_tests(fresh_note(7));
+        let msg = item.initial_note_open("body".into());
+        match msg {
+            ToHost::NoteOpen(p) => {
+                assert_eq!(p.id, item.id);
+                assert_eq!(p.body, "body");
+                assert!(p.path.contains("n-7.md"));
+            }
+            other => panic!("expected NoteOpen, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_returns_path_not_pathbuf() {
+        // Type-locks the return signature so future drift to
+        // `&PathBuf` would fail to compile.
+        let item = NoteItem::new_for_tests(fresh_note(1));
+        let p: &Path = item.path();
+        assert!(p.ends_with("n-1.md"));
+    }
+
+    #[test]
+    fn embedded_editor_html_contains_mount_point() {
+        // Asserts the literal markup so a stray comment containing
+        // "editor-root" wouldn't satisfy the check.
+        assert!(
+            EDITOR_HOST_HTML.contains(r#"id="editor-root""#),
+            "EDITOR_HOST_HTML must contain `<div id=\"editor-root\">`; \
+             rebuild editor-host/dist with `pnpm --ignore-workspace build`"
+        );
+    }
+}
