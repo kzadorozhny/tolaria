@@ -1,0 +1,12 @@
+node_modules/
+.vite/
+.omc/
+*.tsbuildinfo
+
+# `dist/index.html` is intentionally checked in — `crates/note_item`
+# embeds it via `include_str!()` and Cargo builds must not require
+# a JS toolchain.  Rebuild with `pnpm build` after editor changes.
+# Negates the root `.gitignore`'s `dist` rule so future commits don't
+# need `git add -f`.
+!dist/
+!dist/index.html
