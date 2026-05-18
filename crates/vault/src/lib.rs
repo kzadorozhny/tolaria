@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, Utc};
 use gpui::{Global, SharedString, Task};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -42,7 +43,12 @@ use thiserror::Error;
 /// They are also **not persisted** — reopening the same vault from disk
 /// restarts ID assignment at `0`.  Treat `NoteId` as ephemeral, valid for
 /// the current process's `Vault` instance only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// Serialises as a bare integer (`7`, not `{"NoteId":7}`) so the
+/// [`editor_bridge`](https://docs.rs/editor_bridge) wire format stays
+/// numeric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct NoteId(u64);
 
 impl NoteId {
