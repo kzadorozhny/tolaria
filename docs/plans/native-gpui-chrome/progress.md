@@ -19,7 +19,7 @@ MVP cut definition.  Original full roadmap preserved in §A of
 | 2d — Big panels | ✅ done | `6d96cca8` | +31 (149) | `sidebar_panel`, `note_list_pane`, `inspector_panel`, `ai_panel`, `search_panel`, `settings_panel`, `diff_view` |
 | **3-MVP — Vault service (minimal)** | ✅ done | `ad1581cb` | +9 (158) | `vault` (open dir, list, read, save, rescan; sync IO; markdown-only; shape-compatible with `mock_fixtures::MockVault`) |
 | **4-MVP — Editor host integration** | ✅ done | `8c31dd32` / `a6d221ec` / `bc69b714` | +29 (187) | `editor_bridge`, `note_item`; `editor-host/` Vite project |
-| **5-MVP — MVP wiring + launch** | ✅ done | `f3eef114` / _pending 5d+e_ | +4 (191) | `tolaria --vault`; chrome `from_vault`; `open_note` helper; IPC channel routing |
+| **5-MVP — MVP wiring + launch** | ✅ done | `f3eef114` / `e0a2b6f0` | +4 (191) | `tolaria --vault`; chrome `from_vault`; `open_note` helper; IPC channel routing |
 | **— MVP CUT** | | | | App opens local vault, navigates, renders + saves notes.  Tauri stack still parallel. |
 | 6 — Remaining chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` |
 | 7 — `gpui-component` eval | ⏳ scheduled | — | — | Decision matrix per [`eval-gpui-component-removal.md`](eval-gpui-component-removal.md) |
@@ -121,6 +121,24 @@ Review pass: 2 MUST + 5 SHOULD applied — `thiserror.workspace = true`; reuse `
 **`note_item` crate (4c)** — `workspace::Item` implementation owning a per-note WKWebView.  Pure-logic `apply_from_host(&mut self, FromHost) -> Outcome` dispatches Dirty/Save/Saved/LinkClick/Keydown; `Outcome::{None, PersistSave{body}, NavigateLink(LinkTarget)}` describes follow-up effects.  `LinkTarget::classify` discriminates wikilinks from URLs (`http(s)://`, `mailto:`).  macOS `new_with_webview` returns `Result<Self>` (no panics on user-triggered paths).  `InstrumentedWebView` mirrors `embed_poc`'s 0.5px epsilon-guard pattern with `set_bounds` failures now logged at `warn!`.  All macOS-specific code lives in `mod macos { … }` to keep cfg-gates from scattering.  12 tests cover dispatch + classification + HTML embedding.
 
 Review pass: 2 MUST + 5 SHOULD applied — `spawn_webview` / `new_with_webview` return `Result` (was panicking via `.expect`); macOS code consolidated into `mod macos` (was scattered cfg blocks); `path()` returns `&Path` (was `&PathBuf`); `Outcome::PersistSave` drops redundant `id`; `LinkTarget` enum (was stringly-typed `target`); `set_bounds` failure logs `warn!`; `apply_from_host` arm duplication factored into `check_own` helper.  `vault::NoteId::from_raw` added as a `#[doc(hidden)]` test constructor so downstream crates don't depend on the serde round-trip.
+
+### Phase 5-MVP — MVP wiring + launch
+
+End-to-end integration of the foundation crates.  Shipped in two commit waves: 5a/b/c (vault wiring) and 5d/e (open-note + IPC channel).
+
+**5a — Type unification.**  `vault::NoteId` is canonical; `mock_fixtures` re-exports it; `NoteId::from_raw` promoted to public since `MockVault` legitimately uses it at runtime.  All `NoteId(N)` construction sites and `.0` field access swept across mock_fixtures, inspector_panel, note_list_pane, search_panel, sidebar_panel.
+
+**5b — `tolaria --vault <path>` CLI flag.**  `parse_args()` walks argv; `Vault::open_at(path)` installs the real vault as a `Global` before observers register.  TOLARIA_MOCK=1 path still works.
+
+**5c — `SidebarPanel::from_vault` / `NoteListPane::from_vault`.**  Mirror existing `from_mock` constructors against real vault.  `from_or_empty` precedence: `vault::Vault` > `MockVault` > empty.  `from_or_empty_prefers_real_vault` test locks the contract.
+
+**5d — Open-note flow.**  `note_list_pane::OpenNoteEvent` + `EventEmitter<OpenNoteEvent>`; row click emits via `cx.emit`.  `workspace::TolariaWorkspace::add_item_to_active_pane` adds an `ItemHandle` to the center `PaneGroup`'s active `Pane` (creating one if empty).  `tolaria::open_note::open_note(workspace, id, window, cx)` helper reads metadata + body from `vault::Vault`, builds `NoteItem::new_with_webview`, routes through `add_item_to_active_pane`.  Lives in the binary crate because the dep graph forbids `workspace → note_item`.
+
+**5e — IPC channel routing + save persistence.**  `note_item::spawn_webview` takes a `flume::Sender<FromHost>`; the wry IPC handler decodes each message and pushes it down the channel.  `NoteItem::install_dispatch_task(entity, rx, cx)` spawns a detached foreground task that drains the receiver, runs `apply_from_host`, and on `Outcome::PersistSave` calls `vault::Vault::save(id, &body).detach()`.  Task exits cleanly when the WebView entity drops (sender drops → channel closes → loop ends).  `NoteItem::new_with_webview` now returns `Entity<Self>` and installs the dispatch task internally.
+
+End-to-end test `dispatch_task_persists_save_to_vault`: tempdir vault + simulated `FromHost::Save` on the channel + `run_until_parked` → assert disk content equals the new body.  Proves the MVP save persistence works without a real WKWebView.
+
+**Remaining UI mounting (post-MVP CUT).**  `NoteListPane` is not yet mounted in `TolariaWorkspace::empty`, and the `OpenNoteEvent → open_note` subscription is not wired.  The data path is complete and the open_note flow is fully testable; the chrome layout integration is a follow-on layout task.
 
 ---
 
