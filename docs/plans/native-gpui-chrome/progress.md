@@ -4,6 +4,11 @@ Branch: `feat/native-gpui-chrome`.  Push-to-`main` workflow per ADR-0021;
 intermediates are dogfood-only.  Tauri stack under `src-tauri/` stays
 untouched until the cut-over phase.
 
+**Roadmap is MVP-first** as of 2026-05-18 — see [`roadmap.md`](roadmap.md)
+for the live phase order and [`mvp-scope.md`](mvp-scope.md) for the
+MVP cut definition.  Original full roadmap preserved in §A of
+[`00-overview.md`](00-overview.md) for historical reference.
+
 | Phase | Status | Commit | Tests | Crates added |
 |-------|--------|--------|-------|--------------|
 | 0 — `embed_poc` spike | ✅ done | `9f26531e` | 26 | `embed_poc` |
@@ -11,14 +16,17 @@ untouched until the cut-over phase.
 | 2a — Workspace topology + mocks + Picker | ✅ done | `956f8c58` | +51 (96) | `mock_fixtures` ; expanded `workspace` (Dock/Pane/PaneGroup/Panel/Item/MockNoteItem) ; vendored Picker into `ui` |
 | 2b — First chrome surfaces | ✅ done | `e31bc7fc` | +19 (115) | `status_bar`, `breadcrumb_bar`, `toasts`, `banners` |
 | 2c — Chrome wiring + TOLARIA_MOCK | ✅ done | `3131ccc7` | +3 (118) | — (integration wave; touched 5 existing crates) |
-| 2d — Big panels | ⏳ planned | — | — | `sidebar_panel`, `note_list_pane`, `inspector_panel`, `ai_panel`, `search_panel`, `settings_panel`, `diff_view` |
-| 2e — Remaining surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` |
-| 2f — `gpui-component` eval | ⏳ scheduled | — | — | Timeboxed evaluation pass per [`eval-gpui-component-removal.md`](eval-gpui-component-removal.md); produces a keep / pin / vendor / replace recommendation + any follow-on work.  Runs **before** Phase 3 so the chrome's primitive contract is locked before services plumbing lands. |
-| 3 — Services migration | ⏳ planned | — | — | `vault`, `git_provider`, `vault_search`, `vault_watcher`, `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization` |
-| 4 — Editor host | ⏳ planned | — | — | `editor_bridge`, `note_item` ; new `editor-host/` Vite project |
-| 5 — Parity hardening | ⏳ planned | — | — | — |
-| 6 — Cut-over | ⏳ planned | — | — | `src-tauri/` deleted ; `src/` pruned to carry-overs |
-| 7 — Post-cutover | ⏳ planned | — | — | Windows / Linux feature flags ; iPad strategy ; native-editor R&D |
+| 2d — Big panels | ✅ done | `6d96cca8` | +31 (149) | `sidebar_panel`, `note_list_pane`, `inspector_panel`, `ai_panel`, `search_panel`, `settings_panel`, `diff_view` |
+| **3-MVP — Vault service (minimal)** | ⏳ next | — | — | `vault` (open dir, list, read, save, basic notify); shape-compatible with `mock_fixtures::MockVault` |
+| **4-MVP — Editor host integration** | ⏳ planned | — | — | `editor_host/` Vite project (carry-over from `src/`); `editor_bridge` crate; `note_item` crate (per-note `WKWebView` via `gpui-wry`) |
+| **5-MVP — MVP wiring + launch** | ⏳ planned | — | — | `tolaria --vault <path>` CLI arg; swap `sidebar_panel` / `note_list_pane` from `MockVault` to real `vault::Vault` global; open-note → spawn `note_item` in center Pane |
+| **— MVP CUT** | | | | App opens local vault, navigates, renders + saves notes.  Tauri stack still parallel. |
+| 6 — Remaining chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` |
+| 7 — `gpui-component` eval | ⏳ scheduled | — | — | Decision matrix per [`eval-gpui-component-removal.md`](eval-gpui-component-removal.md) |
+| 8 — Service expansion | ⏳ planned | — | — | `git_provider`, full `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`; wire AI/search/settings_panel chrome to real services |
+| 9 — Parity hardening | ⏳ planned | — | — | Multi-tab Pane UX; autogit + conflict resolver; onboarding; measurement gate |
+| 10 — Cut-over | ⏳ planned | — | — | `src-tauri/` deleted; `src/` pruned to carry-overs; superseded ADRs flipped; signing rewired |
+| 11 — Post-cutover | ⏳ planned | — | — | Windows / Linux feature flags; iPad strategy; native-editor R&D |
 
 ---
 
