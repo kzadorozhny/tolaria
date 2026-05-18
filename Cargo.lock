@@ -7621,6 +7621,7 @@ dependencies = [
  "note_item",
  "note_list_pane",
  "paths",
+ "serde_json",
  "settings_store",
  "sidebar_panel",
  "theme",
