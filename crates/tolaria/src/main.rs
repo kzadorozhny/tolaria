@@ -36,6 +36,8 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use std::path::PathBuf;
+
     use gpui::{
         px, size, App, AppContext, Bounds, SharedString, TitlebarOptions, WindowBounds,
         WindowOptions,
@@ -43,6 +45,7 @@ mod macos {
     use gpui_platform::application;
     use mock_fixtures::{MockAi, MockGit, MockSearch, MockVault};
     use settings_store::SettingsStore;
+    use vault::Vault;
 
     use crate::menus;
 
@@ -53,6 +56,34 @@ mod macos {
     /// children then auto-populate against them via their `from_or_empty`
     /// helpers (see `status_bar::StatusBar::from_or_empty`).
     const MOCK_ENV_VAR: &str = "TOLARIA_MOCK";
+
+    /// Parsed command-line arguments.  Phase 5-MVP only carries the
+    /// `--vault <path>` option; everything else is forwarded by GPUI /
+    /// AppKit (e.g. `--bundle` arguments from `open`).
+    struct CliArgs {
+        vault_path: Option<PathBuf>,
+    }
+
+    fn parse_args() -> CliArgs {
+        let mut iter = std::env::args().skip(1);
+        let mut vault_path = None;
+        while let Some(arg) = iter.next() {
+            match arg.as_str() {
+                "--vault" => {
+                    vault_path = iter.next().map(PathBuf::from);
+                }
+                "--help" | "-h" => {
+                    eprintln!("Usage: tolaria [--vault <path>]");
+                    std::process::exit(0);
+                }
+                _ => {
+                    // Ignore unrecognised flags so future GPUI / AppKit
+                    // additions don't break startup.
+                }
+            }
+        }
+        CliArgs { vault_path }
+    }
 
     /// Whether the mock-fixture launch path is requested.
     ///
@@ -90,9 +121,11 @@ mod macos {
             .filter_module("tolaria", log::LevelFilter::Info)
             .parse_default_env()
             .init();
-        log::info!("tolaria starting (ADR-0115 Phase 1)");
+        log::info!("tolaria starting (ADR-0115 Phase 5-MVP)");
 
-        application().run(|cx: &mut App| {
+        let args = parse_args();
+
+        application().run(move |cx: &mut App| {
             // 3. Theme / gpui-component global (must precede any primitive render).
             theme::init(cx);
 
@@ -139,6 +172,24 @@ mod macos {
             //    see the global state from registration onward.
             if mock_mode_requested() {
                 install_mock_globals(cx);
+            }
+
+            // 8b. Real vault (Phase 5-MVP).  `--vault <path>` opens the
+            //     on-disk vault and installs `vault::Vault` as a Global.
+            //     Chrome panels prefer it over `MockVault` via their
+            //     `from_or_empty` helpers (Phase 5c).  Failure to open
+            //     is logged but non-fatal — the app launches into an
+            //     empty workspace so the user can pick a vault later.
+            if let Some(path) = args.vault_path.as_ref() {
+                match Vault::open_at(path) {
+                    Ok(vault) => {
+                        log::info!("--vault {path:?}: installed vault::Vault global");
+                        cx.set_global(vault);
+                    }
+                    Err(err) => {
+                        log::error!("--vault {path:?}: failed to open: {err:#}");
+                    }
+                }
             }
 
             // 9. Re-apply theme whenever settings change.

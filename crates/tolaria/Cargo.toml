@@ -28,6 +28,7 @@ settings_store = { path = "../settings_store" }
 theme = { path = "../theme" }
 paths = { path = "../paths" }
 ui = { path = "../ui" }
+vault = { path = "../vault" }
 workspace = { path = "../workspace" }
 anyhow.workspace = true
 log.workspace = true

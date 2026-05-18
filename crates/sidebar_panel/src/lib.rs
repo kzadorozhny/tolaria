@@ -34,6 +34,8 @@ use gpui_component::{
     ActiveTheme, StyledExt as _,
 };
 use mock_fixtures::{MockVault, NoteKind};
+use std::path::PathBuf;
+use vault::Vault;
 use workspace::panel::{DockPosition, Panel};
 
 // ---------------------------------------------------------------------------
@@ -99,21 +101,40 @@ impl SidebarPanel {
         }
     }
 
-    /// Build from [`MockVault`] global if it is installed; otherwise return an
-    /// empty panel. Used by `TolariaWorkspace` so the sidebar populates under
-    /// `TOLARIA_MOCK=1` and degrades gracefully in normal launches before
-    /// Phase 3 services land.
+    /// Build from `vault::Vault` if installed, falling back to
+    /// [`MockVault`] (TOLARIA_MOCK=1 mode), then to an empty panel
+    /// (no vault selected yet).  Phase 5-MVP precedence: real > mock > empty.
     #[must_use]
     pub fn from_or_empty(cx: &mut App) -> Self {
-        if cx.try_global::<MockVault>().is_some() {
+        if cx.try_global::<Vault>().is_some() {
+            Self::from_vault(cx)
+        } else if cx.try_global::<MockVault>().is_some() {
             Self::from_mock(cx)
         } else {
             Self::new()
         }
     }
 
-    /// Build a sidebar panel populated from the [`MockVault`] global installed
-    /// on `cx`.
+    /// Build from the real `vault::Vault` global.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Vault`] global is not installed on `cx`.
+    #[must_use]
+    pub fn from_vault(cx: &mut App) -> Self {
+        let executor = cx.foreground_executor().clone();
+        let vault = cx.global::<Vault>();
+        let note_ids = executor.block_on(vault.notes());
+        let mut samples = Vec::with_capacity(note_ids.len());
+        for id in note_ids {
+            if let Some(note) = executor.block_on(vault.note(id)) {
+                samples.push((note.kind, note.path));
+            }
+        }
+        Self::build_from_samples(samples)
+    }
+
+    /// Build a sidebar panel populated from the [`MockVault`] global.
     ///
     /// - **TypeEntry** — groups notes by [`NoteKind`]; only non-zero kinds
     ///   appear, sorted alphabetically by label.
@@ -127,31 +148,34 @@ impl SidebarPanel {
     /// Panics if the [`MockVault`] global is not installed on `cx`.
     #[must_use]
     pub fn from_mock(cx: &mut App) -> Self {
-        // `Task::ready` resolves immediately; `block_on` never blocks the
-        // foreground thread in practice.  This mirrors the pattern used in
-        // `status_bar::from_mock`.
         let executor = cx.foreground_executor().clone();
-        // Hoist the vault reference so we resolve the global once, not N+1 times.
         let vault = cx.global::<MockVault>();
         let note_ids = executor.block_on(vault.notes());
+        let mut samples = Vec::with_capacity(note_ids.len());
+        for id in note_ids {
+            if let Some(note) = executor.block_on(vault.note(id)) {
+                samples.push((note.kind, note.path));
+            }
+        }
+        Self::build_from_samples(samples)
+    }
 
+    /// Common post-processing for both [`from_mock`] and [`from_vault`].
+    /// Counts kinds, derives folder hierarchy, attaches the three
+    /// synthesised demo SavedViews.
+    fn build_from_samples(samples: Vec<(NoteKind, PathBuf)>) -> Self {
         let mut markdown_count: usize = 0;
         let mut asset_count: usize = 0;
         let mut folder_count: usize = 0;
-        // BTreeSet gives stable lexicographic ordering without a sort step.
         let mut folder_paths: BTreeSet<SharedString> = BTreeSet::new();
 
-        for id in note_ids {
-            let Some(note) = executor.block_on(vault.note(id)) else {
-                continue;
-            };
-            match note.kind {
+        for (kind, path) in samples {
+            match kind {
                 NoteKind::Markdown => markdown_count += 1,
                 NoteKind::Asset => asset_count += 1,
                 NoteKind::Folder => folder_count += 1,
             }
-            // Derive folder hierarchy from parent path components.
-            if let Some(parent) = note.path.parent() {
+            if let Some(parent) = path.parent() {
                 let s = parent.to_string_lossy();
                 if !s.is_empty() {
                     folder_paths.insert(SharedString::from(s.into_owned()));

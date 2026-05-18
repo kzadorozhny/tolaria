@@ -146,7 +146,7 @@ impl Render for SearchPanel {
             .iter()
             .map(|h| {
                 // Phase 3 will resolve real note titles via the vault service.
-                let title = SharedString::from(format!("Note #{}", h.note_id.0));
+                let title = SharedString::from(format!("Note #{}", h.note_id.get()));
                 let excerpt = SharedString::from(h.excerpt.as_str());
                 let score_pct = (h.score.clamp(0.0, 1.0) * 100.0).round() as u32;
                 (title, excerpt, score_pct)

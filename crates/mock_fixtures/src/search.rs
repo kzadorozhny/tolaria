@@ -61,80 +61,80 @@ impl MockSearch {
         let hits = match lower.trim() {
             "todo" => vec![
                 SearchHit {
-                    note_id: NoteId(14),
+                    note_id: NoteId::from_raw(14),
                     excerpt: "…The original spike that proved Tolaria could read a markdown vault…"
                         .to_string(),
                     score: 0.90,
                 },
                 SearchHit {
-                    note_id: NoteId(15),
+                    note_id: NoteId::from_raw(15),
                     excerpt: "…The first usable release for daily browsing, quick open…"
                         .to_string(),
                     score: 0.85,
                 },
                 SearchHit {
-                    note_id: NoteId(16),
+                    note_id: NoteId::from_raw(16),
                     excerpt: "…TODO: finalise dock layout and Phase 3 service wiring…".to_string(),
                     score: 0.80,
                 },
             ],
             "sponsor" | "sponsorship" => vec![
                 SearchHit {
-                    note_id: NoteId(20),
+                    note_id: NoteId::from_raw(20),
                     excerpt: "…Review the pipeline, choose the next target companies…".to_string(),
                     score: 0.95,
                 },
                 SearchHit {
-                    note_id: NoteId(21),
+                    note_id: NoteId::from_raw(21),
                     excerpt: "…Onboard a new sponsor after the contract is signed…".to_string(),
                     score: 0.90,
                 },
                 SearchHit {
-                    note_id: NoteId(24),
+                    note_id: NoteId::from_raw(24),
                     excerpt: "…Owns the Laputa sponsorship pipeline end-to-end…".to_string(),
                     score: 0.85,
                 },
             ],
             "quarterly" => vec![SearchHit {
-                note_id: NoteId(20),
+                note_id: NoteId::from_raw(20),
                 excerpt: "…Send a fresh outreach batch each quarter…".to_string(),
                 score: 0.98,
             }],
             "laputa" => vec![
                 SearchHit {
-                    note_id: NoteId(14),
+                    note_id: NoteId::from_raw(14),
                     excerpt: "…Start Laputa App Project…".to_string(),
                     score: 0.95,
                 },
                 SearchHit {
-                    note_id: NoteId(15),
+                    note_id: NoteId::from_raw(15),
                     excerpt: "…Laputa App V1…".to_string(),
                     score: 0.90,
                 },
                 SearchHit {
-                    note_id: NoteId(16),
+                    note_id: NoteId::from_raw(16),
                     excerpt: "…Laputa App V2…".to_string(),
                     score: 0.85,
                 },
             ],
             "procedure" => vec![
                 SearchHit {
-                    note_id: NoteId(20),
+                    note_id: NoteId::from_raw(20),
                     excerpt: "…Quarterly Sponsor Outreach…".to_string(),
                     score: 0.88,
                 },
                 SearchHit {
-                    note_id: NoteId(21),
+                    note_id: NoteId::from_raw(21),
                     excerpt: "…Sponsor Onboarding…".to_string(),
                     score: 0.85,
                 },
                 SearchHit {
-                    note_id: NoteId(22),
+                    note_id: NoteId::from_raw(22),
                     excerpt: "…Release Checklist…".to_string(),
                     score: 0.82,
                 },
                 SearchHit {
-                    note_id: NoteId(23),
+                    note_id: NoteId::from_raw(23),
                     excerpt: "…Incident Response…".to_string(),
                     score: 0.80,
                 },
@@ -159,7 +159,7 @@ mod tests {
         let search = MockSearch;
         let hits = search.query("sponsor").await;
         assert_eq!(hits.len(), 3);
-        assert_eq!(hits[0].note_id, NoteId(20));
+        assert_eq!(hits[0].note_id, NoteId::from_raw(20));
     }
 
     #[gpui::test]
@@ -167,7 +167,7 @@ mod tests {
         let search = MockSearch;
         let hits = search.query("quarterly").await;
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].note_id, NoteId(20));
+        assert_eq!(hits[0].note_id, NoteId::from_raw(20));
     }
 
     #[gpui::test]
@@ -183,9 +183,9 @@ mod tests {
         let hits = search.query("laputa").await;
         assert_eq!(hits.len(), 3);
         let ids: Vec<_> = hits.iter().map(|h| h.note_id).collect();
-        assert!(ids.contains(&NoteId(14)));
-        assert!(ids.contains(&NoteId(15)));
-        assert!(ids.contains(&NoteId(16)));
+        assert!(ids.contains(&NoteId::from_raw(14)));
+        assert!(ids.contains(&NoteId::from_raw(15)));
+        assert!(ids.contains(&NoteId::from_raw(16)));
     }
 
     #[gpui::test]

@@ -538,7 +538,7 @@ mod tests {
             .unwrap();
     }
 
-    /// `from_mock` must select `NoteId(1)` — the first note in the seeded vault.
+    /// `from_mock` must select `NoteId::from_raw(1)` — the first note in the seeded vault.
     #[gpui::test]
     fn from_mock_picks_first_note(cx: &mut TestAppContext) {
         cx.update(|cx| {
@@ -547,8 +547,8 @@ mod tests {
             let panel = InspectorPanel::from_mock(cx);
             assert_eq!(
                 panel.note_id(),
-                Some(NoteId(1)),
-                "first seeded note must be NoteId(1)"
+                Some(NoteId::from_raw(1)),
+                "first seeded note must be NoteId::from_raw(1)"
             );
         });
     }

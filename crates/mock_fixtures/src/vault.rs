@@ -16,19 +16,14 @@ use serde_json::Value;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// Stable identifier for a mock note.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NoteId(pub u64);
+// `NoteId` and `NoteKind` are re-exported from the `vault` crate so chrome
+// panels can accept either a real `vault::Vault` or a `MockVault` without
+// type-juggling at the boundary.  See ADR-0115 Phase 5a.
+pub use vault::{NoteId, NoteKind};
 
-/// File-level kind of a note (not the frontmatter `type:` field).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NoteKind {
-    Markdown,
-    Asset,
-    Folder,
-}
-
-/// A single in-memory note record.
+/// A single in-memory note record.  Carries the real-vault fields plus
+/// `content`, `created`, and `properties` for mock-specific chrome surfaces
+/// (inspector ToC, properties panel, etc.).
 #[derive(Debug, Clone)]
 pub struct MockNote {
     pub id: NoteId,
@@ -96,7 +91,7 @@ impl MockVault {
     /// observers after the mutation.
     pub fn save(&mut self, id: NoteId, content: impl Into<String>) -> Task<Result<(), VaultError>> {
         let content = content.into();
-        log::debug!("MockVault: saving note {}", id.0);
+        log::debug!("MockVault: saving note {}", id.get());
         match self.notes.iter_mut().find(|n| n.id == id) {
             Some(note) => {
                 note.content = content;
@@ -111,7 +106,7 @@ impl MockVault {
     /// Call via `cx.global_mut::<MockVault>().delete(…)` so GPUI notifies
     /// observers after the mutation.
     pub fn delete(&mut self, id: NoteId) -> Task<Result<(), VaultError>> {
-        log::debug!("MockVault: deleting note {}", id.0);
+        log::debug!("MockVault: deleting note {}", id.get());
         let before = self.notes.len();
         self.notes.retain(|n| n.id != id);
         if self.notes.len() < before {
@@ -159,7 +154,7 @@ fn mk(
     created: (i32, u32, u32),
 ) -> MockNote {
     MockNote {
-        id: NoteId(id),
+        id: NoteId::from_raw(id),
         title: SharedString::from(title),
         path: PathBuf::from(path),
         content: content.to_string(),
@@ -341,14 +336,17 @@ mod tests {
         let vault = MockVault::seeded();
         let ids = vault.notes().await;
         assert_eq!(ids.len(), 30);
-        assert!(ids.contains(&NoteId(1)));
-        assert!(ids.contains(&NoteId(30)));
+        assert!(ids.contains(&NoteId::from_raw(1)));
+        assert!(ids.contains(&NoteId::from_raw(30)));
     }
 
     #[gpui::test]
     async fn note_lookup_returns_correct_title(_cx: &mut TestAppContext) {
         let vault = MockVault::seeded();
-        let note = vault.note(NoteId(1)).await.expect("note 1 must exist");
+        let note = vault
+            .note(NoteId::from_raw(1))
+            .await
+            .expect("note 1 must exist");
         assert_eq!(note.title.as_ref(), "Writing");
     }
 
@@ -356,11 +354,11 @@ mod tests {
     async fn save_round_trips_through_get(_cx: &mut TestAppContext) {
         let mut vault = MockVault::seeded();
         vault
-            .save(NoteId(1), "updated content".to_string())
+            .save(NoteId::from_raw(1), "updated content".to_string())
             .await
             .expect("save must succeed for known id");
         let note = vault
-            .note(NoteId(1))
+            .note(NoteId::from_raw(1))
             .await
             .expect("note must still exist after save");
         assert_eq!(note.content, "updated content");
@@ -369,7 +367,7 @@ mod tests {
     #[gpui::test]
     async fn save_returns_error_for_unknown_id(_cx: &mut TestAppContext) {
         let mut vault = MockVault::seeded();
-        let result = vault.save(NoteId(999), "x".to_string()).await;
+        let result = vault.save(NoteId::from_raw(999), "x".to_string()).await;
         assert!(result.is_err(), "save must fail for unknown id");
     }
 
@@ -377,12 +375,12 @@ mod tests {
     async fn delete_removes_note(_cx: &mut TestAppContext) {
         let mut vault = MockVault::seeded();
         vault
-            .delete(NoteId(30))
+            .delete(NoteId::from_raw(30))
             .await
             .expect("delete must succeed for known id");
         let ids = vault.notes().await;
         assert_eq!(ids.len(), 29);
-        assert!(!ids.contains(&NoteId(30)));
+        assert!(!ids.contains(&NoteId::from_raw(30)));
     }
 
     #[gpui::test]
@@ -390,9 +388,9 @@ mod tests {
         let vault = MockVault::seeded();
         let ids = vault.search_titles("laputa").await;
         // Notes 14, 15, 16 all have "Laputa" in their title.
-        assert!(ids.contains(&NoteId(14)));
-        assert!(ids.contains(&NoteId(15)));
-        assert!(ids.contains(&NoteId(16)));
+        assert!(ids.contains(&NoteId::from_raw(14)));
+        assert!(ids.contains(&NoteId::from_raw(15)));
+        assert!(ids.contains(&NoteId::from_raw(16)));
     }
 
     #[gpui::test]
@@ -401,7 +399,7 @@ mod tests {
         let lower = vault.search_titles("writing").await;
         let upper = vault.search_titles("WRITING").await;
         assert_eq!(lower, upper);
-        assert!(lower.contains(&NoteId(1)));
+        assert!(lower.contains(&NoteId::from_raw(1)));
     }
 
     #[gpui::test]

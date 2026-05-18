@@ -41,6 +41,7 @@ use gpui_component::{
     v_flex, ActiveTheme,
 };
 use mock_fixtures::{MockVault, NoteId, NoteKind};
+use vault::Vault;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -110,14 +111,12 @@ impl NoteListPane {
     ///
     /// Panics if the [`MockVault`] global is not installed on `cx`.
     pub fn from_mock(cx: &mut App) -> Self {
-        let ids = cx
-            .foreground_executor()
-            .block_on(cx.global::<MockVault>().notes());
-
+        let executor = cx.foreground_executor().clone();
+        let vault = cx.global::<MockVault>();
+        let ids = executor.block_on(vault.notes());
         let mut entries = Vec::with_capacity(ids.len());
         for id in ids {
-            let task = cx.global::<MockVault>().note(id);
-            if let Some(note) = cx.foreground_executor().block_on(task) {
+            if let Some(note) = executor.block_on(vault.note(id)) {
                 entries.push(NoteEntry {
                     id: note.id,
                     title: note.title.clone(),
@@ -126,7 +125,6 @@ impl NoteListPane {
                 });
             }
         }
-
         Self {
             entries,
             filter: SharedString::default(),
@@ -134,11 +132,39 @@ impl NoteListPane {
         }
     }
 
-    /// Build from [`MockVault`] if the global is installed; otherwise return
-    /// an empty pane.  Matches the `from_or_empty` pattern used by other
-    /// Phase 2 chrome views (e.g. `StatusBar::from_or_empty`).
+    /// Build a pane pre-populated from the real `vault::Vault` global.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Vault`] global is not installed on `cx`.
+    pub fn from_vault(cx: &mut App) -> Self {
+        let executor = cx.foreground_executor().clone();
+        let vault = cx.global::<Vault>();
+        let ids = executor.block_on(vault.notes());
+        let mut entries = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(note) = executor.block_on(vault.note(id)) {
+                entries.push(NoteEntry {
+                    id: note.id,
+                    title: note.title.clone(),
+                    kind: note.kind,
+                    modified: note.modified,
+                });
+            }
+        }
+        Self {
+            entries,
+            filter: SharedString::default(),
+            selected: HashSet::new(),
+        }
+    }
+
+    /// Build from `vault::Vault` if installed, else [`MockVault`], else
+    /// an empty pane.  Phase 5-MVP precedence: real > mock > empty.
     pub fn from_or_empty(cx: &mut App) -> Self {
-        if cx.try_global::<MockVault>().is_some() {
+        if cx.try_global::<Vault>().is_some() {
+            Self::from_vault(cx)
+        } else if cx.try_global::<MockVault>().is_some() {
             Self::from_mock(cx)
         } else {
             Self::new()
@@ -369,6 +395,47 @@ mod tests {
         });
     }
 
+    /// `from_vault` must load every `.md` file from a real on-disk vault.
+    #[gpui::test]
+    fn from_vault_loads_real_notes(cx: &mut TestAppContext) {
+        use std::fs;
+        install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("a.md"), "alpha").unwrap();
+        fs::write(dir.path().join("b.md"), "beta").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let pane = NoteListPane::from_vault(cx);
+            assert_eq!(
+                pane.entries.len(),
+                2,
+                "from_vault must load both .md files from the temp dir"
+            );
+        });
+    }
+
+    /// `from_or_empty` must prefer `vault::Vault` over `MockVault` when both
+    /// are installed.  Phase 5-MVP precedence contract.
+    #[gpui::test]
+    fn from_or_empty_prefers_real_vault(cx: &mut TestAppContext) {
+        use std::fs;
+        install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("only.md"), "x").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        cx.update(|cx| {
+            cx.set_global(MockVault::seeded()); // 30 notes
+            cx.set_global(vault); // 1 note
+            let pane = NoteListPane::from_or_empty(cx);
+            assert_eq!(
+                pane.entries.len(),
+                1,
+                "real Vault must win over MockVault when both globals present"
+            );
+        });
+    }
+
     /// A filter substring must narrow `visible_entries` to matching titles.
     #[gpui::test]
     fn filter_narrows_visible(cx: &mut TestAppContext) {
@@ -401,13 +468,13 @@ mod tests {
 
         window
             .update(cx, |pane, _window, cx| {
-                pane.toggle_selection(NoteId(1), cx);
+                pane.toggle_selection(NoteId::from_raw(1), cx);
                 assert_eq!(
                     pane.selection_count(),
                     1,
                     "count must be 1 after first toggle"
                 );
-                pane.toggle_selection(NoteId(1), cx);
+                pane.toggle_selection(NoteId::from_raw(1), cx);
                 assert_eq!(
                     pane.selection_count(),
                     0,
@@ -428,7 +495,7 @@ mod tests {
 
         window
             .update(cx, |pane, _window, cx| {
-                pane.toggle_selection(NoteId(1), cx);
+                pane.toggle_selection(NoteId::from_raw(1), cx);
                 assert!(
                     pane.selection_count() > 0,
                     "selection_count must be > 0 so bulk bar renders"
@@ -449,9 +516,9 @@ mod tests {
 
         window
             .update(cx, |pane, _window, cx| {
-                pane.toggle_selection(NoteId(1), cx);
-                pane.toggle_selection(NoteId(2), cx);
-                pane.toggle_selection(NoteId(3), cx);
+                pane.toggle_selection(NoteId::from_raw(1), cx);
+                pane.toggle_selection(NoteId::from_raw(2), cx);
+                pane.toggle_selection(NoteId::from_raw(3), cx);
                 assert_eq!(pane.selection_count(), 3);
                 pane.clear_selection(cx);
                 assert_eq!(

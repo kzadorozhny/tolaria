@@ -13,6 +13,7 @@ thiserror.workspace = true
 log.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
+vault = { path = "../vault" }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { workspace = true, features = ["test-support"] }

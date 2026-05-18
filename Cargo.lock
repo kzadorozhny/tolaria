@@ -4190,6 +4190,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "vault",
 ]
 
 [[package]]
@@ -4368,6 +4369,8 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "mock_fixtures",
+ "tempfile",
+ "vault",
  "workspace",
 ]
 
@@ -6411,6 +6414,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "mock_fixtures",
+ "vault",
  "workspace",
 ]
 
@@ -7146,6 +7150,7 @@ dependencies = [
  "settings_store",
  "theme",
  "ui",
+ "vault",
  "workspace",
 ]
 

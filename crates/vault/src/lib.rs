@@ -59,12 +59,18 @@ impl NoteId {
         self.0
     }
 
-    /// Fabricate a [`NoteId`] from a raw integer.  Production code obtains
-    /// `NoteId`s exclusively from [`Vault`]'s constructors and rescan paths;
-    /// this constructor exists so downstream crates (`editor_bridge`,
-    /// `note_item`) can build deterministic test fixtures without going
-    /// through a serde round-trip.
-    #[doc(hidden)]
+    /// Fabricate a [`NoteId`] from a raw integer.
+    ///
+    /// Production code obtains `NoteId`s exclusively from [`Vault`]'s
+    /// constructors and rescan paths.  This constructor exists for two
+    /// legitimate callers:
+    ///
+    /// 1. **`mock_fixtures::MockVault`** — needs to seed deterministic IDs
+    ///    at startup so chrome panels populated from mocks compare equal
+    ///    to those populated from a real `Vault`.
+    /// 2. **Downstream test fixtures** in `editor_bridge` and `note_item`
+    ///    — building a `Note` for a unit test without a real on-disk
+    ///    vault.
     #[must_use]
     pub fn from_raw(n: u64) -> Self {
         Self(n)
