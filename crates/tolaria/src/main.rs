@@ -311,59 +311,43 @@ mod tests {
         );
     }
 
-    /// `gpui_platform` MUST resolve with the `font-kit` feature enabled.
-    /// Without it, `gpui_macos::MacPlatform::new` swaps `MacTextSystem`
-    /// for `gpui::NoopTextSystem` and every label in the app renders as
-    /// invisible whitespace (window chrome geometry still paints, so the
-    /// regression is silent at the GPUI layer — only the periscope harness
-    /// catches it visually).
+    /// The real-platform `PlatformTextSystem` MUST be able to enumerate
+    /// system fonts.  When `gpui_platform` is built without the
+    /// `font-kit` feature, `gpui_macos::MacPlatform::new` swaps
+    /// `MacTextSystem` for `gpui::NoopTextSystem`, whose
+    /// `all_font_names()` returns an empty `Vec` — every label in the
+    /// app then renders as invisible whitespace.  Window chrome geometry
+    /// still paints, so the regression is silent at the GPUI layer; only
+    /// observing the live text system catches it.
     ///
-    /// We probe Cargo's resolved feature graph (`cargo metadata`) rather
-    /// than text-matching `Cargo.toml`: this way the test still fires
-    /// when feature unification across workspace members would have
-    /// dropped the flag, when the workspace dep gets refactored, or when
-    /// the line gets reformatted.  Discovered in Phase 6-MVP verification
-    /// — see `docs/plans/native-gpui-chrome/progress.md`.
+    /// We construct the real headless macOS platform via
+    /// `gpui_platform::current_platform(true)` and ask its
+    /// `PlatformTextSystem` for the font catalog.  A healthy
+    /// `MacTextSystem` (CoreText-backed) returns hundreds of system
+    /// fonts; `NoopTextSystem` returns zero.  Picking a generous floor
+    /// of 50 leaves room for trimmed macOS installs while still firing
+    /// hard the moment the platform falls back to `NoopTextSystem`.
+    ///
+    /// Discovered in Phase 6-MVP verification — see
+    /// `docs/plans/native-gpui-chrome/progress.md`.  This test is a
+    /// plain `#[test]` (not `#[gpui::test]`) because `TestPlatform::new`
+    /// hard-codes `NoopTextSystem` regardless of feature flags, so
+    /// `TestAppContext` cannot distinguish the two configurations.
     #[test]
-    fn gpui_platform_resolves_with_font_kit_feature() {
-        let output = std::process::Command::new(env!("CARGO"))
-            .args(["metadata", "--format-version", "1"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("run `cargo metadata`");
+    fn platform_text_system_enumerates_system_fonts() {
+        let platform = gpui_platform::current_platform(true);
+        let text_system = platform.text_system();
+        let names = text_system.all_font_names();
         assert!(
-            output.status.success(),
-            "`cargo metadata` failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let metadata: serde_json::Value =
-            serde_json::from_slice(&output.stdout).expect("parse cargo metadata JSON");
-
-        let node = metadata["resolve"]["nodes"]
-            .as_array()
-            .expect("resolve.nodes array")
-            .iter()
-            .find(|n| {
-                n["id"]
-                    .as_str()
-                    .is_some_and(|id| id.contains("gpui_platform"))
-            })
-            .expect("gpui_platform node in resolve graph");
-
-        let features: Vec<&str> = node["features"]
-            .as_array()
-            .expect("node.features array")
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
-
-        assert!(
-            features.contains(&"font-kit"),
-            "gpui_platform resolved without \"font-kit\".  \
-             Resolved features: {features:?}.  \
-             Re-add `\"font-kit\"` to the workspace `gpui_platform` feature \
-             list in `Cargo.toml` — see the comment there for the rationale."
+            names.len() > 50,
+            "PlatformTextSystem::all_font_names() returned {} font(s): \
+             {names:?}.\n\nThis is the symptom of `gpui_platform` being \
+             built without the `font-kit` feature — `gpui_macos::\
+             MacPlatform::new` then falls back to `gpui::NoopTextSystem`, \
+             whose font list is empty, and the whole UI ships with \
+             invisible glyphs.  Re-add `\"font-kit\"` to the workspace \
+             `gpui_platform` feature list in `Cargo.toml`.",
+            names.len(),
         );
     }
 }
