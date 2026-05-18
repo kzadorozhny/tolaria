@@ -75,7 +75,9 @@ TOLARIA_E2E_SMOKE=1 cargo test -p periscope
 
 Spawns `tolaria --vault demo-vault-v2` as a child, polls for the
 window every 500 ms (15 s deadline), captures a PNG, asserts size
-> 10 kB, kills the child.
+> 100 kB (chosen to catch invisible-text regressions: a Tolaria
+window without rendered glyphs serialises at ~88 kB; with text,
+~260 kB), kills the child.
 
 ---
 

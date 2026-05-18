@@ -28,9 +28,11 @@ TOLARIA_E2E_SMOKE=1 cargo test -p periscope
 ```
 
 It spawns `tolaria --vault demo-vault-v2` against the demo fixture,
-captures a PNG, asserts the file is > 10 kB, and tears the child
-down.  If it errors with "PNG too small", revisit the Screen
-Recording grant for the terminal that ran the test.
+captures a PNG, asserts the file is > 100 kB (sized to catch the
+`font-kit` regression — a window without rendered text serialises
+at ~88 kB), and tears the child down.  If it errors with "PNG too
+small", revisit the Screen Recording grant for the terminal that
+ran the test.
 
 ---
 

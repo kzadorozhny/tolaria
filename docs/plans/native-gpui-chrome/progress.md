@@ -161,6 +161,17 @@ Adds `crates/periscope/` — a macOS-only Rust harness that lets Claude observe 
 
 Review pass: 1 MUST + 7 SHOULD applied — stale `CARGO_BIN_EXE_tolaria` doc comment in the smoke test replaced with accurate `cargo build` + exec description; `windows.rs` restructured to branch once on target (dropped `unreachable!` arm); `WindowTarget::{by_title, by_pid}` constructors + `Display` impl; `ChildGuard` RAII wrapper around the spawned tolaria child; pixel-based black-frame detection (32×32 grid); atomic `latest.png` symlink rename (tmp + rename); `RAISE_SETTLE` const replaces inline 250 ms sleep; `pid.try_into()` replaces `pid as i32` cast.  (S-4 `thiserror::Error` enum deferred to Phase 6-stable — library-first roadmap question.)
 
+#### Phase 6-MVP follow-up — `gpui_platform/font-kit` invisible-text bug
+
+The harness immediately paid for itself: the very first manual verification capture showed Tolaria's chrome painting row dividers and pane borders but **zero rendered glyphs**.  Building a `hello_world` clone in our workspace as `crates/tolaria_minimal/` (since deleted) reproduced the issue; rebuilding the same source from `gpui-components/examples/hello_world/`'s workspace did not.
+
+Root cause: our workspace pinned `gpui_platform` with `features = ["runtime_shaders"]` only.  Without `font-kit`, `gpui_macos::MacPlatform::new` substitutes `gpui::NoopTextSystem` for `MacTextSystem` (see `crates/gpui_macos/src/platform.rs:187` on rev `832c17e8`) — the text system silently no-ops on every glyph request while window chrome continues to paint, so the regression is invisible at the GPUI / test layer.  CoreText enumeration via `cx.text_system().all_font_names()` returns just the 10-entry fallback stack instead of the full system catalog.
+
+Fix: `gpui_platform = { features = ["runtime_shaders", "font-kit"] }` in workspace `Cargo.toml`, documented inline.  Regression locked in by:
+
+- `tolaria::tests::workspace_enables_font_kit_for_gpui_platform` — reads the workspace `Cargo.toml` directly and asserts the feature string is present.
+- `periscope::screenshot_smoke` threshold bumped from 10 kB → 100 kB so a future text-rendering regression trips the byte-count assertion (broken capture ≈ 88 kB, healthy capture ≈ 260 kB).
+
 ---
 
 ## Durable feedback memories applied throughout

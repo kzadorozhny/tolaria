@@ -44,7 +44,14 @@ gpui = { git = "https://github.com/zed-industries/zed" }
 # pre-compile to runtime shader compilation. This is required on hosts that
 # only ship Apple Command Line Tools (no full Xcode → no `metal` utility) —
 # which is the configuration on the spike dev machine and on most CI runners.
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders"] }
+#
+# `font-kit` is **mandatory** on macOS: without it `gpui_macos::MacPlatform::new`
+# substitutes `gpui::NoopTextSystem` for `MacTextSystem`, glyph rendering
+# silently no-ops, and the whole UI ships with invisible text.  The flag flips
+# `gpui_macos`'s text-backend `cfg` at `crates/gpui_macos/src/platform.rs:187`.
+# Discovered the hard way via the periscope harness during Phase 6-MVP
+# verification — see `docs/plans/native-gpui-chrome/progress.md`.
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["runtime_shaders", "font-kit"] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "a5268cd640da080d9d383856ee62990dfb23d6f0" }
 gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "a5268cd640da080d9d383856ee62990dfb23d6f0", package = "gpui-wry" }
 # `gpui-wry` internally depends on `wry = { version = "0.53.3", package = "lb-wry" }`

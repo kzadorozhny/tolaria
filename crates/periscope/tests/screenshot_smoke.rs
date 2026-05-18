@@ -23,7 +23,15 @@ use std::{
 
 const SMOKE_TIMEOUT_SECS: u64 = 15;
 const SMOKE_POLL_INTERVAL_MS: u64 = 500;
-const MIN_USEFUL_PNG_BYTES: u64 = 10_000;
+
+/// Threshold tuned to catch the "invisible glyphs" regression discovered in
+/// Phase 6-MVP verification: a Tolaria window that renders chrome geometry
+/// but no text serialises at ~88 kB; one with text reaches ~260 kB on the
+/// reference machine.  100 kB sits comfortably above the no-text floor and
+/// well below typical real captures.  Bumping this number is a deliberate
+/// trade-off — keep it strict enough that `gpui_platform`'s `font-kit`
+/// feature getting dropped (silent at the GPUI layer) trips the smoke test.
+const MIN_USEFUL_PNG_BYTES: u64 = 100_000;
 
 /// RAII wrapper around the spawned `tolaria` child so a panicking
 /// assertion still tears the GPUI window down on stack unwind.

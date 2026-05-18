@@ -310,4 +310,32 @@ mod tests {
             "ReloadKeymap must fire exactly twice without panicking"
         );
     }
+
+    /// Workspace `Cargo.toml` MUST enable the `font-kit` feature on
+    /// `gpui_platform`.  Without it, `gpui_macos::MacPlatform::new` swaps
+    /// `MacTextSystem` for `gpui::NoopTextSystem` and every label in the
+    /// app renders as invisible whitespace (window chrome geometry still
+    /// paints, so the regression is silent at the GPUI layer — only the
+    /// periscope harness catches it visually).
+    ///
+    /// Tracking the feature flag here at the binary level (rather than in
+    /// a workspace-level dep test) keeps the assertion close to where the
+    /// regression manifests.  Discovered in Phase 6-MVP verification —
+    /// see `docs/plans/native-gpui-chrome/progress.md`.
+    #[test]
+    fn workspace_enables_font_kit_for_gpui_platform() {
+        let manifest =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.toml"))
+                .expect("read workspace Cargo.toml");
+        let gpui_platform_line = manifest
+            .lines()
+            .find(|line| line.starts_with("gpui_platform = {"))
+            .expect("gpui_platform workspace dep line");
+        assert!(
+            gpui_platform_line.contains("\"font-kit\""),
+            "gpui_platform must enable \"font-kit\" feature.  \
+             Current line: {gpui_platform_line:?}.  \
+             See the comment in Cargo.toml for the rationale."
+        );
+    }
 }
