@@ -7,8 +7,10 @@
 //! `periscope::screenshot` API, asserts the file is plausibly
 //! non-empty, then tears the child process down.
 //!
-//! Skipped via `TOLARIA_E2E_SKIP_SMOKE=1` on hosts that lack the
-//! Screen Recording entitlement (typically headless CI).
+//! Opt-in via `TOLARIA_E2E_SMOKE=1`.  The test is skipped by default
+//! because the host needs Screen Recording permission granted to the
+//! cargo-launching terminal — set the env var only on a workstation
+//! where that's true (headless CI typically isn't).
 
 #![cfg(target_os = "macos")]
 
@@ -42,8 +44,8 @@ impl ChildGuard {
 
 #[test]
 fn screenshot_smoke() {
-    if std::env::var("TOLARIA_E2E_SKIP_SMOKE").is_ok() {
-        eprintln!("periscope::screenshot_smoke skipped (TOLARIA_E2E_SKIP_SMOKE set)");
+    if std::env::var("TOLARIA_E2E_SMOKE").is_err() {
+        eprintln!("periscope::screenshot_smoke skipped (TOLARIA_E2E_SMOKE not set)");
         return;
     }
 
@@ -101,8 +103,7 @@ fn screenshot_smoke() {
     let bytes = std::fs::metadata(&path).expect("stat smoke PNG").len();
     assert!(
         bytes >= MIN_USEFUL_PNG_BYTES,
-        "PNG too small ({bytes} bytes) — Screen Recording permission missing? \
-         Set TOLARIA_E2E_SKIP_SMOKE=1 to opt out on permission-less hosts."
+        "PNG too small ({bytes} bytes) — Screen Recording permission missing"
     );
 }
 

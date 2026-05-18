@@ -66,10 +66,16 @@ and **… → Accessibility**.  Re-grant after the binary path changes
 cargo test -p periscope
 ```
 
+Skipped by default — opt in with `TOLARIA_E2E_SMOKE=1` on a host that
+has Screen Recording granted to the cargo-launching terminal:
+
+```sh
+TOLARIA_E2E_SMOKE=1 cargo test -p periscope
+```
+
 Spawns `tolaria --vault demo-vault-v2` as a child, polls for the
 window every 500 ms (15 s deadline), captures a PNG, asserts size
-> 10 kB, kills the child.  Set `TOLARIA_E2E_SKIP_SMOKE=1` to opt out
-on hosts that don't have the Screen Recording entitlement (CI etc.).
+> 10 kB, kills the child.
 
 ---
 

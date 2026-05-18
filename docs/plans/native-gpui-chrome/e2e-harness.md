@@ -20,10 +20,11 @@ For library / CLI reference see `crates/periscope/README.md`.
    **… → Accessibility**) — needed for the `--raise` flag and
    the `list` subcommand.
 
-Confirm with the smoke test:
+Confirm with the smoke test (opt-in via env var so the default
+`cargo test` lane stays green on permission-less hosts):
 
 ```sh
-cargo test -p periscope
+TOLARIA_E2E_SMOKE=1 cargo test -p periscope
 ```
 
 It spawns `tolaria --vault demo-vault-v2` against the demo fixture,
