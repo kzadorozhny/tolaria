@@ -21,6 +21,7 @@ MVP cut definition.  Original full roadmap preserved in §A of
 | **4-MVP — Editor host integration** | ✅ done | `8c31dd32` / `a6d221ec` / `bc69b714` | +29 (187) | `editor_bridge`, `note_item`; `editor-host/` Vite project |
 | **5-MVP — MVP wiring + launch** | ✅ done | `f3eef114` / `e0a2b6f0` / `11ace568` | +4 (191) | `tolaria --vault`; chrome `from_vault`; `open_note` helper; IPC channel routing; NoteListPane mounted in left dock + OpenNoteEvent subscription |
 | **— MVP CUT** | | | | App opens local vault, navigates, renders + saves notes.  Tauri stack still parallel. |
+| **6-MVP — Rust e2e screenshot harness** | ✅ done | `9509f092` | +1 (192) | `periscope` (xcap + accessibility; `screenshot`/`watch`/`list` CLI; smoke test spawns tolaria + asserts PNG > 10 kB) |
 | 6 — Remaining chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` |
 | 7 — `gpui-component` eval | ⏳ scheduled | — | — | Decision matrix per [`eval-gpui-component-removal.md`](eval-gpui-component-removal.md) |
 | 8 — Service expansion | ⏳ planned | — | — | `git_provider`, full `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`; wire AI/search/settings_panel chrome to real services |
@@ -139,6 +140,26 @@ End-to-end integration of the foundation crates.  Shipped in two commit waves: 5
 End-to-end test `dispatch_task_persists_save_to_vault`: tempdir vault + simulated `FromHost::Save` on the channel + `run_until_parked` → assert disk content equals the new body.  Proves the MVP save persistence works without a real WKWebView.
 
 **UI mounting (5d-followup, `11ace568`).**  `NoteListPane` impls `workspace::panel::Panel` and the `tolaria` binary's `cx.open_window` closure mounts it in the left dock via `TolariaWorkspace::attach_left_dock`.  A `cx.subscribe_in(&note_list, window, …)` wired inside the workspace's `Context` routes every `OpenNoteEvent` to `open_note::open_note` — the full MVP CUT flow is now live: open vault → click note → render via WKWebView → Cmd+S persists to disk.
+
+### Phase 6-MVP — Rust e2e screenshot harness (`9509f092`)
+
+Adds `crates/periscope/` — a macOS-only Rust harness that lets Claude observe a running `tolaria` window between conversational turns by capturing PNG screenshots through its multimodal `Read` tool.
+
+**Capture-strategy decision.** GPUI's `Window::render_to_image()` (the in-process route Zed uses) reads the Metal drawable texture — which contains GPUI chrome only.  The embedded WKWebView editor body is a sibling NSView composited by the OS, so in-process captures would show it as a black rectangle.  Since the editor is the central feature of ADR-0115, external compositor capture (via `xcap` → `CGWindowListCreateImage` / ScreenCaptureKit) is mandatory.  Subprocess + OS compositor is the only viable approach.
+
+**Crate stack.**  `xcap = "0.9.4"` for cross-platform window enumeration + capture; `accessibility = "0.2.0"` (eiz/accessibility on crates.io) for `AXUIElement::raise()` and cross-process window discovery.  `computeruse-rs` was evaluated and dropped — its repo 404s, docs.rs build fails, and it would have layered an opaque abstraction over the same primitives we use directly.
+
+**Library API (`periscope::`).** `WindowTarget::{ByTitle, ByPid}` + `by_title()` / `by_pid()` constructors + `Display`; `screenshot(&WindowTarget, &Path) -> Result<PathBuf>`; `raise(&WindowTarget) -> Result<()>`; `list_windows() -> Result<Vec<WindowSummary>>` (returns `{pid, title, app_name}`).  Black-frame detection samples a 32×32 grid of pixels and falls back to a `< 10 kB` file-size sentinel — both surface a Screen Recording remediation string including `$TERM_PROGRAM` to point the user at the right Privacy & Security panel.
+
+**CLI binary.** `periscope screenshot --title|--pid --out [--raise]`, `periscope watch --dir … --interval-secs N [--max-frames N]`, `periscope list`.  `watch` writes `frame-NNNN.png` plus an atomic `latest.png` symlink (tmp + rename so readers between frames never see `ENOENT`).  `--raise` brings the window forward via the Accessibility API before capture and sleeps `RAISE_SETTLE` (250 ms) for AppKit to settle.
+
+**Smoke test (`screenshot_smoke`).**  Builds tolaria via `cargo build -p tolaria`, then execs `target/debug/tolaria --vault demo-vault-v2` directly so `child.id()` is the binary's pid (not a `cargo run` wrapper).  Polls `periscope::screenshot(ByPid)` every 500 ms with a 15 s deadline, asserts PNG > 10 kB, then teardown via `ChildGuard` (RAII Drop kills the GPUI window even on assertion unwind).  Opt out with `TOLARIA_E2E_SKIP_SMOKE=1` for headless / permission-less hosts.
+
+**macOS permissions.**  Two separate System Settings panels — both must be granted to the parent terminal: **Screen Recording** for `xcap::Window::capture_image()`, **Accessibility** for `AXUIElement::raise()` + `attribute(AXAttribute::windows())`.  Failure modes documented in `crates/periscope/README.md` (permissions table) and `docs/plans/native-gpui-chrome/e2e-harness.md` (Claude workflow + troubleshooting).
+
+**Phase 6-MVP is purely additive** — no shipped-code modifications, no test-only cfg leakage.  Workspace gates green (`cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `TOLARIA_E2E_SKIP_SMOKE=1 cargo test --workspace`).  Test count grows from 191 → 192.
+
+Review pass: 1 MUST + 7 SHOULD applied — stale `CARGO_BIN_EXE_tolaria` doc comment in the smoke test replaced with accurate `cargo build` + exec description; `windows.rs` restructured to branch once on target (dropped `unreachable!` arm); `WindowTarget::{by_title, by_pid}` constructors + `Display` impl; `ChildGuard` RAII wrapper around the spawned tolaria child; pixel-based black-frame detection (32×32 grid); atomic `latest.png` symlink rename (tmp + rename); `RAISE_SETTLE` const replaces inline 250 ms sleep; `pid.try_into()` replaces `pid as i32` cast.  (S-4 `thiserror::Error` enum deferred to Phase 6-stable — library-first roadmap question.)
 
 ---
 
