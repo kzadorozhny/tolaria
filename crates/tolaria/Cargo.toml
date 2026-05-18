@@ -1,0 +1,39 @@
+# Tolaria application binary (ADR-0115 Phase 1).
+#
+# macOS-only; on other platforms `main` is a stub that exits non-zero so the
+# crate still compiles cleanly for CI cross-checks without dragging the
+# GPUI / AppKit graph onto Linux / Windows runners.
+#
+# See the workspace Cargo.toml for dependency-pinning rationale.
+
+[package]
+name = "tolaria"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Tolaria — native macOS application binary (ADR-0115 Phase 1)."
+
+[[bin]]
+name = "tolaria"
+path = "src/main.rs"
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-component.workspace = true
+actions = { path = "../actions" }
+settings_store = { path = "../settings_store" }
+theme = { path = "../theme" }
+paths = { path = "../paths" }
+ui = { path = "../ui" }
+workspace = { path = "../workspace" }
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+# `test-support` gates `gpui::TestAppContext` and the `#[gpui::test]` macro's
+# deterministic scheduler. Added under dev-dependencies only so the test
+# scaffolding never links into the release binary.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }

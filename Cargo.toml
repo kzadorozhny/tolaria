@@ -38,6 +38,7 @@ license = "AGPL-3.0-or-later"
 # ADR-0115 §7's named v0.5.2 tag does not yet exist upstream. Re-pin to the
 # v0.5.2 sha once it ships.
 [workspace.dependencies]
+dirs = "5"
 gpui = { git = "https://github.com/zed-industries/zed" }
 # `runtime_shaders` flips gpui_macos's build script from an offline `xcrun metal`
 # pre-compile to runtime shader compilation. This is required on hosts that
@@ -59,4 +60,6 @@ objc2-foundation = "0.3"
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3"

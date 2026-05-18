@@ -1,0 +1,18 @@
+[package]
+name = "workspace"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "TolariaWorkspace root view skeleton (ADR-0115 Phase 1)."
+
+[dependencies]
+actions = { path = "../actions" }
+gpui.workspace = true
+gpui-component.workspace = true
+log.workspace = true
+theme = { path = "../theme" }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }

@@ -1,0 +1,12 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Tolaria-specific UI compounds placeholder (ADR-0115 Phase 1)."
+
+[dependencies]
+gpui.workspace = true
+# gpui-component will be added back in Phase 2 when compound widgets land.

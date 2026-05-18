@@ -140,7 +140,7 @@ impl Render for RootView {
                         .child(sidebar_panel(sidebar_focus)),
                 )
                 .child(resizable_panel().child(content_panel(webview, last_bounds)))
-                .on_resize(|state, window, cx| log_sidebar_resize(state, window, cx)),
+                .on_resize(log_sidebar_resize),
         )
     }
 }
@@ -240,7 +240,7 @@ mod tests {
     /// `h_resizable` primitive reads it during render and panics
     /// otherwise.
     fn install_theme(cx: &mut TestAppContext) {
-        cx.update(|cx| gpui_component::init(cx));
+        cx.update(gpui_component::init);
     }
 
     /// Scenario 3 (frame sync, window-resize half). Drives the same
@@ -251,7 +251,7 @@ mod tests {
     #[gpui::test]
     fn simulate_window_resize_updates_last_viewport(cx: &mut TestAppContext) {
         install_theme(cx);
-        let window = cx.add_window(|window, cx| RootView::new_chrome_only(window, cx));
+        let window = cx.add_window(RootView::new_chrome_only);
 
         let initial = window
             .update(cx, |view, _, _| view.last_viewport())
@@ -287,7 +287,7 @@ mod tests {
     #[gpui::test]
     fn simulate_window_resize_with_sub_epsilon_drift_is_a_noop(cx: &mut TestAppContext) {
         install_theme(cx);
-        let window = cx.add_window(|window, cx| RootView::new_chrome_only(window, cx));
+        let window = cx.add_window(RootView::new_chrome_only);
         let initial = window
             .update(cx, |view, _, _| view.last_viewport())
             .unwrap();
@@ -334,7 +334,7 @@ mod tests {
     #[gpui::test]
     fn focusing_sidebar_handle_sets_window_focus(cx: &mut TestAppContext) {
         install_theme(cx);
-        let window = cx.add_window(|window, cx| RootView::new_chrome_only(window, cx));
+        let window = cx.add_window(RootView::new_chrome_only);
 
         let handle = window
             .update(cx, |view, _, _| view.sidebar_focus_handle())
@@ -372,7 +372,7 @@ mod tests {
     #[gpui::test]
     fn moving_focus_off_sidebar_clears_window_focus_for_it(cx: &mut TestAppContext) {
         install_theme(cx);
-        let window = cx.add_window(|window, cx| RootView::new_chrome_only(window, cx));
+        let window = cx.add_window(RootView::new_chrome_only);
         let sidebar_handle = window
             .update(cx, |view, _, _| view.sidebar_focus_handle())
             .unwrap();

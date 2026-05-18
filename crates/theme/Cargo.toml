@@ -1,0 +1,16 @@
+[package]
+name = "theme"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Theme global wrapping gpui_component::Theme (ADR-0115 Phase 1)."
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+log.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }
