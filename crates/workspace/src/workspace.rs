@@ -26,7 +26,10 @@ use gpui::{
     div, px, App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled,
     Window,
 };
-use gpui_component::resizable::{h_resizable, resizable_panel};
+use gpui_component::{
+    resizable::{h_resizable, resizable_panel},
+    ActiveTheme,
+};
 use status_bar::StatusBar;
 use toasts::Toast;
 
@@ -168,16 +171,29 @@ impl TolariaWorkspace {
 }
 
 impl Render for TolariaWorkspace {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let left_dock = self.left_dock.clone();
         let right_dock = self.right_dock.clone();
         let center_group = self.center_group.clone();
+        // Paint our own `theme.background` instead of relying on
+        // `gpui_component::Root` to bleed through.  Each pane/dock
+        // returns a transparent `div()`, but the Metal window default
+        // is opaque black — so without an explicit bg on the
+        // workspace's root, Light theme renders as a black canvas with
+        // text-only foreground.  Discovered via periscope captures of
+        // `--theme light` vs `--theme dark`: sampling the center pane
+        // at RGB level reported `#000000` in both modes pre-fix.
+        let theme = cx.theme();
+        let bg = theme.background;
+        let fg = theme.foreground;
 
         div()
             .relative()
             .size_full()
             .flex()
             .flex_col()
+            .bg(bg)
+            .text_color(fg)
             // Native macOS title bar spacer (~28 pt).
             .child(div().h(px(28.0)))
             // Horizontal split: Left Dock | Center PaneGroup | Right Dock.

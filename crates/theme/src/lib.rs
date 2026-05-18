@@ -84,13 +84,17 @@ impl FromStr for ThemeChoice {
 /// `gpui::Global`.  Always call after [`init`].
 pub fn apply_choice(cx: &mut gpui::App, choice: ThemeChoice) {
     use gpui_component::theme::{Theme, ThemeMode};
+    use gpui_component::ActiveTheme as _;
 
     match choice {
         ThemeChoice::System => Theme::sync_system_appearance(None, cx),
         ThemeChoice::Light => Theme::change(ThemeMode::Light, None, cx),
         ThemeChoice::Dark => Theme::change(ThemeMode::Dark, None, cx),
     }
-    log::info!("theme: applied {choice}");
+    log::info!(
+        "theme: applied {choice} (resolved is_dark={})",
+        cx.theme().is_dark()
+    );
 }
 
 /// Reload the active theme from the current `SettingsStore` global.
