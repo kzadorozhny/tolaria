@@ -12,7 +12,7 @@
 //! `cut:` / `copy:` / `paste:` / `undo:` / `redo:` / `selectAll:`
 //! selectors keep routing into the focused webview unchanged.
 
-use gpui::{Menu, MenuItem, OsAction, actions};
+use gpui::{actions, Menu, MenuItem, OsAction};
 
 actions!(
     embed_poc,
@@ -40,16 +40,12 @@ pub fn app_menus() -> Vec<Menu> {
         Menu {
             name: "Tolaria PoC".into(),
             disabled: false,
-            items: vec![
-                MenuItem::action("Quit Tolaria PoC", Quit),
-            ],
+            items: vec![MenuItem::action("Quit Tolaria PoC", Quit)],
         },
         Menu {
             name: "File".into(),
             disabled: false,
-            items: vec![
-                MenuItem::action("Save", Save),
-            ],
+            items: vec![MenuItem::action("Save", Save)],
         },
         Menu {
             name: "Edit".into(),

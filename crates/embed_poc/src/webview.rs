@@ -30,8 +30,8 @@ use gpui::{
 use gpui_wry::WebView;
 use raw_window_handle::HasWindowHandle;
 use wry::{
-    Rect, WebViewBuilder,
     dpi::{self, LogicalPosition, LogicalSize},
+    Rect, WebViewBuilder,
 };
 
 const TEST_PAGE_HTML: &str = include_str!("../assets/test-page.html");
@@ -98,7 +98,10 @@ pub struct InstrumentedWebView {
 
 impl InstrumentedWebView {
     pub fn new(webview: Entity<WebView>, last_bounds: FrameSyncState) -> Self {
-        Self { webview, last_bounds }
+        Self {
+            webview,
+            last_bounds,
+        }
     }
 }
 
@@ -240,19 +243,36 @@ impl WebviewFocusState {
 /// table can be unit-tested without spinning up GPUI, AppKit, or wry.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) enum ParsedIpc {
-    WebviewFocus { state: WebviewFocusState, target: String },
-    Ime { phase: String, data: String, value_len: usize },
-    Keydown { key: String, mods: String },
-    Raw { body: String },
+    WebviewFocus {
+        state: WebviewFocusState,
+        target: String,
+    },
+    Ime {
+        phase: String,
+        data: String,
+        value_len: usize,
+    },
+    Keydown {
+        key: String,
+        mods: String,
+    },
+    Raw {
+        body: String,
+    },
 }
 
 pub(crate) fn parse_ipc_body(body: &str) -> ParsedIpc {
     let Ok(envelope) = serde_json::from_str::<serde_json::Value>(body) else {
-        return ParsedIpc::Raw { body: body.to_string() };
+        return ParsedIpc::Raw {
+            body: body.to_string(),
+        };
     };
 
     let kind = envelope.get("k").and_then(|v| v.as_str()).unwrap_or("?");
-    let value = envelope.get("v").cloned().unwrap_or(serde_json::Value::Null);
+    let value = envelope
+        .get("v")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
     match kind {
         "focus" | "blur" => {
@@ -280,7 +300,11 @@ pub(crate) fn parse_ipc_body(body: &str) -> ParsedIpc {
                 .and_then(|v| v.as_str())
                 .map(|s| s.chars().count())
                 .unwrap_or(0);
-            ParsedIpc::Ime { phase, data, value_len }
+            ParsedIpc::Ime {
+                phase,
+                data,
+                value_len,
+            }
         }
         "keydown" => {
             let key = value
@@ -295,7 +319,9 @@ pub(crate) fn parse_ipc_body(body: &str) -> ParsedIpc {
                 .to_string();
             ParsedIpc::Keydown { key, mods }
         }
-        _ => ParsedIpc::Raw { body: body.to_string() },
+        _ => ParsedIpc::Raw {
+            body: body.to_string(),
+        },
     }
 }
 
@@ -311,7 +337,11 @@ fn dispatch_ipc(body: &str) {
                 state.as_log_str()
             );
         }
-        ParsedIpc::Ime { phase, data, value_len } => {
+        ParsedIpc::Ime {
+            phase,
+            data,
+            value_len,
+        } => {
             log::info!(
                 target: IME_TARGET,
                 "ime phase={phase} data={data:?} value_len={value_len}"
@@ -337,7 +367,7 @@ pub(crate) fn close_enough(a: Bounds<Pixels>, b: Bounds<Pixels>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Point, Size as GpuiSize, px};
+    use gpui::{px, Point, Size as GpuiSize};
 
     fn b(x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels> {
         Bounds::new(Point::new(px(x), px(y)), GpuiSize::new(px(w), px(h)))
@@ -353,7 +383,10 @@ mod tests {
     fn close_enough_accepts_sub_epsilon_drift() {
         let a = b(10.0, 20.0, 300.0, 400.0);
         let drifted = b(10.4, 20.4, 300.4, 400.4);
-        assert!(close_enough(a, drifted), "drift below 0.5 px must be treated as same bounds");
+        assert!(
+            close_enough(a, drifted),
+            "drift below 0.5 px must be treated as same bounds"
+        );
     }
 
     #[test]
@@ -438,7 +471,10 @@ mod tests {
     fn parse_ipc_keydown() {
         assert_eq!(
             parse_ipc_body(r#"{"k":"keydown","v":{"key":"s","mods":"meta"}}"#),
-            ParsedIpc::Keydown { key: "s".into(), mods: "meta".into() }
+            ParsedIpc::Keydown {
+                key: "s".into(),
+                mods: "meta".into()
+            }
         );
     }
 

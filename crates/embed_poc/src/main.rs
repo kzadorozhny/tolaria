@@ -28,13 +28,13 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod macos {
     use gpui::{
-        App, AppContext, Bounds, KeyBinding, SharedString, TitlebarOptions, WindowBounds,
-        WindowOptions, px, size,
+        px, size, App, AppContext, Bounds, KeyBinding, SharedString, TitlebarOptions, WindowBounds,
+        WindowOptions,
     };
     use gpui_platform::application;
 
     use crate::layout::RootView;
-    use crate::menus::{Quit, Save, app_menus};
+    use crate::menus::{app_menus, Quit, Save};
 
     const WINDOW_TITLE: &str = "Tolaria Phase 0 Spike";
     const WINDOW_WIDTH: f32 = 1200.0;
@@ -66,8 +66,7 @@ mod macos {
             ]);
             cx.set_menus(app_menus());
 
-            let bounds =
-                Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
+            let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
 
             let opts = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),

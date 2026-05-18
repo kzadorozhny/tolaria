@@ -24,13 +24,13 @@
 //! the binary uses on a real WKWebView host — no `osascript` required.
 
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, Size, Styled, Window, div, px, rgb,
+    div, px, rgb, AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement,
+    IntoElement, ParentElement, Pixels, Render, Size, Styled, Window,
 };
-use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
+use gpui_component::resizable::{h_resizable, resizable_panel, ResizableState};
 use gpui_wry::WebView;
 
-use crate::webview::{FRAME_EPSILON, FrameSyncState, InstrumentedWebView};
+use crate::webview::{FrameSyncState, InstrumentedWebView, FRAME_EPSILON};
 
 const SIDEBAR_DEFAULT: f32 = 240.0;
 const SIDEBAR_MIN: f32 = 160.0;
@@ -47,11 +47,7 @@ pub struct RootView {
 }
 
 impl RootView {
-    pub fn new(
-        webview: Entity<WebView>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(webview: Entity<WebView>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::build(Some(webview), window, cx)
     }
 
@@ -182,7 +178,9 @@ fn sidebar_panel(focus: FocusHandle) -> impl IntoElement {
 fn content_panel(webview: Option<Entity<WebView>>, last_bounds: FrameSyncState) -> AnyElement {
     let body = div().size_full().bg(rgb(0x12141a));
     match webview {
-        Some(wv) => body.child(InstrumentedWebView::new(wv, last_bounds)).into_any_element(),
+        Some(wv) => body
+            .child(InstrumentedWebView::new(wv, last_bounds))
+            .into_any_element(),
         None => body.into_any_element(),
     }
 }
