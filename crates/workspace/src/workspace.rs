@@ -1,16 +1,38 @@
-//! `TolariaWorkspace` root view (ADR-0115 Phase 1).
+//! `TolariaWorkspace` root view (ADR-0115 Phase 1 → 2a).
 //!
-//! Phase 1 ships an empty shell: native title-bar spacer + centered
-//! placeholder text + `ModalLayer` / `ToastLayer` overlays.  Docks, Panes,
-//! Panels and the live service layer expand in Phase 2.
+//! Phase 1 shipped an empty shell.  Phase 2a grows it with the 3-dock +
+//! `PaneGroup` topology:
+//!
+//! ```text
+//! ┌─────────────────────────────────────┐
+//! │ native title bar spacer (28 pt)     │
+//! ├──────────┬──────────────┬───────────┤
+//! │ Left     │              │ Right     │
+//! │ Dock     │ PaneGroup    │ Dock      │
+//! │          │ (centre)     │           │
+//! ├──────────┴──────────────┴───────────┤
+//! │ Bottom Dock                         │
+//! ├─────────────────────────────────────┤
+//! │ status bar slot (empty Phase 2a)    │
+//! └─────────────────────────────────────┘
+//! ModalLayer / ToastLayer rendered as overlays above all content.
+//! ```
+//!
+//! Dock panels (Sidebar, Inspector, etc.) are added in Phase 2b.  The Phase 1
+//! public API (`push_toast`, `toggle_modal`, `dismiss_modal`, `has_active_modal`,
+//! `toast_count`) is unchanged.
 
 use gpui::{
     div, px, App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render,
     SharedString, Styled, Window,
 };
+use gpui_component::resizable::{h_resizable, resizable_panel};
 
 use crate::{
+    dock::Dock,
     modal_layer::{ModalLayer, ModalView},
+    pane_group::PaneGroup,
+    panel::DockPosition,
     toast_layer::ToastLayer,
 };
 
@@ -22,24 +44,40 @@ use crate::{
 pub struct TolariaWorkspace {
     modal_layer: Entity<ModalLayer>,
     toast_layer: Entity<ToastLayer>,
+    left_dock: Entity<Dock>,
+    right_dock: Entity<Dock>,
+    bottom_dock: Entity<Dock>,
+    center_group: Entity<PaneGroup>,
 }
 
 impl TolariaWorkspace {
-    /// Construct the root workspace view with an empty content area.
+    /// Construct the root workspace view with the 3-dock + pane-group layout.
+    ///
+    /// All docks start empty and closed; Phase 2b chrome crates attach panels
+    /// via [`Dock::set_panel`][crate::dock::Dock::set_panel].
     ///
     /// Called from inside the `cx.add_window(|window, cx| …)` closure in
-    /// `crates/tolaria/src/main.rs`; `cx` there is `&mut Context<Self>`,
-    /// which implements `AppContext` so `cx.new(…)` works for sub-entities.
-    ///
-    /// Phase 2 will replace the placeholder content with live `Dock`/`Pane` layout.
+    /// `crates/tolaria/src/main.rs`.
     pub fn empty(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let modal_layer = cx.new(|_| ModalLayer::default());
         let toast_layer = cx.new(|_| ToastLayer::default());
+        let left_dock = cx.new(|_| Dock::new(DockPosition::Left));
+        let right_dock = cx.new(|_| Dock::new(DockPosition::Right));
+        let bottom_dock = cx.new(|_| Dock::new(DockPosition::Bottom));
+        let center_group = cx.new(|_| PaneGroup::new());
         Self {
             modal_layer,
             toast_layer,
+            left_dock,
+            right_dock,
+            bottom_dock,
+            center_group,
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Phase 1 public API — must remain intact through all Phase 2+ work.
+    // -----------------------------------------------------------------------
 
     /// Show or toggle a modal view inside the workspace's `ModalLayer`.
     ///
@@ -79,22 +117,31 @@ impl TolariaWorkspace {
 
 impl Render for TolariaWorkspace {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let left_dock = self.left_dock.clone();
+        let right_dock = self.right_dock.clone();
+        let center_group = self.center_group.clone();
+
         div()
             .relative()
             .size_full()
             .flex()
             .flex_col()
-            // Spacer matching the native macOS title bar height (~28 pt).
+            // Native macOS title bar spacer (~28 pt).
             .child(div().h(px(28.0)))
-            // Centered placeholder content for Phase 1.
+            // Horizontal split: Left Dock | Center PaneGroup | Right Dock.
+            // Phase 2b will wire ResizableState for drag-resize persistence.
             .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child("Tolaria \u{2014} Phase 1 foundation"),
+                div().flex_1().child(
+                    h_resizable("workspace-main-layout")
+                        .child(resizable_panel().child(left_dock))
+                        .child(resizable_panel().child(center_group))
+                        .child(resizable_panel().child(right_dock)),
+                ),
             )
+            // Bottom dock (empty placeholder in Phase 2a).
+            .child(self.bottom_dock.clone())
+            // Status bar slot (empty in Phase 2a).
+            .child(div().h(px(24.0)))
             // Overlay layers rendered on top (absolute-positioned internally).
             .child(self.modal_layer.clone())
             .child(self.toast_layer.clone())

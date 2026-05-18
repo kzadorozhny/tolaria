@@ -1,19 +1,18 @@
 [package]
-name = "workspace"
+name = "mock_fixtures"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "TolariaWorkspace root view skeleton (ADR-0115 Phase 1)."
 
 [dependencies]
-actions = { path = "../actions" }
-anyhow.workspace = true
+chrono.workspace = true
 gpui.workspace = true
-gpui-component.workspace = true
+thiserror.workspace = true
 log.workspace = true
-theme = { path = "../theme" }
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { workspace = true, features = ["test-support"] }

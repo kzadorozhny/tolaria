@@ -9,4 +9,9 @@ description = "Tolaria-specific UI compounds placeholder (ADR-0115 Phase 1)."
 
 [dependencies]
 gpui.workspace = true
-# gpui-component will be added back in Phase 2 when compound widgets land.
+gpui-component.workspace = true
+anyhow.workspace = true
+log.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }

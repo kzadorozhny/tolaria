@@ -4116,6 +4116,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mock_fixtures"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "gpui",
+ "gpui_platform",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7234,7 +7247,11 @@ dependencies = [
 name = "ui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "gpui",
+ "gpui-component",
+ "gpui_platform",
+ "log",
 ]
 
 [[package]]
@@ -8666,6 +8683,7 @@ name = "workspace"
 version = "0.1.0"
 dependencies = [
  "actions",
+ "anyhow",
  "gpui",
  "gpui-component",
  "gpui_platform",
