@@ -1,0 +1,31 @@
+[package]
+name = "periscope"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "ADR-0115 Phase 6-MVP — Rust e2e test harness for observing a running Tolaria app via screenshots."
+
+[[bin]]
+name = "periscope"
+path = "src/bin/periscope.rs"
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+clap = { version = "4", features = ["derive"] }
+
+# macOS-only deps for screen capture (xcap) and Accessibility-API
+# window discovery / raise (accessibility crate from
+# https://github.com/eiz/accessibility).  Other platforms compile the
+# crate down to the cross-platform stub paths in `src/lib.rs`.
+[target.'cfg(target_os = "macos")'.dependencies]
+xcap = "0.9.4"
+accessibility = "0.2.0"
+core-foundation = "0.10"
+
+# No dev-dependencies on the tolaria crate: the smoke test invokes
+# `cargo build -p tolaria` and execs `target/debug/tolaria` directly,
+# which keeps periscope decoupled from the binary's library surface.
