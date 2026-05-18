@@ -60,23 +60,39 @@ mod macos {
     /// helpers (see `status_bar::StatusBar::from_or_empty`).
     const MOCK_ENV_VAR: &str = "TOLARIA_MOCK";
 
-    /// Parsed command-line arguments.  Phase 5-MVP only carries the
-    /// `--vault <path>` option; everything else is forwarded by GPUI /
-    /// AppKit (e.g. `--bundle` arguments from `open`).
+    /// Parsed command-line arguments.  Phase 5-MVP carries `--vault
+    /// <path>` and `--theme <system|light|dark>`; everything else is
+    /// forwarded by GPUI / AppKit (e.g. `--bundle` arguments from
+    /// `open`).
     struct CliArgs {
         vault_path: Option<PathBuf>,
+        theme: theme::ThemeChoice,
     }
 
     fn parse_args() -> CliArgs {
         let mut iter = std::env::args().skip(1);
         let mut vault_path = None;
+        let mut theme = theme::ThemeChoice::default();
         while let Some(arg) = iter.next() {
             match arg.as_str() {
                 "--vault" => {
                     vault_path = iter.next().map(PathBuf::from);
                 }
+                "--theme" => {
+                    let Some(value) = iter.next() else {
+                        eprintln!("--theme requires an argument: system | light | dark");
+                        std::process::exit(2);
+                    };
+                    match value.parse::<theme::ThemeChoice>() {
+                        Ok(choice) => theme = choice,
+                        Err(err) => {
+                            eprintln!("invalid --theme value: {err}");
+                            std::process::exit(2);
+                        }
+                    }
+                }
                 "--help" | "-h" => {
-                    eprintln!("Usage: tolaria [--vault <path>]");
+                    eprintln!("Usage: tolaria [--vault <path>] [--theme <system|light|dark>]");
                     std::process::exit(0);
                 }
                 _ => {
@@ -85,7 +101,7 @@ mod macos {
                 }
             }
         }
-        CliArgs { vault_path }
+        CliArgs { vault_path, theme }
     }
 
     /// Whether the mock-fixture launch path is requested.
@@ -130,7 +146,11 @@ mod macos {
 
         application().run(move |cx: &mut App| {
             // 3. Theme / gpui-component global (must precede any primitive render).
+            //    `theme::init` always lands the theme on Light; `apply_choice`
+            //    immediately follows so we open in the user-requested mode
+            //    instead of flashing Light on launch.
             theme::init(cx);
+            theme::apply_choice(cx, args.theme);
 
             // 4. Settings global (reads or creates
             //    ~/Library/Application Support/Tolaria/settings.json).

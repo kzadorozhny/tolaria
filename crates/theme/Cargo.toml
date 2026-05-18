@@ -8,6 +8,7 @@ publish = false
 description = "Theme global wrapping gpui_component::Theme (ADR-0115 Phase 1)."
 
 [dependencies]
+anyhow.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 log.workspace = true
