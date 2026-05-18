@@ -18,9 +18,11 @@ into `main`.**  Permanent context belongs in:
 | `00-overview.md` | The full multi-phase plan (Phases 1–7) generated at the start of the migration.  Section B / C contain deep specs for Phases 1 and 2 specifically. |
 | `progress.md` | Running ledger: what shipped per phase, with commit refs + test counts + key API decisions. |
 | `phase-2d-next.md` | Outline for the next phase (large chrome panels). |
+| `eval-gpui-component-removal.md` | **Scheduled** evaluation: runs after Phase 2e, before Phase 3. Produces a keep / pin / vendor / replace recommendation and any follow-on work, so the chrome primitive contract is locked before services plumbing. |
 
 Add more files here for any future phase that needs a dedicated plan
-(`phase-3-services.md`, `phase-4-editor-host.md`, etc.).
+(`phase-3-services.md`, `phase-4-editor-host.md`, etc.) or evaluation
+work item (`eval-*.md`).
 
 ## Why not Todoist / Linear / etc
 

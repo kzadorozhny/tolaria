@@ -2,9 +2,11 @@
 //!
 //! [`MockSettings`] duplicates the shape of `settings_store::Settings` so
 //! chrome crates can render and unit-test against a known fixture without
-//! loading a real settings file.  It is intentionally not a [`gpui::Global`];
-//! chrome crates that need it should hold it directly or pass it by value.
+//! loading a real settings file.  It implements [`gpui::Global`] so that
+//! `SettingsPanel` (Phase 2d) can read it via `cx.try_global::<MockSettings>()`
+//! and fall back to [`MockSettings::default`] when it has not been installed.
 
+use gpui::Global;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -58,6 +60,8 @@ pub struct MockSettings {
     pub theme: ThemeChoice,
     pub window: WindowSettings,
 }
+
+impl Global for MockSettings {}
 
 impl MockSettings {
     /// Standard fixture settings used in tests and `TOLARIA_MOCK=1` mode.

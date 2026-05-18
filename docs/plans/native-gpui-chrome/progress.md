@@ -13,6 +13,7 @@ untouched until the cut-over phase.
 | 2c — Chrome wiring + TOLARIA_MOCK | ✅ done | `3131ccc7` | +3 (118) | — (integration wave; touched 5 existing crates) |
 | 2d — Big panels | ⏳ planned | — | — | `sidebar_panel`, `note_list_pane`, `inspector_panel`, `ai_panel`, `search_panel`, `settings_panel`, `diff_view` |
 | 2e — Remaining surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` |
+| 2f — `gpui-component` eval | ⏳ scheduled | — | — | Timeboxed evaluation pass per [`eval-gpui-component-removal.md`](eval-gpui-component-removal.md); produces a keep / pin / vendor / replace recommendation + any follow-on work.  Runs **before** Phase 3 so the chrome's primitive contract is locked before services plumbing lands. |
 | 3 — Services migration | ⏳ planned | — | — | `vault`, `git_provider`, `vault_search`, `vault_watcher`, `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization` |
 | 4 — Editor host | ⏳ planned | — | — | `editor_bridge`, `note_item` ; new `editor-host/` Vite project |
 | 5 — Parity hardening | ⏳ planned | — | — | — |
