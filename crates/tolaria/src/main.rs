@@ -30,6 +30,9 @@ fn main() {
 mod menus;
 
 #[cfg(target_os = "macos")]
+mod open_note;
+
+#[cfg(target_os = "macos")]
 fn main() {
     macos::run();
 }

@@ -214,6 +214,54 @@ impl NoteItem {
             body,
         })
     }
+
+    /// Spawn a detached foreground task that drains `rx` and routes
+    /// each [`FromHost`] message through [`apply_from_host`][Self::apply_from_host].
+    /// `PersistSave` outcomes call `vault::Vault::save` via the global
+    /// (if installed).  The task exits when the channel closes or the
+    /// entity is dropped.
+    ///
+    /// Extracted so unit tests can wire a `flume::Sender` /
+    /// `Receiver` pair directly without spawning a real WKWebView.
+    /// `new_with_webview` calls this internally.
+    pub fn install_dispatch_task(
+        entity: gpui::WeakEntity<Self>,
+        rx: flume::Receiver<FromHost>,
+        cx: &mut App,
+    ) {
+        cx.spawn(async move |cx| {
+            while let Ok(msg) = rx.recv_async().await {
+                let Some(this) = entity.upgrade() else {
+                    break;
+                };
+                this.update(cx, |this, cx| {
+                    let outcome = this.apply_from_host(msg);
+                    if let Outcome::PersistSave { body } = outcome {
+                        let id = this.id();
+                        if cx.has_global::<vault::Vault>() {
+                            // `Vault::save` is sync for MVP — the
+                            // returned Task is immediately ready.
+                            // Detach so the dispatch loop doesn't await
+                            // it (would re-enter the foreground executor).
+                            cx.global_mut::<vault::Vault>().save(id, &body).detach();
+                            log::info!(
+                                target: "note_item::ipc",
+                                "vault.save({id:?}) issued ({} bytes)",
+                                body.len(),
+                            );
+                        } else {
+                            log::warn!(
+                                target: "note_item::ipc",
+                                "PersistSave outcome but no Vault global installed; \
+                                 body dropped (note id={id:?})"
+                            );
+                        }
+                    }
+                });
+            }
+        })
+        .detach();
+    }
 }
 
 impl Item for NoteItem {
@@ -258,7 +306,8 @@ impl Render for NoteItem {
 #[cfg(target_os = "macos")]
 impl NoteItem {
     /// Build a `NoteItem` with a live WKWebView hosting the embedded
-    /// editor.  macOS only.
+    /// editor and a foreground task that routes IPC messages from the
+    /// editor back into the entity.  macOS only.
     ///
     /// # Errors
     ///
@@ -267,9 +316,17 @@ impl NoteItem {
     /// fails to construct the underlying NSView (sandbox restriction,
     /// headless CI host, …).  Both are recoverable — the caller
     /// should surface a toast rather than panic.
-    pub fn new_with_webview(note: Note, window: &mut Window, cx: &mut App) -> Result<Self> {
-        let webview = spawn_webview(note.id, window, cx)?;
-        Ok(Self {
+    pub fn new_with_webview(
+        note: Note,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<gpui::Entity<Self>> {
+        use gpui::AppContext as _;
+
+        let (tx, rx) = flume::unbounded::<FromHost>();
+        let webview = spawn_webview(note.id, tx, window, cx)?;
+
+        let entity = cx.new(|_cx| Self {
             id: note.id,
             title: note.title,
             path: note.path,
@@ -278,7 +335,14 @@ impl NoteItem {
                 webview: Some(webview),
                 last_bounds: FrameSyncState::default(),
             },
-        })
+        });
+
+        // Route editor IPC messages back into the entity.  The task
+        // exits when the channel closes (which happens when the
+        // WebView's IPC sender drops together with the entity).
+        Self::install_dispatch_task(entity.downgrade(), rx, cx);
+
+        Ok(entity)
     }
 }
 
@@ -322,7 +386,12 @@ mod macos {
     ///
     /// - No window handle available (no foreground window during a race).
     /// - `wry::WebViewBuilder::build_as_child` failure.
-    pub fn spawn_webview(id: NoteId, window: &mut Window, cx: &mut App) -> Result<Entity<WebView>> {
+    pub fn spawn_webview(
+        id: NoteId,
+        tx: flume::Sender<editor_bridge::FromHost>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<Entity<WebView>> {
         let handle = window
             .window_handle()
             .context("window handle unavailable while building NoteItem WebView")?;
@@ -332,10 +401,14 @@ mod macos {
             .with_ipc_handler(move |req| {
                 let body = req.body();
                 match editor_bridge::decode_from_host(body) {
-                    Ok(msg) => log::info!(
-                        target: "note_item::ipc",
-                        "ipc id={id:?} msg={msg:?}",
-                    ),
+                    Ok(msg) => {
+                        if tx.send(msg).is_err() {
+                            log::warn!(
+                                target: "note_item::ipc",
+                                "ipc id={id:?}: dispatch channel closed; message dropped"
+                            );
+                        }
+                    }
                     Err(e) => log::warn!(
                         target: "note_item::ipc",
                         "ipc id={id:?} decode_failed body={body:?} err={e}",
@@ -615,6 +688,46 @@ mod tests {
             EDITOR_HOST_HTML.contains(r#"id="editor-root""#),
             "EDITOR_HOST_HTML must contain `<div id=\"editor-root\">`; \
              rebuild editor-host/dist with `pnpm --ignore-workspace build`"
+        );
+    }
+
+    /// End-to-end: `install_dispatch_task` routes a `FromHost::Save`
+    /// arriving on the channel through `apply_from_host`, the
+    /// resulting `Outcome::PersistSave` triggers `vault::Vault::save`,
+    /// and the body lands on disk.  Phase 5e MVP CUT criterion.
+    #[gpui::test]
+    fn dispatch_task_persists_save_to_vault(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        use std::fs;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("note.md");
+        fs::write(&path, "initial").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        let (note_id, note) = cx.update(|cx| {
+            let executor = cx.foreground_executor().clone();
+            let ids = executor.block_on(vault.notes());
+            let id = ids[0];
+            let note = executor.block_on(vault.note(id)).expect("note exists");
+            (id, note)
+        });
+        cx.update(|cx| cx.set_global(vault));
+
+        let entity = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        let (tx, rx) = flume::unbounded::<FromHost>();
+        cx.update(|cx| NoteItem::install_dispatch_task(entity.downgrade(), rx, cx));
+
+        tx.send(FromHost::Save(NoteSave {
+            id: note_id,
+            body: "rewritten by dispatch task".into(),
+        }))
+        .unwrap();
+        cx.run_until_parked();
+
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk, "rewritten by dispatch task",
+            "FromHost::Save must persist through the dispatch task into vault::Vault::save"
         );
     }
 }

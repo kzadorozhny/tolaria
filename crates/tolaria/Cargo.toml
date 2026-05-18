@@ -24,7 +24,10 @@ gpui_platform.workspace = true
 gpui-component.workspace = true
 actions = { path = "../actions" }
 mock_fixtures = { path = "../mock_fixtures" }
+note_item = { path = "../note_item" }
+note_list_pane = { path = "../note_list_pane" }
 settings_store = { path = "../settings_store" }
+sidebar_panel = { path = "../sidebar_panel" }
 theme = { path = "../theme" }
 paths = { path = "../paths" }
 ui = { path = "../ui" }
@@ -37,5 +40,8 @@ env_logger.workspace = true
 # `test-support` gates `gpui::TestAppContext` and the `#[gpui::test]` macro's
 # deterministic scheduler. Added under dev-dependencies only so the test
 # scaffolding never links into the release binary.
+[dev-dependencies]
+chrono.workspace = true
+
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { workspace = true, features = ["test-support"] }

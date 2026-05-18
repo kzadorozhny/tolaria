@@ -123,6 +123,40 @@ impl TolariaWorkspace {
     pub fn toast_count(&self, cx: &App) -> usize {
         self.toast_layer.read(cx).len()
     }
+
+    /// Append `item` to the center [`PaneGroup`]'s active [`Pane`].
+    ///
+    /// Creates a fresh `Pane` and pushes it onto the group if the group
+    /// is currently empty (Phase 5d: the workspace starts without any
+    /// panes; the first `open_note` populates one).  The new item
+    /// becomes the active item in the target pane.
+    pub fn add_item_to_active_pane(
+        &self,
+        item: impl crate::item::ItemHandle + 'static,
+        cx: &mut App,
+    ) {
+        self.center_group.update(cx, |group, cx| {
+            if group.pane_count() == 0 {
+                let pane = cx.new(|_| crate::pane::Pane::new());
+                group.push(pane);
+            }
+            if let Some(pane) = group.active_pane().cloned() {
+                pane.update(cx, |pane, cx| {
+                    pane.add_item(item, crate::pane::Activation::Activate, cx);
+                });
+            }
+        });
+    }
+
+    /// Number of items in the active center [`Pane`] (read-only;
+    /// useful for downstream tests and assertions).
+    pub fn active_pane_item_count(&self, cx: &App) -> usize {
+        self.center_group
+            .read(cx)
+            .active_pane()
+            .map(|p| p.read(cx).item_count())
+            .unwrap_or(0)
+    }
 }
 
 impl Render for TolariaWorkspace {

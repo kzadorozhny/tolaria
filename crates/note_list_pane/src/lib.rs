@@ -29,9 +29,10 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
+use gpui::EventEmitter;
 use gpui::{
-    div, px, AnyElement, App, Context, IntoElement, ParentElement, Render, SharedString, Styled,
-    Window,
+    div, px, AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
@@ -42,6 +43,19 @@ use gpui_component::{
 };
 use mock_fixtures::{MockVault, NoteId, NoteKind};
 use vault::Vault;
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+/// Emitted when the user activates a note row (single-click on the title
+/// area).  `TolariaWorkspace` subscribes to this event and routes it
+/// through [`TolariaWorkspace::open_note`].
+#[derive(Debug, Clone, Copy)]
+pub struct OpenNoteEvent {
+    /// Identifier of the note the user wants to open.
+    pub id: NoteId,
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -221,6 +235,17 @@ impl Default for NoteListPane {
     }
 }
 
+impl EventEmitter<OpenNoteEvent> for NoteListPane {}
+
+impl NoteListPane {
+    /// Emit an [`OpenNoteEvent`] for `id`.  Called by the row click
+    /// handler; exposed publicly so test harnesses can drive the event
+    /// without simulating a click.
+    pub fn open(&self, id: NoteId, cx: &mut Context<Self>) {
+        cx.emit(OpenNoteEvent { id });
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Render
 // ---------------------------------------------------------------------------
@@ -303,13 +328,19 @@ impl Render for NoteListPane {
                         div().into_any_element()
                     };
 
+                    let open_handle = entity.clone();
                     h_flex()
+                        .id(("nlp-row", ix as u64))
                         .w_full()
                         .px(px(8.0))
                         .py(px(3.0))
                         .gap_2()
                         .border_b_1()
                         .border_color(border_color)
+                        .cursor_pointer()
+                        .on_click(move |_, _window, cx| {
+                            open_handle.update(cx, |this, cx| this.open(note_id, cx));
+                        })
                         .child(checkbox)
                         .child(div().flex_1().text_sm().text_color(fg).child(row.title))
                         .child(
