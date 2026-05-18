@@ -1,0 +1,16 @@
+[package]
+name = "banners"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Persistent banner types and renderer for Tolaria (ADR-0115 Phase 2b)."
+
+[dependencies]
+chrono.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }
