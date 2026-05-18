@@ -17,7 +17,7 @@ MVP cut definition.  Original full roadmap preserved in §A of
 | 2b — First chrome surfaces | ✅ done | `e31bc7fc` | +19 (115) | `status_bar`, `breadcrumb_bar`, `toasts`, `banners` |
 | 2c — Chrome wiring + TOLARIA_MOCK | ✅ done | `3131ccc7` | +3 (118) | — (integration wave; touched 5 existing crates) |
 | 2d — Big panels | ✅ done | `6d96cca8` | +31 (149) | `sidebar_panel`, `note_list_pane`, `inspector_panel`, `ai_panel`, `search_panel`, `settings_panel`, `diff_view` |
-| **3-MVP — Vault service (minimal)** | ⏳ next | — | — | `vault` (open dir, list, read, save, basic notify); shape-compatible with `mock_fixtures::MockVault` |
+| **3-MVP — Vault service (minimal)** | ✅ done | _pending commit_ | +9 (158) | `vault` (open dir, list, read, save, rescan; sync IO; markdown-only; shape-compatible with `mock_fixtures::MockVault`) |
 | **4-MVP — Editor host integration** | ⏳ planned | — | — | `editor_host/` Vite project (carry-over from `src/`); `editor_bridge` crate; `note_item` crate (per-note `WKWebView` via `gpui-wry`) |
 | **5-MVP — MVP wiring + launch** | ⏳ planned | — | — | `tolaria --vault <path>` CLI arg; swap `sidebar_panel` / `note_list_pane` from `MockVault` to real `vault::Vault` global; open-note → spawn `note_item` in center Pane |
 | **— MVP CUT** | | | | App opens local vault, navigates, renders + saves notes.  Tauri stack still parallel. |
@@ -92,6 +92,21 @@ Integration wave:
 Manual verify: `TOLARIA_MOCK=1 cargo run -p tolaria` launches cleanly; log shows `installed mock_fixtures globals`.
 
 Review pass: 2 MUST + 3 SHOULD applied (status_bar doc concatenation; mock-install ordering; `bar: BreadcrumbBar` → direct `Vec<BreadcrumbSegment>`; tightened TOLARIA_MOCK truthy match; inlined awkward two-step construction).
+
+### Phase 3-MVP — Vault service (minimal)
+
+First service crate.  Public API mirrors `mock_fixtures::MockVault` so chrome panels can swap implementations in Phase 5-MVP with minimal call-site churn.
+
+- `Vault: Global` rooted at a canonicalised path; opens via `Vault::open_at(root)`
+- `Note { id: NoteId, title: SharedString, path: PathBuf, kind: NoteKind, modified: DateTime<Utc>, byte_size: u64 }`
+- `NoteId(u64)` newtype: monotonically increasing within a single `Vault` instance, never reused after delete+rescan, not persisted (restart at 0 on reopen)
+- `VaultError::{NotFound(NoteId), Io { path, source }}` via `thiserror`
+- Methods: `notes() -> Task<Vec<NoteId>>`, `note(id) -> Task<Option<Note>>`, `note_content(id) -> Task<Result<String, VaultError>>`, `save(id, &str) -> Task<Result<(), VaultError>>`, `search_titles(query) -> Task<Vec<NoteId>>`, `rescan() -> Result<()>`
+- Recursive markdown walker, depth cap 32, skips hidden directories (`.git/`, `.obsidian/`), markdown-only (assets + folders deferred to Phase 8)
+- Synchronous IO inside `Task::ready(...)` for MVP; Phase 8 moves long ops to `cx.background_executor().spawn(...)` + adds the FS watcher
+- 9 tests: opens_empty_vault, indexes_markdown_files, skips_hidden_directories, skips_non_markdown_files, save_writes_to_disk_and_updates_byte_size, save_unknown_id_returns_not_found, rescan_preserves_ids_for_unchanged_paths, rescan_drops_vanished_notes, open_nonexistent_dir_errors
+
+Review pass: 1 MUST + 4 SHOULD applied (metadata-refresh failure now `log::warn!` instead of silent swallow; `NoteId` docstring spells out monotonic-never-reused-not-persisted contract; `save_sync` test backdoor so tests assert on `Result` directly; `save` signature takes `&str` instead of `String`; `note_ids_vec()` dedups between `notes()` and the test accessor).
 
 ---
 

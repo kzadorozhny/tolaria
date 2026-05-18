@@ -7639,6 +7639,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "vault"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "gpui",
+ "gpui_platform",
+ "log",
+ "serde",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "version-compare"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

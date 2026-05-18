@@ -1,0 +1,22 @@
+[package]
+name = "vault"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Minimal vault service for Tolaria (ADR-0115 Phase 3-MVP)."
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+gpui.workspace = true
+log.workspace = true
+serde.workspace = true
+thiserror = "1"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }
