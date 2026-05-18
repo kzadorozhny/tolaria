@@ -7029,6 +7029,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "log",
+ "mock_fixtures",
  "paths",
  "settings_store",
  "theme",
@@ -8722,11 +8723,16 @@ version = "0.1.0"
 dependencies = [
  "actions",
  "anyhow",
+ "banners",
+ "breadcrumb_bar",
+ "chrono",
  "gpui",
  "gpui-component",
  "gpui_platform",
  "log",
+ "status_bar",
  "theme",
+ "toasts",
 ]
 
 [[package]]

@@ -30,7 +30,7 @@ use gpui_component::{
     button::{Button, ButtonVariants},
     ActiveTheme,
 };
-use mock_fixtures::{FileStatus, MockGit};
+use mock_fixtures::{FileStatus, MockGit, MockVault};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -77,6 +77,18 @@ impl StatusBar {
     /// An empty status bar with no items.
     pub fn empty() -> Self {
         Self { items: Vec::new() }
+    }
+
+    /// Build from mock globals if both [`MockGit`] and [`MockVault`] are
+    /// installed; otherwise return an empty bar. Used by `TolariaWorkspace`
+    /// so the status bar populates under `TOLARIA_MOCK=1` and degrades
+    /// gracefully in normal launches before Phase 3 services land.
+    pub fn from_or_empty(cx: &mut App) -> Self {
+        if cx.try_global::<MockGit>().is_some() && cx.try_global::<MockVault>().is_some() {
+            Self::from_mock(cx)
+        } else {
+            Self::empty()
+        }
     }
 
     /// Build a status bar populated from the [`MockVault`] and [`MockGit`]

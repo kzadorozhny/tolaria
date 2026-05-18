@@ -23,10 +23,12 @@
 //! `toast_count`) is unchanged.
 
 use gpui::{
-    div, px, App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render,
-    SharedString, Styled, Window,
+    div, px, App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled,
+    Window,
 };
 use gpui_component::resizable::{h_resizable, resizable_panel};
+use status_bar::StatusBar;
+use toasts::Toast;
 
 use crate::{
     dock::Dock,
@@ -48,6 +50,7 @@ pub struct TolariaWorkspace {
     right_dock: Entity<Dock>,
     bottom_dock: Entity<Dock>,
     center_group: Entity<PaneGroup>,
+    status_bar: Entity<StatusBar>,
 }
 
 impl TolariaWorkspace {
@@ -65,6 +68,9 @@ impl TolariaWorkspace {
         let right_dock = cx.new(|_| Dock::new(DockPosition::Right));
         let bottom_dock = cx.new(|_| Dock::new(DockPosition::Bottom));
         let center_group = cx.new(|_| PaneGroup::new());
+        // `StatusBar::from_or_empty` populates from mock globals if installed
+        // (TOLARIA_MOCK=1 launches), or returns an empty bar otherwise.
+        let status_bar = cx.new(|cx| StatusBar::from_or_empty(cx));
         Self {
             modal_layer,
             toast_layer,
@@ -72,6 +78,7 @@ impl TolariaWorkspace {
             right_dock,
             bottom_dock,
             center_group,
+            status_bar,
         }
     }
 
@@ -97,10 +104,13 @@ impl TolariaWorkspace {
         self.modal_layer.update(cx, |layer, cx| layer.dismiss(cx));
     }
 
-    /// Enqueue a toast message in the workspace's `ToastLayer`.
-    pub fn push_toast(&self, message: SharedString, cx: &mut App) {
+    /// Enqueue a typed [`Toast`] in the workspace's [`ToastLayer`].
+    ///
+    /// Construct toasts via `Toast::info(...)` / `success` / `warning` /
+    /// `error` builders from the `toasts` crate.
+    pub fn push_toast(&self, toast: Toast, cx: &mut App) {
         self.toast_layer
-            .update(cx, |layer, cx| layer.push(message, cx));
+            .update(cx, |layer, cx| layer.push(toast, cx));
     }
 
     /// Whether a modal view is currently shown.
@@ -140,8 +150,8 @@ impl Render for TolariaWorkspace {
             )
             // Bottom dock (empty placeholder in Phase 2a).
             .child(self.bottom_dock.clone())
-            // Status bar slot (empty in Phase 2a).
-            .child(div().h(px(24.0)))
+            // Status bar (Phase 2c — empty unless mock globals installed).
+            .child(self.status_bar.clone())
             // Overlay layers rendered on top (absolute-positioned internally).
             .child(self.modal_layer.clone())
             .child(self.toast_layer.clone())

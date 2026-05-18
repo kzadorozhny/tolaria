@@ -23,6 +23,7 @@ gpui.workspace = true
 gpui_platform.workspace = true
 gpui-component.workspace = true
 actions = { path = "../actions" }
+mock_fixtures = { path = "../mock_fixtures" }
 settings_store = { path = "../settings_store" }
 theme = { path = "../theme" }
 paths = { path = "../paths" }

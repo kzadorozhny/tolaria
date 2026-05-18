@@ -10,10 +10,17 @@ description = "TolariaWorkspace root view skeleton (ADR-0115 Phase 1)."
 [dependencies]
 actions = { path = "../actions" }
 anyhow.workspace = true
+banners = { path = "../banners" }
+breadcrumb_bar = { path = "../breadcrumb_bar" }
 gpui.workspace = true
 gpui-component.workspace = true
 log.workspace = true
+status_bar = { path = "../status_bar" }
 theme = { path = "../theme" }
+toasts = { path = "../toasts" }
+
+[dev-dependencies]
+chrono.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { workspace = true, features = ["test-support"] }

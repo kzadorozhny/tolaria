@@ -173,7 +173,7 @@ mod tests {
 
         window
             .update(cx, |workspace, _window, cx| {
-                workspace.push_toast("settings UI in Phase 2".into(), cx);
+                workspace.push_toast(toasts::Toast::info("settings UI in Phase 2"), cx);
             })
             .unwrap();
 

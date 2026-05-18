@@ -1,16 +1,16 @@
-//! Toast notification layer for `TolariaWorkspace` (ADR-0115 Phase 1).
+//! Toast notification layer for `TolariaWorkspace` (ADR-0115 Phase 2c).
 //!
-//! Phase 1 is a minimal skeleton: toasts are `SharedString` messages stored
-//! in a `Vec`. The layer renders nothing while the list is empty. Phase 2
-//! will wire up `gpui_component::notification::Notification` and the dismiss
-//! timer.
+//! Phase 1 stored toasts as `SharedString`; Phase 2c switched to typed
+//! [`Toast`]s from the `toasts` crate and renders each via [`render_toast`].
+//! The layer pins itself to the top-right with a vertical stack.
 
-use gpui::{div, Context, IntoElement, Render, SharedString, Window};
+use gpui::{div, px, Context, IntoElement, ParentElement, Render, Styled, Window};
+use toasts::{render_toast, Toast};
 
 /// Layer that displays ephemeral toast messages above all other content.
 #[derive(Default)]
 pub struct ToastLayer {
-    toasts: Vec<SharedString>,
+    toasts: Vec<Toast>,
 }
 
 impl ToastLayer {
@@ -19,9 +19,10 @@ impl ToastLayer {
         Self::default()
     }
 
-    /// Enqueue a toast message. Phase 2 will add auto-dismiss timers.
-    pub fn push(&mut self, message: impl Into<SharedString>, cx: &mut Context<Self>) {
-        self.toasts.push(message.into());
+    /// Enqueue a [`Toast`]. Phase 4 will add auto-dismiss timers + max-length
+    /// trimming; today the toast persists until the layer is dropped.
+    pub fn push(&mut self, toast: Toast, cx: &mut Context<Self>) {
+        self.toasts.push(toast);
         cx.notify();
     }
 
@@ -40,7 +41,15 @@ impl ToastLayer {
 
 impl Render for ToastLayer {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        // Phase 1: renders nothing; Phase 2 maps toasts to Notification elements.
+        // Top-right vertical stack of toasts. Empty layer renders an invisible
+        // anchor div so the absolute-positioned overlay slot stays valid.
         div()
+            .absolute()
+            .right(px(16.0))
+            .top(px(40.0))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(self.toasts.iter().map(render_toast))
     }
 }

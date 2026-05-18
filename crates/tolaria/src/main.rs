@@ -41,9 +41,40 @@ mod macos {
         WindowOptions,
     };
     use gpui_platform::application;
+    use mock_fixtures::{MockAi, MockGit, MockSearch, MockVault};
     use settings_store::SettingsStore;
 
     use crate::menus;
+
+    /// Environment variable that toggles mock-fixture install at startup.
+    /// When set to a non-empty value (canonically `1`), the seeded
+    /// `MockVault` / `MockGit` / `MockAi` / `MockSearch` globals are
+    /// installed before any view is constructed. `TolariaWorkspace`'s
+    /// children then auto-populate against them via their `from_or_empty`
+    /// helpers (see `status_bar::StatusBar::from_or_empty`).
+    const MOCK_ENV_VAR: &str = "TOLARIA_MOCK";
+
+    /// Whether the mock-fixture launch path is requested.
+    ///
+    /// Truthy values: `"1"`, `"true"`, `"yes"`, `"on"` (case-insensitive).
+    /// Anything else — including unset, empty, `"0"`, `"false"` — is falsy.
+    fn mock_mode_requested() -> bool {
+        let Ok(v) = std::env::var(MOCK_ENV_VAR) else {
+            return false;
+        };
+        matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+    }
+
+    /// Install the four `mock_fixtures` Globals on `cx`. Must run before
+    /// `TolariaWorkspace::empty` so child views (status_bar, future Phase 2c
+    /// panels) see the globals during their own construction.
+    fn install_mock_globals(cx: &mut App) {
+        cx.set_global(MockVault::seeded());
+        cx.set_global(MockGit::seeded());
+        cx.set_global(MockAi::seeded());
+        cx.set_global(MockSearch);
+        log::info!("installed mock_fixtures globals ({MOCK_ENV_VAR} set)");
+    }
 
     /// Register a Phase-1 placeholder handler that logs the action name and a
     /// note describing what the real implementation will do in Phase 2.
@@ -101,13 +132,22 @@ mod macos {
             //    up accelerators immediately — ADR-0115 §6).
             cx.set_menus(menus::app_menus());
 
-            // 8. Re-apply theme whenever settings change.
+            // 8. Mock fixtures (TOLARIA_MOCK=1) — installs MockVault /
+            //    MockGit / MockAi / MockSearch as Globals so chrome views
+            //    populate against them. Phase 3 swaps in real services.
+            //    Installed before any `observe_global` so future observers
+            //    see the global state from registration onward.
+            if mock_mode_requested() {
+                install_mock_globals(cx);
+            }
+
+            // 9. Re-apply theme whenever settings change.
             cx.observe_global::<SettingsStore>(|cx| {
                 theme::reload_from_settings(cx);
             })
             .detach();
 
-            // 9. Open root window.  Copy f32 size values out before passing cx
+            // 10. Open root window.  Copy f32 size values out before passing cx
             //    to Bounds::centered so the borrow of SettingsStore is released.
             let (width, height) = {
                 let w = &SettingsStore::get(cx).window;
