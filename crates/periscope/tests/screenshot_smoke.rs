@@ -3,9 +3,18 @@
 //! Builds the `tolaria` binary via `cargo build -p tolaria`, then
 //! execs `target/debug/tolaria --vault demo-vault-v2` directly so
 //! `child.id()` is the binary's pid (not a `cargo run` wrapper).
-//! Polls for the window to appear, captures a PNG via the public
-//! `periscope::screenshot` API, asserts the file is plausibly
-//! non-empty, then tears the child process down.
+//! Polls for the window to appear, then exercises both `screenshot`
+//! and `click`:
+//!
+//! 1. Capture `periscope-smoke-before.png` (note list rendered, center
+//!    pane empty).
+//! 2. Synthesize a left-click at `(200, 100)` window-local — the first
+//!    note row in `NoteListPane`.
+//! 3. Capture `periscope-smoke-after.png` once the UI has had time to
+//!    react.
+//! 4. Assert each PNG passes the size threshold AND the two captures
+//!    differ — i.e. the click reached the row and `OpenNoteEvent`
+//!    actually mounted the `NoteItem` placeholder in the center pane.
 //!
 //! Opt-in via `TOLARIA_E2E_SMOKE=1`.  The test is skipped by default
 //! because the host needs Screen Recording permission granted to the
@@ -23,6 +32,20 @@ use std::{
 
 const SMOKE_TIMEOUT_SECS: u64 = 15;
 const SMOKE_POLL_INTERVAL_MS: u64 = 500;
+
+/// Window-local coordinates of the first row in `NoteListPane`.
+/// Title bar ≈ 28 pt + filter strip 32 pt + ~half a row → ~y = 100 lands
+/// reliably inside the first list row; x = 200 sits inside the left dock
+/// for any reasonable initial window width.
+const FIRST_NOTE_ROW_X: f64 = 200.0;
+const FIRST_NOTE_ROW_Y: f64 = 100.0;
+
+/// AppKit needs a moment after the synthetic click for the
+/// `OpenNoteEvent` → `add_item_to_active_pane` round-trip to land and
+/// the center pane to repaint with the `NoteItem` placeholder.  500 ms
+/// is comfortably above the observed settling time without being
+/// perceptibly slow for the smoke test.
+const CLICK_SETTLE_MS: u64 = 500;
 
 /// Threshold tuned to catch the "invisible glyphs" regression discovered in
 /// Phase 6-MVP verification: a Tolaria window that renders chrome geometry
@@ -91,11 +114,16 @@ fn screenshot_smoke() {
     let guard = ChildGuard(child);
 
     let pid = guard.id();
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("periscope-smoke.png");
+    let target = periscope::WindowTarget::ByPid(pid);
+    let tmp_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    let before_path = tmp_dir.join("periscope-smoke-before.png");
+    let after_path = tmp_dir.join("periscope-smoke-after.png");
     let deadline = Instant::now() + Duration::from_secs(SMOKE_TIMEOUT_SECS);
 
-    let capture_result = loop {
-        match periscope::screenshot(&periscope::WindowTarget::ByPid(pid), &out) {
+    // Phase 1 — poll until the window appears, then capture the initial
+    // state (note list rendered, center pane empty).
+    let before_capture = loop {
+        match periscope::screenshot(&target, &before_path) {
             Ok(path) => break Ok(path),
             Err(err) if Instant::now() < deadline => {
                 eprintln!("periscope::screenshot_smoke: waiting for window ({err:#})");
@@ -105,14 +133,50 @@ fn screenshot_smoke() {
         }
     };
 
-    // `guard` drops here (or on assertion-unwind below), killing the
-    // GPUI window regardless of test outcome.
-    let path = capture_result.expect("screenshot eventually succeeds within the deadline");
-    let bytes = std::fs::metadata(&path).expect("stat smoke PNG").len();
+    let before_path = before_capture.expect("initial screenshot within the deadline");
+    let before_bytes = std::fs::read(&before_path).expect("read initial smoke PNG");
     assert!(
-        bytes >= MIN_USEFUL_PNG_BYTES,
-        "PNG too small ({bytes} bytes) — Screen Recording permission missing"
+        before_bytes.len() as u64 >= MIN_USEFUL_PNG_BYTES,
+        "initial PNG too small ({} bytes) — Screen Recording permission \
+         missing or font rendering broken (see `Cargo.toml` font-kit note)",
+        before_bytes.len(),
     );
+
+    // Phase 2 — synthesize a click on the first note row, give AppKit
+    // time to paint the resulting `NoteItem` placeholder, then capture
+    // again.  Raise the window first so the click reaches the right
+    // process even if focus drifted between launch and now.
+    periscope::raise(&target).expect("raise tolaria window before click");
+    thread::sleep(Duration::from_millis(250));
+    periscope::click(&target, FIRST_NOTE_ROW_X, FIRST_NOTE_ROW_Y)
+        .expect("synthesize click on first note row");
+    thread::sleep(Duration::from_millis(CLICK_SETTLE_MS));
+
+    let after_path =
+        periscope::screenshot(&target, &after_path).expect("post-click screenshot succeeds");
+    let after_bytes = std::fs::read(&after_path).expect("read post-click smoke PNG");
+    assert!(
+        after_bytes.len() as u64 >= MIN_USEFUL_PNG_BYTES,
+        "post-click PNG too small ({} bytes) — Tolaria likely crashed \
+         on the click (e.g. `OpenNoteEvent` re-entrancy regression)",
+        after_bytes.len(),
+    );
+
+    // The click MUST have changed something on screen.  Identical PNGs
+    // mean either: the click missed the row (coordinates drifted from
+    // the NoteListPane layout), the click reached the row but no event
+    // was emitted (NoteListPane subscription broke), or the
+    // subscription fired but `add_item_to_active_pane` no-op'd
+    // (workspace center-pane wiring regressed).  All three are real
+    // defects worth catching.
+    assert_ne!(
+        before_bytes, after_bytes,
+        "click at ({FIRST_NOTE_ROW_X}, {FIRST_NOTE_ROW_Y}) didn't change \
+         the rendered output — note-open flow is broken end-to-end"
+    );
+
+    // `guard` drops here (or on assertion-unwind above), killing the
+    // GPUI window regardless of test outcome.
 }
 
 /// Repo root deduced from `CARGO_MANIFEST_DIR`, which Cargo sets to

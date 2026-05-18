@@ -11,7 +11,7 @@
 #![cfg(target_os = "macos")]
 
 use anyhow::{Context as _, Result};
-use gpui::{App, Entity, Window};
+use gpui::{Context, Window};
 use note_item::NoteItem;
 use vault::{NoteId, Vault};
 use workspace::TolariaWorkspace;
@@ -39,10 +39,10 @@ use workspace::TolariaWorkspace;
 /// editor view that the user can populate by retriggering the open
 /// flow.
 pub fn open_note(
-    workspace: &Entity<TolariaWorkspace>,
+    workspace: &TolariaWorkspace,
     id: NoteId,
     window: &mut Window,
-    cx: &mut App,
+    cx: &mut Context<TolariaWorkspace>,
 ) -> Result<()> {
     let vault = cx
         .try_global::<Vault>()
@@ -58,9 +58,16 @@ pub fn open_note(
     let note_item = NoteItem::new_with_webview(note, window, cx)
         .context("constructing NoteItem with embedded WKWebView")?;
 
-    workspace.update(cx, |ws_view, cx| {
-        ws_view.add_item_to_active_pane(note_item, cx);
-    });
+    // Call `add_item_to_active_pane` directly on `&TolariaWorkspace`
+    // rather than re-entering via `workspace.update(cx, ...)`.  The
+    // caller (the `subscribe_in` closure in `main.rs`) is already
+    // executing inside the workspace entity's update context — wrapping
+    // in another `.update()` panics with
+    // "cannot update TolariaWorkspace while it is already being updated"
+    // the moment a real click fires `OpenNoteEvent`.  `add_item_to_active_pane`
+    // takes `&self`, so direct invocation is sound and avoids the
+    // re-entrancy guard.
+    workspace.add_item_to_active_pane(note_item, cx);
     Ok(())
 }
 

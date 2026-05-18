@@ -31,6 +31,8 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
 pub(crate) mod capture;
 #[cfg(target_os = "macos")]
+pub(crate) mod input;
+#[cfg(target_os = "macos")]
 pub(crate) mod windows;
 
 /// Which window the harness targets.
@@ -118,6 +120,36 @@ pub fn raise(target: &WindowTarget) -> Result<()> {
     {
         let _ = target;
         anyhow::bail!("periscope raise is macOS-only (Phase 6-MVP)")
+    }
+}
+
+/// Synthesize a left-click inside `target` at window-local point `(x, y)`.
+///
+/// Coordinates are in window points with the origin at the top-left
+/// corner of the window (matching GPUI's coordinate convention).  The
+/// harness translates to global screen space using the window's
+/// `xcap`-reported origin before posting `CGEvent` mouse-down +
+/// mouse-up at the resolved point.
+///
+/// `target` must already be raised — callers that need the window in
+/// the foreground should invoke [`raise`] first.  Posting events at a
+/// covered or off-screen window silently no-ops.
+///
+/// # Errors
+///
+/// - No window matches `target`.
+/// - The CoreGraphics event-source / event-create call fails (rare;
+///   typically indicates a sandbox / TCC restriction on the harness
+///   binary's parent process).
+pub fn click(target: &WindowTarget, x: f64, y: f64) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        input::click_macos(target, x, y)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (target, x, y);
+        anyhow::bail!("periscope click is macOS-only (Phase 6-MVP)")
     }
 }
 

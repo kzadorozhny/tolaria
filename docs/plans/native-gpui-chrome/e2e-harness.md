@@ -56,6 +56,36 @@ a ~250 ms settle delay).
 
 ---
 
+## Driving the UI — `click` subcommand
+
+When inspection alone isn't enough — e.g. you want to verify the
+note-open flow lands an item in the center pane — synthesize a
+left-click at a window-local coordinate:
+
+```sh
+cargo run -q -p periscope -- click \
+    --title Tolaria --raise --x 200 --y 100
+```
+
+Coordinates are in window points with the origin at the window's
+top-left corner (matching GPUI's layout coordinates).  The harness
+translates to screen space via `xcap::Window::x()` / `.y()` before
+posting a `CGEvent` mouse-down + mouse-up pair through the OS event
+queue, so GPUI's own hit-testing sees the click as if it had come
+from a real cursor.
+
+This is what the smoke test uses to exercise `NoteListPane`'s
+`OpenNoteEvent` end-to-end: capture before, click at the first row,
+capture after, assert the rendered output differs.  See
+`crates/periscope/tests/screenshot_smoke.rs`.
+
+The Accessibility-API path that GPUI components offer is *not* an
+option — GPUI draws controls into a Metal layer, so the AX
+hierarchy doesn't see them and `AXUIElementPerformAction` never
+reaches the click handlers.  CGEvent is the only path that works.
+
+---
+
 ## Long debug session — `watch` mode
 
 For multi-turn debugging where Claude inspects the UI repeatedly,

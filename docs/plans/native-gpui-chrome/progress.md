@@ -169,8 +169,18 @@ Root cause: our workspace pinned `gpui_platform` with `features = ["runtime_shad
 
 Fix: `gpui_platform = { features = ["runtime_shaders", "font-kit"] }` in workspace `Cargo.toml`, documented inline.  Regression locked in by:
 
-- `tolaria::tests::workspace_enables_font_kit_for_gpui_platform` — reads the workspace `Cargo.toml` directly and asserts the feature string is present.
+- `tolaria::tests::platform_text_system_enumerates_system_fonts` — constructs the real headless macOS platform via `gpui_platform::current_platform(true)` and asserts `Platform::text_system().all_font_names().len() > 50`.  Probes the runtime symptom directly: `MacTextSystem` (font-kit) returns hundreds of CoreText fonts, `NoopTextSystem` returns zero.  Stronger than a `cargo metadata` feature-flag check because it also catches a future `gpui_macos` refactor that drops the `font-kit` branch entirely.
 - `periscope::screenshot_smoke` threshold bumped from 10 kB → 100 kB so a future text-rendering regression trips the byte-count assertion (broken capture ≈ 88 kB, healthy capture ≈ 260 kB).
+
+#### Phase 6-MVP follow-up — `periscope::click` + smoke test selects a note
+
+Extended the harness with a CGEvent-based input synthesis primitive so the smoke test can actually exercise the open-note flow rather than just capture a static window.
+
+`crates/periscope/src/input.rs` posts `CGEventCreateMouseEvent` left-mouse-down + left-mouse-up at a window-local coordinate (origin at top-left, in window points), translated to screen space via `xcap::Window::x()` / `.y()`.  Exposed as `periscope::click(target, x, y)` from the library and `periscope click --title Tolaria --raise --x 200 --y 100` from the CLI.  The Accessibility-API path that GPUI components nominally offer doesn't work: GPUI draws controls into the Metal layer, so the AX hierarchy never sees them and `AXUIElementPerformAction` no-ops; CGEvent through the OS event queue is the only path that reaches GPUI's hit-testing.
+
+The smoke test now captures `periscope-smoke-before.png` (empty workspace), clicks at `(200, 100)` (first `NoteListPane` row), waits 500 ms for AppKit to settle, captures `periscope-smoke-after.png`, then asserts the two PNGs differ.  Identical bytes would mean the click missed the row OR `NoteListPane`'s `OpenNoteEvent` subscription broke OR `add_item_to_active_pane` no-op'd — all three are real regressions worth catching.
+
+The first attempt at this test triggered a Phase 5d re-entrancy panic: `open_note::open_note(&Entity<TolariaWorkspace>, ...)` called `workspace.update(cx, |ws_view, cx| ws_view.add_item_to_active_pane(...))` from inside a `cx.subscribe_in` callback that was already executing under the workspace entity's update lock, producing `cannot update TolariaWorkspace while it is already being updated`.  Fixed by changing `open_note` to take `&TolariaWorkspace` + `&mut Context<TolariaWorkspace>` directly and calling `add_item_to_active_pane` (which already takes `&self`) without re-entering via `entity.update(...)`.  This regression had been latent since Phase 5d-followup — it only fires when the row is actually clicked, which is exactly what the periscope harness now does in CI.
 
 ---
 

@@ -4,6 +4,7 @@
 //!
 //! - `screenshot` — one-shot capture, optionally `--raise`-ing first.
 //! - `watch`      — periodic capture loop with `latest.png` symlink.
+//! - `click`      — synthesize a left-click at window-local `(x, y)`.
 //! - `list`       — diagnostic dump of every visible window.
 
 use anyhow::{anyhow, Context as _, Result};
@@ -32,6 +33,8 @@ enum Cmd {
     Screenshot(ScreenshotArgs),
     /// Capture every N seconds; maintain a `latest.png` symlink.
     Watch(WatchArgs),
+    /// Synthesize a left-click at the given window-local point.
+    Click(ClickArgs),
     /// Dump every visible window with title / pid / app name.
     List,
 }
@@ -69,6 +72,21 @@ struct ScreenshotArgs {
 }
 
 #[derive(Args)]
+struct ClickArgs {
+    #[command(flatten)]
+    target: TargetArgs,
+    /// X coordinate, window-local (origin at top-left, in window points).
+    #[arg(long)]
+    x: f64,
+    /// Y coordinate, window-local (origin at top-left, in window points).
+    #[arg(long)]
+    y: f64,
+    /// Raise the window via the Accessibility API before clicking.
+    #[arg(long, default_value_t = false)]
+    raise: bool,
+}
+
+#[derive(Args)]
 struct WatchArgs {
     #[command(flatten)]
     target: TargetArgs,
@@ -92,6 +110,7 @@ fn main() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Screenshot(a) => screenshot(a),
         Cmd::Watch(a) => watch(a),
+        Cmd::Click(a) => click(a),
         Cmd::List => list(),
     }
 }
@@ -105,6 +124,15 @@ fn screenshot(args: ScreenshotArgs) -> Result<()> {
     let path = periscope::screenshot(&target, &args.out)?;
     log::info!("wrote {}", path.display());
     Ok(())
+}
+
+fn click(args: ClickArgs) -> Result<()> {
+    let target = args.target.to_target()?;
+    if args.raise {
+        periscope::raise(&target).context("raise before click")?;
+        std::thread::sleep(RAISE_SETTLE);
+    }
+    periscope::click(&target, args.x, args.y)
 }
 
 fn watch(args: WatchArgs) -> Result<()> {

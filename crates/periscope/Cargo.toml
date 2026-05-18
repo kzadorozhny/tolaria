@@ -25,6 +25,12 @@ clap = { version = "4", features = ["derive"] }
 xcap = "0.9.4"
 accessibility = "0.2.0"
 core-foundation = "0.10"
+# `core-graphics` lets us synthesize mouse events via `CGEventCreateMouseEvent` +
+# `CGEventPost`.  Used by `periscope::click` to drive a real cursor click at a
+# given window-relative coordinate so the smoke test can exercise note-open
+# flows end-to-end (not just the static window).  No Accessibility API hooks
+# into GPUI-drawn controls, so CGEvent is the only realistic input path.
+core-graphics = "0.24"
 
 # No dev-dependencies on the tolaria crate: the smoke test invokes
 # `cargo build -p tolaria` and execs `target/debug/tolaria` directly,

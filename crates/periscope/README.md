@@ -33,6 +33,14 @@ cargo run -q -p periscope -- watch \
     --title Tolaria --dir target/e2e/ --interval-secs 3
 ```
 
+Synthesize a left-click at window-local coordinates (used by the
+smoke test to drive the open-note flow without a human cursor):
+
+```sh
+cargo run -q -p periscope -- click \
+    --title Tolaria --raise --x 200 --y 100
+```
+
 Diagnostic:
 
 ```sh
@@ -84,14 +92,18 @@ window without rendered glyphs serialises at ~88 kB; with text,
 ## Library API
 
 ```rust
-use periscope::{screenshot, raise, list_windows, WindowTarget};
+use periscope::{click, screenshot, raise, list_windows, WindowTarget};
 
 screenshot(&WindowTarget::ByTitle("Tolaria".into()), Path::new("out.png"))?;
 raise(&WindowTarget::ByPid(12345))?;
+click(&WindowTarget::ByTitle("Tolaria".into()), 200.0, 100.0)?;
 for w in list_windows()? { println!("{}: {}", w.app_name, w.title); }
 ```
 
-Both `screenshot` and `raise` accept `WindowTarget::ByTitle(String)`
-or `WindowTarget::ByPid(u32)`.  Title matches `xcap::Window::title()`
-exactly (Tolaria sets its title to `"Tolaria"` at
-`crates/tolaria/src/main.rs:214`).
+`screenshot`, `raise`, and `click` all accept
+`WindowTarget::ByTitle(String)` or `WindowTarget::ByPid(u32)`.  Title
+matches `xcap::Window::title()` exactly (Tolaria sets its title to
+`"Tolaria"` at `crates/tolaria/src/main.rs:214`).  `click` coordinates
+are window-local (origin at the top-left, in window points); the
+harness translates to screen space using `xcap`'s reported window
+origin before posting a `CGEvent` mouse-down + mouse-up pair.

@@ -231,10 +231,14 @@ mod macos {
                         .subscribe_in(
                             &note_list,
                             window,
-                            move |_ws, _list, event: &OpenNoteEvent, window, cx| {
-                                let ws = cx.entity();
+                            move |ws_view, _list, event: &OpenNoteEvent, window, cx| {
+                                // Pass `&TolariaWorkspace` straight through —
+                                // `open_note` calls `add_item_to_active_pane`
+                                // (which takes `&self`) directly on it instead
+                                // of re-entering via `entity.update(...)`.  See
+                                // `open_note.rs` for the re-entrancy story.
                                 if let Err(e) =
-                                    crate::open_note::open_note(&ws, event.id, window, cx)
+                                    crate::open_note::open_note(ws_view, event.id, window, cx)
                                 {
                                     log::error!("open_note failed: {e:#}");
                                 }
