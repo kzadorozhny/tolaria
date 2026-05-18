@@ -17,7 +17,7 @@ MVP cut definition.  Original full roadmap preserved in §A of
 | 2b — First chrome surfaces | ✅ done | `e31bc7fc` | +19 (115) | `status_bar`, `breadcrumb_bar`, `toasts`, `banners` |
 | 2c — Chrome wiring + TOLARIA_MOCK | ✅ done | `3131ccc7` | +3 (118) | — (integration wave; touched 5 existing crates) |
 | 2d — Big panels | ✅ done | `6d96cca8` | +31 (149) | `sidebar_panel`, `note_list_pane`, `inspector_panel`, `ai_panel`, `search_panel`, `settings_panel`, `diff_view` |
-| **3-MVP — Vault service (minimal)** | ✅ done | _pending commit_ | +9 (158) | `vault` (open dir, list, read, save, rescan; sync IO; markdown-only; shape-compatible with `mock_fixtures::MockVault`) |
+| **3-MVP — Vault service (minimal)** | ✅ done | `ad1581cb` | +9 (158) | `vault` (open dir, list, read, save, rescan; sync IO; markdown-only; shape-compatible with `mock_fixtures::MockVault`) |
 | **4-MVP — Editor host integration** | ⏳ planned | — | — | `editor_host/` Vite project (carry-over from `src/`); `editor_bridge` crate; `note_item` crate (per-note `WKWebView` via `gpui-wry`) |
 | **5-MVP — MVP wiring + launch** | ⏳ planned | — | — | `tolaria --vault <path>` CLI arg; swap `sidebar_panel` / `note_list_pane` from `MockVault` to real `vault::Vault` global; open-note → spawn `note_item` in center Pane |
 | **— MVP CUT** | | | | App opens local vault, navigates, renders + saves notes.  Tauri stack still parallel. |
