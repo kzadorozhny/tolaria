@@ -1,30 +1,39 @@
-# Ephemeral planning notes for ADR-0115
+# `docs/plans/`
 
-These files exist for the duration of the native-GPUI chrome migration
-(branch `feat/native-gpui-chrome`).  They mirror the conversation-level
-plans, todo lists, and phase-by-phase progress that informed each
-commit, so the work is reviewable and resumable across sessions.
+Ephemeral planning workspaces for in-flight initiatives.
 
-**Delete this entire directory before merging `feat/native-gpui-chrome`
-into `main`.**  Permanent context belongs in:
+Each subdirectory is the planning workspace for one initiative — typically
+a feature branch or migration that needs its own multi-phase plan,
+progress ledger, and resumable-across-sessions context.
 
-- `docs/adr/0115-native-gpui-chrome.md` — the ADR itself
-- `docs/ARCHITECTURE.md` / `docs/ABSTRACTIONS.md` — long-lived shape docs
+## Convention
 
-## Layout
+- **One subdirectory per initiative.**  Name it kebab-case after the
+  thing you're building (`native-gpui-chrome/`, `mobile-sync/`, …).
+- **Required contents** (suggested, not enforced):
+  - `README.md` — what this initiative is, when to delete the directory
+  - One or more plan / progress / per-phase files (`progress.md`,
+    `00-overview.md`, `phase-N-thing.md`, etc.)
+- **Lifecycle**: create the subdirectory when you start the work,
+  **delete it** when the branch merges to `main` or the initiative
+  is abandoned.  These files are not durable architecture
+  documentation — they're scratchpad-grade plans that exist to make
+  multi-session work resumable.
 
-| File | Purpose |
-|------|---------|
-| `00-overview.md` | The full multi-phase plan (Phases 1–7) generated at the start of the migration.  Section B / C contain deep specs for Phases 1 and 2 specifically. |
-| `progress.md` | Running ledger: what shipped per phase, with commit refs + test counts + key API decisions. |
-| `phase-2d-next.md` | Outline for the next phase (large chrome panels). |
+## What belongs here vs. elsewhere
 
-Add more files here for any future phase that needs a dedicated plan
-(`phase-3-services.md`, `phase-4-editor-host.md`, etc.).
+- **Here** — multi-phase plans, todo lists, per-commit progress
+  ledgers, "what shipped last and what's next" notes.  Useful while
+  the work is in flight; noise after it ships.
+- **`docs/adr/`** — durable decisions that outlive the initiative.
+  Create an ADR for any new dependency, storage strategy, platform
+  target, or cross-cutting pattern.  See `/create-adr`.
+- **`docs/ARCHITECTURE.md`** / **`docs/ABSTRACTIONS.md`** — long-lived
+  shape docs.  Update in the same commit that lands the structural
+  change.
 
-## Why not Todoist / Linear / etc
+## Current initiatives
 
-This branch is dogfood-only per ADR-0021 (push-to-`main` workflow).
-The actual project tracker carries production tasks; this directory
-just persists the in-flight planning state so a fresh session can
-resume mid-migration without re-deriving the topology.
+| Directory | Initiative | Branch | Status |
+|-----------|------------|--------|--------|
+| [`native-gpui-chrome/`](native-gpui-chrome/) | ADR-0115: replace Tauri with native GPUI chrome + embedded WKWebView editor | `feat/native-gpui-chrome` | In flight (Phase 2c shipped, 2d planned) |
