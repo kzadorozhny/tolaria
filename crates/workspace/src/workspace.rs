@@ -124,6 +124,14 @@ impl TolariaWorkspace {
         self.toast_layer.read(cx).len()
     }
 
+    /// Attach a [`Panel`][crate::panel::Panel] to the workspace's
+    /// left [`Dock`].  Mirrors `attach_right_dock` / `attach_bottom_dock`
+    /// (added when the chrome grows beyond the left column).
+    pub fn attach_left_dock<P: crate::panel::Panel>(&self, panel: gpui::Entity<P>, cx: &mut App) {
+        self.left_dock
+            .update(cx, |dock, cx| dock.set_panel(panel, cx));
+    }
+
     /// Append `item` to the center [`PaneGroup`]'s active [`Pane`].
     ///
     /// Creates a fresh `Pane` and pushes it onto the group if the group

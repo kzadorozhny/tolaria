@@ -43,6 +43,7 @@ use gpui_component::{
 };
 use mock_fixtures::{MockVault, NoteId, NoteKind};
 use vault::Vault;
+use workspace::panel::{DockPosition, Panel};
 
 // ---------------------------------------------------------------------------
 // Events
@@ -104,6 +105,7 @@ pub struct NoteListPane {
     entries: Vec<NoteEntry>,
     filter: SharedString,
     selected: HashSet<NoteId>,
+    position: DockPosition,
 }
 
 impl NoteListPane {
@@ -113,6 +115,7 @@ impl NoteListPane {
             entries: Vec::new(),
             filter: SharedString::default(),
             selected: HashSet::new(),
+            position: DockPosition::Left,
         }
     }
 
@@ -143,6 +146,7 @@ impl NoteListPane {
             entries,
             filter: SharedString::default(),
             selected: HashSet::new(),
+            position: DockPosition::Left,
         }
     }
 
@@ -170,6 +174,7 @@ impl NoteListPane {
             entries,
             filter: SharedString::default(),
             selected: HashSet::new(),
+            position: DockPosition::Left,
         }
     }
 
@@ -236,6 +241,45 @@ impl Default for NoteListPane {
 }
 
 impl EventEmitter<OpenNoteEvent> for NoteListPane {}
+
+impl Panel for NoteListPane {
+    fn persistent_name(&self) -> &str {
+        "NoteListPane"
+    }
+
+    fn panel_key(&self) -> &str {
+        "note-list"
+    }
+
+    fn position(&self, _cx: &App) -> DockPosition {
+        self.position
+    }
+
+    fn set_position(&mut self, position: DockPosition, cx: &mut Context<Self>) {
+        self.position = position;
+        cx.notify();
+    }
+
+    fn default_size(&self, _cx: &App) -> gpui::Pixels {
+        gpui::px(280.0)
+    }
+
+    fn icon(&self) -> Option<&str> {
+        Some("list")
+    }
+
+    fn toggle_action(&self) -> Box<dyn gpui::Action> {
+        // Reuses `ToggleSidebar` for MVP — the left column is one
+        // panel slot from the user's perspective.  A dedicated
+        // `ToggleNoteList` action lands when the chrome supports
+        // multiple visible left-column panels.
+        Box::new(actions::ToggleSidebar)
+    }
+
+    fn starts_open(&self, _cx: &App) -> bool {
+        true
+    }
+}
 
 impl NoteListPane {
     /// Emit an [`OpenNoteEvent`] for `id`.  Called by the row click

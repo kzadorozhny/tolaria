@@ -22,12 +22,8 @@ use workspace::TolariaWorkspace;
 /// [`NoteItem`] with a live `WKWebView`, and pushes it onto the active
 /// pane via [`TolariaWorkspace::add_item_to_active_pane`].
 ///
-/// **Subscription wiring:** Phase 5d ships this helper without the
-/// `NoteListPane::OpenNoteEvent` → `open_note` subscription — that
-/// closes the UI loop and lands in Phase 5e together with IPC channel
-/// routing.  `#[allow(dead_code)]` for now; remove when the
-/// subscription lands.
-#[allow(dead_code)]
+/// Subscribed to `NoteListPane::OpenNoteEvent` from the `tolaria`
+/// binary's `cx.open_window` closure; the wiring lives in `main.rs`.
 ///
 /// # Errors
 ///

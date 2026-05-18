@@ -218,7 +218,31 @@ mod macos {
             };
 
             if let Err(err) = cx.open_window(opts, |window, cx| {
-                cx.new(|model_cx| workspace::TolariaWorkspace::empty(window, model_cx))
+                use note_list_pane::{NoteListPane, OpenNoteEvent};
+                use workspace::TolariaWorkspace;
+
+                let note_list = cx.new(|cx| NoteListPane::from_or_empty(cx));
+                cx.new(|model_cx| {
+                    let workspace = TolariaWorkspace::empty(window, model_cx);
+                    workspace.attach_left_dock(note_list.clone(), model_cx);
+                    // Subscribe inside the workspace's Context so the
+                    // subscription lifetime tracks the workspace entity.
+                    model_cx
+                        .subscribe_in(
+                            &note_list,
+                            window,
+                            move |_ws, _list, event: &OpenNoteEvent, window, cx| {
+                                let ws = cx.entity();
+                                if let Err(e) =
+                                    crate::open_note::open_note(&ws, event.id, window, cx)
+                                {
+                                    log::error!("open_note failed: {e:#}");
+                                }
+                            },
+                        )
+                        .detach();
+                    workspace
+                })
             }) {
                 log::error!("failed to open Tolaria window: {err:#}");
             }
