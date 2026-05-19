@@ -5,7 +5,8 @@
       "cmd-q": "tolaria::Quit",
       "cmd-w": "tolaria::CloseWindow",
       "cmd-,": "tolaria::OpenSettings",
-      "cmd-shift-r": "tolaria::ReloadKeymap"
+      "cmd-shift-r": "tolaria::ReloadKeymap",
+      "cmd-alt-i": "tolaria::ToggleInspector"
     }
   }
 ]

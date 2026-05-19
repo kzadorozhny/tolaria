@@ -13,4 +13,5 @@
 //! - `FocusRing` — consistent focus indicator overlay.
 
 pub mod picker;
+pub mod tree_dump;
 pub use picker::{Picker, PickerDelegate};

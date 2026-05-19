@@ -33,6 +33,17 @@ use gpui_component::{
 use status_bar::StatusBar;
 use toasts::Toast;
 
+/// Height of the macOS native title-bar spacer inserted at the top
+/// of the workspace render tree, in logical points.
+///
+/// Reused by `ui::tree_dump` so the periscope-side click coordinate
+/// system stays in lockstep with what GPUI lays out — see the
+/// `set_window_y_offset` block in `crates/tolaria/src/main.rs`.
+/// Bumping this constant requires bumping the offset wired in
+/// `main.rs` too; keeping it as a single named constant avoids two
+/// magic numbers drifting apart.
+pub const NATIVE_TITLE_BAR_HEIGHT_PT: f32 = 28.0;
+
 use crate::{
     dock::Dock,
     modal_layer::{ModalLayer, ModalView},
@@ -212,8 +223,12 @@ impl Render for TolariaWorkspace {
             .flex_col()
             .bg(bg)
             .text_color(fg)
-            // Native macOS title bar spacer (~28 pt).
-            .child(div().h(px(28.0)))
+            // Native macOS title bar spacer.
+            // [`NATIVE_TITLE_BAR_HEIGHT_PT`] doubles as the value
+            // `ui::tree_dump::set_window_y_offset` is initialised
+            // with — bump them together if the chrome ever uses a
+            // different title-bar style.
+            .child(div().h(px(NATIVE_TITLE_BAR_HEIGHT_PT)))
             // Horizontal split: Left Dock | (Note List Column?) |
             // Center PaneGroup | Right Dock.
             //

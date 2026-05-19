@@ -12,6 +12,15 @@ gpui.workspace = true
 gpui-component.workspace = true
 anyhow.workspace = true
 log.workspace = true
+once_cell = "1"
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { workspace = true, features = ["test-support"] }

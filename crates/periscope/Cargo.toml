@@ -16,6 +16,8 @@ anyhow.workspace = true
 log.workspace = true
 env_logger.workspace = true
 clap = { version = "4", features = ["derive"] }
+serde.workspace = true
+serde_json.workspace = true
 
 # macOS-only deps for screen capture (xcap) and Accessibility-API
 # window discovery / raise (accessibility crate from
@@ -35,3 +37,6 @@ core-graphics = "0.24"
 # No dev-dependencies on the tolaria crate: the smoke test invokes
 # `cargo build -p tolaria` and execs `target/debug/tolaria` directly,
 # which keeps periscope decoupled from the binary's library surface.
+
+[dev-dependencies]
+tempfile.workspace = true

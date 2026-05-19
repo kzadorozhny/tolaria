@@ -26,6 +26,7 @@ use gpui::{
 };
 use gpui_component::ActiveTheme;
 use mock_fixtures::{FileStatus, MockGit, MockVault};
+use ui::tree_dump::DumpAsExt as _;
 use vault::Vault;
 
 // ---------------------------------------------------------------------------
@@ -255,13 +256,17 @@ impl Render for StatusBar {
             // flips between [`ThemeChoice::Light`] and `Dark`.  The
             // label shows the target mode so the click affordance is
             // obvious (matches the moon/sun icon behaviour in the
-            // reference status bar).
+            // reference status bar).  `.dump_as` registers the laid-out
+            // bounds under `"status-bar-theme-toggle"` so periscope can
+            // target it by name (`click-id status-bar-theme-toggle`)
+            // instead of by hand-picked pixel coordinates.
             .child(
                 div()
                     .id("status-bar-theme-toggle")
                     .cursor_pointer()
                     .on_click(|_, _window, cx| theme::cycle(cx))
-                    .child(theme_toggle_label),
+                    .child(theme_toggle_label)
+                    .dump_as("status-bar-theme-toggle"),
             )
             // Settings glyph — placeholder until the action lands.
             .child(div().child(SharedString::new_static("Settings")));

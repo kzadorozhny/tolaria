@@ -230,6 +230,23 @@ mod macos {
                 "ReloadKeymap",
                 "Phase 2 will re-run actions::init to reload the user keymap",
             );
+            // `Cmd+Alt+I` toggles GPUI's built-in element-picker
+            // inspector (always available in debug builds; in release
+            // builds gpui must be compiled with its `inspector` feature
+            // — see `~/.cargo/git/checkouts/zed-…/crates/gpui/Cargo.toml`).
+            //  No-op if the active window is gone (e.g. between close
+            //  and reopen), so dispatching the action is always safe.
+            cx.on_action(|_: &actions::ToggleInspector, cx| {
+                let Some(handle) = cx.active_window() else {
+                    log::warn!("ToggleInspector: no active window");
+                    return;
+                };
+                if let Err(err) =
+                    handle.update(cx, |_, window, app_cx| window.toggle_inspector(app_cx))
+                {
+                    log::error!("ToggleInspector update failed: {err:#}");
+                }
+            });
 
             // 7. Native menu bar (installed before window open so AppKit picks
             //    up accelerators immediately — ADR-0115 §6).
@@ -259,6 +276,34 @@ mod macos {
                     Err(err) => {
                         log::error!("--vault {path:?}: failed to open: {err:#}");
                     }
+                }
+            }
+
+            // 8c. Debug-only: arm the SIGUSR1 tree-dump handler so
+            //     external tools (periscope, lldb, the user from a
+            //     shell) can poke the process and grab a JSON dump of
+            //     every `.dump_as("name")`-tagged element's current
+            //     window-local bounds.  Release builds skip this —
+            //     the IPC surface is strictly a developer affordance.
+            //
+            //     The y-offset matches the workspace's native title
+            //     bar spacer (`workspace::NATIVE_TITLE_BAR_HEIGHT_PT`,
+            //     applied as `.child(div().h(px(...)))`).  GPUI's
+            //     `paint` hands us content-area-relative bounds;
+            //     `periscope click` and `xcap::Window::y()` use
+            //     frame-relative coordinates that *include* the title
+            //     bar.  Adding the offset at register time keeps the
+            //     JSON dump and periscope's click coordinate system
+            //     in lockstep.
+            #[cfg(debug_assertions)]
+            {
+                ui::tree_dump::set_window_y_offset(workspace::NATIVE_TITLE_BAR_HEIGHT_PT);
+                let pid = std::process::id();
+                let path = ui::tree_dump::default_dump_path_for_pid(pid);
+                if let Err(err) = ui::tree_dump::install_signal_handler(path.clone()) {
+                    log::error!("tree_dump SIGUSR1 handler install failed: {err:#}");
+                } else {
+                    log::info!("tree_dump SIGUSR1 handler armed (pid={pid}, dump={path:?})");
                 }
             }
 

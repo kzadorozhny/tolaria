@@ -98,6 +98,76 @@ reaches the click handlers.  CGEvent is the only path that works.
 
 ---
 
+## Driving the UI by element name — `click-id` + `tree_dump`
+
+Hand-picked pixel coordinates rot the moment a layout tweak shifts an
+element.  For stable targets, Tolaria (in debug builds) ships a
+SIGUSR1-triggered **element-tree dump** that records the laid-out
+window-local bounds of every `.dump_as("name")`-tagged element.
+Periscope reads that JSON to translate names → click coordinates.
+
+```sh
+# 1. Inspect what's available (refreshes the dump first):
+cargo run -q -p periscope -- dump-tree --title Tolaria
+
+# Output:
+#   # tree_dump  pid=10830  path="…/tolaria-ui-tree-10830.json"  entries=1
+#   status-bar-theme-toggle    x= 1422.0 y= 1056.5 w=  27.0 h=  19.5
+
+# 2. Click an element by name:
+cargo run -q -p periscope -- click-id \
+    --title Tolaria --raise --id status-bar-theme-toggle
+```
+
+The flow under the hood:
+
+1. `periscope` resolves the target window's PID (via `xcap`).
+2. `periscope` sends `SIGUSR1` to the PID.
+3. Tolaria's `ui::tree_dump` signal-handler thread snapshots its
+   registry (every paint pass writes laid-out bounds for opted-in
+   elements) to `$TMPDIR/tolaria-ui-tree-<pid>.json` (atomic via
+   tmp + rename).
+4. `periscope` polls the file's `mtime` until it's strictly newer
+   than the previous value (2 s default deadline).
+5. `periscope` reads the JSON, looks up the requested name, and
+   calls `periscope::click(target, center_x, center_y)`.
+
+Coordinate-space note: the JSON's `y` is **frame-relative** (includes
+the 28 pt native title bar offset).  `ui::tree_dump::set_window_y_offset(28.0)`
+in `tolaria/src/main.rs` adds the offset at register time so the
+dump and `periscope click --x --y` use the same coordinate system.
+
+### Opting an element in
+
+Add `.dump_as("stable-name")` to the relevant GPUI element:
+
+```rust
+use ui::tree_dump::DumpAsExt as _;
+
+div()
+    .id("status-bar-theme-toggle")
+    .cursor_pointer()
+    .on_click(|_, _window, cx| theme::cycle(cx))
+    .child(theme_toggle_label)
+    .dump_as("status-bar-theme-toggle")
+```
+
+Names are `&'static str` (zero-alloc) and overwrite in place on every
+paint pass — there's no cleanup story, so the registry always
+reflects the most recent layout.
+
+### Why SIGUSR1?
+
+It's the cheapest cross-process trigger that doesn't bring up an
+IPC socket or a debug-only HTTP server.  Tolaria already runs an
+event loop; the signal-handler thread is one extra OS thread, IO
+happens off the signal-delivery path, and the bash one-liner
+`kill -USR1 <pid>` is all an external tool needs.  Release builds
+skip the install entirely (`#[cfg(debug_assertions)]`), so the
+developer-facing IPC channel never ships.
+
+---
+
 ## Long debug session — `watch` mode
 
 For multi-turn debugging where Claude inspects the UI repeatedly,

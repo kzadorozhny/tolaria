@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 pub(crate) mod capture;
 #[cfg(target_os = "macos")]
 pub(crate) mod input;
+pub mod tree_dump;
 #[cfg(target_os = "macos")]
 pub(crate) mod windows;
 
@@ -150,6 +151,32 @@ pub fn click(target: &WindowTarget, x: f64, y: f64) -> Result<()> {
     {
         let _ = (target, x, y);
         anyhow::bail!("periscope click is macOS-only (Phase 6-MVP)")
+    }
+}
+
+/// Resolve `target` to an owning PID via `xcap` window enumeration.
+/// `ByPid` returns the pid directly; `ByTitle` looks up the first
+/// visible window whose title equals the requested string.
+///
+/// Used by the `click-id` CLI subcommand so it can derive the
+/// `tree_dump` JSON path even when the caller only knows the
+/// window title.
+///
+/// # Errors
+///
+/// - No window matches `target`.
+/// - `xcap` enumeration fails (rare; usually a permission issue).
+pub fn resolve_pid(target: &WindowTarget) -> Result<u32> {
+    match target {
+        WindowTarget::ByPid(p) => Ok(*p),
+        WindowTarget::ByTitle(want) => {
+            for w in list_windows()? {
+                if &w.title == want {
+                    return Ok(w.pid);
+                }
+            }
+            anyhow::bail!("no visible window with title {want:?}");
+        }
     }
 }
 

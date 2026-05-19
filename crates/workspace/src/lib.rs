@@ -29,7 +29,7 @@ pub use pane::{Activation, Pane};
 pub use pane_group::PaneGroup;
 pub use panel::{DockPosition, Panel};
 pub use toast_layer::ToastLayer;
-pub use workspace::TolariaWorkspace;
+pub use workspace::{TolariaWorkspace, NATIVE_TITLE_BAR_HEIGHT_PT};
 
 // ---------------------------------------------------------------------------
 // Tests
