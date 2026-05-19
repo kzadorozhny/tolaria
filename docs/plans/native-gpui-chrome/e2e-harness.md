@@ -98,7 +98,7 @@ reaches the click handlers.  CGEvent is the only path that works.
 
 ---
 
-## Driving the UI by element name — `click-id` + `tree_dump`
+## Driving the UI by element name — `dump-tree` + `click-id`
 
 Hand-picked pixel coordinates rot the moment a layout tweak shifts an
 element.  For stable targets, Tolaria (in debug builds) ships a
@@ -106,36 +106,135 @@ SIGUSR1-triggered **element-tree dump** that records the laid-out
 window-local bounds of every `.dump_as("name")`-tagged element.
 Periscope reads that JSON to translate names → click coordinates.
 
+Typical loop:
+
 ```sh
-# 1. Inspect what's available (refreshes the dump first):
+# 1. Discover what's available (refreshes the dump first):
 cargo run -q -p periscope -- dump-tree --title Tolaria
 
-# Output:
-#   # tree_dump  pid=10830  path="…/tolaria-ui-tree-10830.json"  entries=1
-#   status-bar-theme-toggle    x= 1422.0 y= 1056.5 w=  27.0 h=  19.5
-
-# 2. Click an element by name:
+# 2. Drive a click by name:
 cargo run -q -p periscope -- click-id \
     --title Tolaria --raise --id status-bar-theme-toggle
 ```
 
+### `dump-tree` — discover + diagnose
+
+`dump-tree` is the **diagnostic surface**: it triggers a fresh SIGUSR1
+snapshot, waits for the on-disk sequence counter to bump, then
+pretty-prints every name → bounds in the registry.  Use it to find
+what's registered, sanity-check element geometry after a layout
+change, or diagnose `click-id: no element registered as "..."`
+errors.
+
+```sh
+cargo run -q -p periscope -- dump-tree --title Tolaria
+```
+
+Output is one header line plus one row per registered element,
+aligned for legibility:
+
+```
+# tree_dump  pid=15654  path="/var/folders/.../tolaria-ui-tree-15654.json"  sequence=1  entries=1
+status-bar-theme-toggle                  x= 1422.0 y= 1056.5 w=  27.0 h=  19.5
+```
+
+- `pid` — owning process id (resolved from `--title` or passed via `--pid`).
+- `path` — JSON file the dump was written to (under `$TMPDIR`,
+  falls back to `/tmp/`).
+- `sequence` — monotonic counter bumped by every successful dump.
+  Two consecutive `dump-tree` runs against the same Tolaria
+  instance show `sequence=N` then `sequence=N+1`; a reset to `1`
+  means Tolaria was restarted.
+- `entries` — count of `.dump_as("name")`-tagged elements that
+  participated in the most recent paint pass.
+
+Flags:
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--title <s>` *or* `--pid <u32>` | — | Exactly one is required; `--title` looks the PID up via `xcap::Window::all()`. |
+| `--no-refresh` | off | Skip the SIGUSR1 trigger; print whatever's on disk.  Useful when the target is paused under `lldb` or you want to see the snapshot from a previous run. |
+| `--timeout-ms <ms>` | `2000` | How long to wait for the writer to bump the sequence counter before erroring out. |
+
+`dump-tree` is intentionally distinct from `click-id` so it can be
+used purely as a registry probe — it never moves the cursor and
+never modifies the target's state.  It's the safe diagnostic when
+something doesn't show up where you expected.
+
+#### Reading the JSON directly
+
+`dump-tree`'s pretty-print is a convenience wrapper.  The JSON file
+itself is the contract:
+
+```json
+{
+  "sequence": 1,
+  "entries": {
+    "status-bar-theme-toggle": {
+      "x": 1422.0,
+      "y": 1056.5,
+      "width": 27.0,
+      "height": 19.5
+    }
+  }
+}
+```
+
+Coordinates are in **window-frame logical points** (origin at the
+top-left of the frame *including* the native macOS title bar) —
+the same coordinate system `periscope click --x --y` expects.  No
+transform is needed between the dump and a click.
+
+Trigger a fresh dump from any shell without going through periscope:
+
+```sh
+kill -USR1 $(pgrep -f "target/debug/tolaria --vault")
+cat "$TMPDIR/tolaria-ui-tree-$(pgrep -f "target/debug/tolaria --vault").json"
+```
+
+### `click-id` — click an element by name
+
+```sh
+cargo run -q -p periscope -- click-id \
+    --title Tolaria --raise --id status-bar-theme-toggle
+```
+
+Same flags as `dump-tree` (`--title`/`--pid`, `--no-refresh`,
+`--timeout-ms`) plus:
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--id <name>` | required | The `.dump_as("name")` identifier to click. |
+| `--raise` | off | Bring the target forward via the Accessibility API before clicking (mirrors `screenshot --raise`). |
+
 The flow under the hood:
 
 1. `periscope` resolves the target window's PID (via `xcap`).
-2. `periscope` sends `SIGUSR1` to the PID.
-3. Tolaria's `ui::tree_dump` signal-handler thread snapshots its
+2. `periscope` reads the current `sequence` from the on-disk JSON
+   (or `0` if missing/malformed).
+3. `periscope` sends `SIGUSR1` to the PID.
+4. Tolaria's `ui::tree_dump` signal-handler thread snapshots its
    registry (every paint pass writes laid-out bounds for opted-in
-   elements) to `$TMPDIR/tolaria-ui-tree-<pid>.json` (atomic via
-   tmp + rename).
-4. `periscope` polls the file's `mtime` until it's strictly newer
-   than the previous value (2 s default deadline).
-5. `periscope` reads the JSON, looks up the requested name, and
-   calls `periscope::click(target, center_x, center_y)`.
+   elements), bumps `sequence`, and writes
+   `$TMPDIR/tolaria-ui-tree-<pid>.json` atomically (tmp + rename).
+5. `periscope` polls the file every 50 ms until `sequence`
+   strictly exceeds the value read in step 2, or `--timeout-ms`
+   expires.  Sequence-based freshness sidesteps the `mtime`
+   collision race two back-to-back writes would otherwise produce
+   on filesystems with coarse timestamp resolution.
+6. `periscope` reads the JSON, looks up `--id`, and calls
+   `periscope::click(target, center_x, center_y)` at the
+   geometric centre of the recorded bounds.
 
 Coordinate-space note: the JSON's `y` is **frame-relative** (includes
-the 28 pt native title bar offset).  `ui::tree_dump::set_window_y_offset(28.0)`
-in `tolaria/src/main.rs` adds the offset at register time so the
-dump and `periscope click --x --y` use the same coordinate system.
+the 28 pt native title bar offset).  GPUI hands `paint` callbacks
+content-area-relative bounds; `tolaria/src/main.rs` calls
+`ui::tree_dump::set_window_y_offset(workspace::NATIVE_TITLE_BAR_HEIGHT_PT)`
+at startup so the offset is applied at register time and the dump
+ends up in the same coordinate system as `periscope click --x --y`.
+Bumping the chrome's title-bar spacer stays a one-line change
+because the constant lives in `workspace` and is referenced from
+both the spacer `div` and the dump wiring.
 
 ### Opting an element in
 
@@ -152,19 +251,28 @@ div()
     .dump_as("status-bar-theme-toggle")
 ```
 
-Names are `&'static str` (zero-alloc) and overwrite in place on every
-paint pass — there's no cleanup story, so the registry always
-reflects the most recent layout.
+`.dump_as` wraps the inner element so its laid-out
+`Bounds<Pixels>` get written to the process-global registry from
+the `paint` lifecycle hook.  Names are `&'static str` (zero-alloc)
+and overwrite in place on every paint pass — the registry always
+reflects the most recent layout, no cleanup story.
+
+Pick names that survive layout shuffles: prefer
+`"status-bar-theme-toggle"` over `"toggle-3"`.  Periscope's
+`click-id` is a string lookup; renaming a registered element breaks
+every harness call site that depended on it.
 
 ### Why SIGUSR1?
 
 It's the cheapest cross-process trigger that doesn't bring up an
 IPC socket or a debug-only HTTP server.  Tolaria already runs an
 event loop; the signal-handler thread is one extra OS thread, IO
-happens off the signal-delivery path, and the bash one-liner
-`kill -USR1 <pid>` is all an external tool needs.  Release builds
-skip the install entirely (`#[cfg(debug_assertions)]`), so the
-developer-facing IPC channel never ships.
+happens off the signal-delivery path
+(`signal-hook::iterator::Signals` uses an atomic pipe), and the
+bash one-liner `kill -USR1 <pid>` is all an external tool needs.
+Release builds skip the install entirely
+(`#[cfg(debug_assertions)]` in `crates/tolaria/src/main.rs`), so
+the developer-facing IPC channel never ships.
 
 ---
 
