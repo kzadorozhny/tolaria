@@ -21,13 +21,12 @@ MVP cut definition.  Original full roadmap preserved in §A of
 | **4-MVP — Editor host integration** | ✅ done | `8c31dd32` / `a6d221ec` / `bc69b714` | +29 (187) | `editor_bridge`, `note_item`; `editor-host/` Vite project |
 | **5-MVP — MVP wiring + launch** | ✅ done | `f3eef114` / `e0a2b6f0` / `11ace568` | +4 (191) | `tolaria --vault`; chrome `from_vault`; `open_note` helper; IPC channel routing; NoteListPane mounted in left dock + OpenNoteEvent subscription |
 | **6-MVP — Rust e2e screenshot harness** | ✅ done | `9509f092` | +1 (192) | `periscope` (xcap + accessibility; `screenshot`/`watch`/`list` CLI; smoke test spawns tolaria + asserts PNG > 10 kB) |
-| **— MVP CUT** | | | | App opens local vault, navigates, renders + saves notes.  Tauri stack still parallel. |
-| 6 — Remaining chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` |
-| 7 — `gpui-component` eval | ⏳ scheduled | — | — | Decision matrix per [`eval-gpui-component-removal.md`](eval-gpui-component-removal.md) |
-| 8 — Service expansion | ⏳ planned | — | — | `git_provider`, full `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`; wire AI/search/settings_panel chrome to real services |
-| 9 — Parity hardening | ⏳ planned | — | — | Multi-tab Pane UX; autogit + conflict resolver; onboarding; measurement gate |
-| 10 — Cut-over | ⏳ planned | — | — | `src-tauri/` deleted; `src/` pruned to carry-overs; superseded ADRs flipped; signing rewired |
-| 11 — Post-cutover | ⏳ planned | — | — | Windows / Linux feature flags; iPad strategy; native-editor R&D |
+| **✅ MVP CUT** | shipped | `9509f092` | 192 | App opens local vault, navigates, renders + saves notes.  Tauri stack still parallel. |
+| 5d-followup — flicker + first-flash fix | ⏳ pending commit | — | +2 (209) | `NoteItem::open_in_webview` reuses the WKWebView across note clicks; `open_note::preload_blank_webview` constructs the WKWebView at workspace startup so the first click is an IPC swap instead of an NSView allocation.  Closes the visible flicker reported during MVP dogfooding. |
+| 6 — Remaining chrome surfaces + visual fidelity pass | ⏳ active | — | — | Stream (a) — visible chrome parity against `tolaria-demo-vault-v2-{light,dark}.png`: sidebar / note-list / status-bar / window-chrome.  Stream (b) — missing modals: `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup`.  Stream (a) runs first. |
+| 6a — 4-column workspace + sidebar mount + status bar + CSS-derived theme | ⏳ pending commit | — | (folded into 209) | Workspace gains a fixed `note_list_column` between left dock and center group so `sidebar_panel` (vault tree) and `note_list_pane` are side-by-side, matching the reference.  Dock no longer clamps its own width (resizable panel parent owns it).  `min_h_0 + overflow_hidden` on the row prevents tall sidebars from pushing the status bar off-screen.  `status_bar` rewritten to a 2-cluster layout (`demo-vault-v2  0.1.0` ↔ `Git disabled · MCP · Claude · Contribute · Docs · Theme · Settings`).  `theme::palette::{apply_light, apply_dark}` overwrites `gpui_component::ThemeColor` with values derived from `src/index.css` so the chrome matches the Tauri palette token-for-token. |
+| 7 — Service expansion | ⏳ planned | — | — | `git_provider`, full `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`; wire AI/search/settings_panel chrome to real services |
+| 8 — Parity hardening | ⏳ planned | — | — | Multi-tab Pane UX; autogit + conflict resolver; onboarding; measurement gate |
 
 ---
 

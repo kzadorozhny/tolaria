@@ -6,6 +6,44 @@
 >
 > See [`mvp-scope.md`](mvp-scope.md) for the MVP cut definition.
 
+## Visual guide
+
+[`tolaria-demo-vault-v2-light.png`](tolaria-demo-vault-v2-light.png)
+and [`tolaria-demo-vault-v2-dark.png`](tolaria-demo-vault-v2-dark.png)
+are the authoritative visual targets for every chrome component the
+native GPUI shell ships.  The dark variant is reached in the reference
+app via the moon-icon theme switcher at the right end of the status
+bar.  Every implementation, in any phase, must strive for the
+**minimum visible delta** against these screenshots — same spacings,
+weights, colours, glyph treatment, row geometry — in **both** light
+and dark modes.
+
+Per-panel match-to-image notes live in
+[`phase-2d-next.md` § Visual guide](phase-2d-next.md#visual-guide-authoritative).
+New chrome surfaces (Phase 6 modals, Phase 8/9 service-wired panels)
+inherit the same constraint: when in doubt, sample pixels off the
+reference images instead of improvising.
+
+The periscope harness ([`e2e-harness.md`](e2e-harness.md)) is the
+verification loop: capture the live app in both themes, diff against
+these images, refine.  To regenerate the references, launch the
+shipped Tauri build (`/Applications/Tolaria.app/Contents/MacOS/tolaria`)
+on `demo-vault-v2/`, capture with `periscope screenshot --pid <pid>`,
+click the moon-icon at the bottom-right of the status bar to flip
+themes, and capture again.
+
+### React source = behavioural reference
+
+The screenshots lock the look; the existing React + TypeScript
+implementations under `src/components/` (the Tauri-era frontend) lock
+the behaviour.  When porting a chrome surface to Rust, **read the
+React counterpart first** and follow it as the spec — hover / active
+states, count derivation, keyboard handling, multi-select model,
+sort/filter rules, copy text, and edge cases all live there (and in
+the colocated `*.test.{ts,tsx}` files).  The per-crate React ↔ Rust
+mapping is in
+[`phase-2d-next.md` § React source = behavioural reference](phase-2d-next.md#react-source--behavioural-reference).
+
 ## Phase order
 
 | # | Name | Cut | Notes |
@@ -16,16 +54,14 @@
 | 2b | First chrome surfaces | ✅ shipped | `status_bar`/`breadcrumb_bar`/`toasts`/`banners` |
 | 2c | Chrome wiring + TOLARIA_MOCK | ✅ shipped | 3-dock layout populated; typed toasts; mock-globals bootstrap |
 | 2d | Big panels | ✅ shipped | `sidebar_panel`/`inspector_panel`/`ai_panel`/`search_panel`/`settings_panel`/`diff_view`/`note_list_pane` |
-| **3-MVP** | **Vault service (minimal)** | ⏳ MVP-blocker | `vault` crate: open dir, list, read, save, basic notify.  Shape-compatible swap with `mock_fixtures::MockVault`. |
-| **4-MVP** | **Editor host integration** | ⏳ MVP-blocker | `editor_host/` Vite project, `editor_bridge` crate, `note_item` crate (per-note `WKWebView` via `gpui-wry`).  Per ADR-0115 §4 + §5. |
-| **5-MVP** | **MVP wiring + launch** | ⏳ MVP-blocker | `tolaria --vault <path>` CLI arg; swap `sidebar_panel` / `note_list_pane` from MockVault to real `vault::Vault` global; open-note → spawn `note_item` in center Pane. |
-| **— MVP cut —** | | | App opens local vault, navigates, renders + saves notes.  Tauri stack still alongside. |
-| 6 | Remaining chrome surfaces | ⏳ planned | `command_palette`/`quick_open`/`dialogs`/`wikilink_inputs`/`image_lightbox`/`emoji_picker`/`startup` (was Phase 2e in original plan) |
-| 7 | `gpui-component` eval | ⏳ scheduled | Decision matrix per [`eval-gpui-component-removal.md`](eval-gpui-component-removal.md) ; keep / pin / vendor / replace |
+| **3-MVP** | Vault service (minimal) | ✅ shipped | `vault` crate: open dir, list, read, save, basic notify.  Shape-compatible swap with `mock_fixtures::MockVault`. |
+| **4-MVP** | Editor host integration | ✅ shipped | `editor_host/` Vite project, `editor_bridge` crate, `note_item` crate (per-note `WKWebView` via `gpui-wry`).  Per ADR-0115 §4 + §5. |
+| **5-MVP** | MVP wiring + launch | ✅ shipped | `tolaria --vault <path>` CLI arg; swap `sidebar_panel` / `note_list_pane` from MockVault to real `vault::Vault` global; open-note → spawn `note_item` in center Pane. |
+| **6-MVP** | Rust e2e screenshot harness | ✅ shipped | `periscope` crate; xcap + AX bindings; CLI; smoke test.  Closes the diff-against-screenshot loop. |
+| **✅ MVP cut** | | shipped | App opens local vault, navigates, renders + saves notes.  Tauri stack still alongside. |
+| **6** | **Remaining chrome surfaces + visual fidelity pass** | ⏳ active | Two streams:  **(a) visible chrome parity** — sidebar/note-list/status-bar/window-chrome polish until live capture matches `tolaria-demo-vault-v2.png` row-by-row;  **(b) missing modal surfaces** — `command_palette`/`quick_open`/`dialogs`/`wikilink_inputs`/`image_lightbox`/`emoji_picker`/`startup`.  Stream (a) is the higher visible delta and runs first. |
 | 8 | Service expansion | ⏳ planned | Remaining services: `git_provider`, full `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`.  Wire AI/search/settings_panel chrome to real services. |
 | 9 | Parity hardening | ⏳ planned | Multi-tab `Pane` UX; autogit + conflict resolver; onboarding flow; measurement gate (memory, startup time). |
-| 10 | Cut-over | ⏳ planned | Delete `src-tauri/`; prune `src/` to editor-host carry-overs; flip superseded ADRs (0001/0003/0030/0052/0053/0079/0080/0083/0104/0106); rewire signing + `script/bundle-mac`; reset `.codescene-thresholds` per ADR-0064. |
-| 11 | Post-cutover follow-up | ⏳ planned | Re-enable Windows / Linux behind feature flags; iPad strategy; possibly start native-GPUI editor R&D. |
 
 ## Why MVP-first
 
