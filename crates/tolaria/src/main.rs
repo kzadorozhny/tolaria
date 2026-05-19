@@ -241,12 +241,40 @@ mod macos {
                 use note_list_pane::{NoteListPane, OpenNoteEvent};
                 use workspace::TolariaWorkspace;
 
+                use sidebar_panel::SidebarPanel;
+
+                let sidebar = cx.new(|cx| SidebarPanel::from_or_empty(cx));
                 let note_list = cx.new(|cx| NoteListPane::from_or_empty(cx));
+                // Slot holding the currently mounted `NoteItem` so
+                // successive `OpenNoteEvent`s reuse the same entity
+                // (and underlying WKWebView) instead of constructing a
+                // new one — the latter is what produced the flicker.
+                let active_note_item: crate::open_note::ActiveNoteItemSlot =
+                    std::rc::Rc::new(std::cell::RefCell::new(None));
                 cx.new(|model_cx| {
-                    let workspace = TolariaWorkspace::empty(window, model_cx);
-                    workspace.attach_left_dock(note_list.clone(), model_cx);
+                    let mut workspace = TolariaWorkspace::empty(window, model_cx);
+                    // Sidebar (vault tree) on the left, note list in
+                    // its own column between sidebar and editor —
+                    // matches `tolaria-demo-vault-v2.png`.
+                    workspace.attach_left_dock(sidebar.clone(), model_cx);
+                    workspace.attach_note_list_column(note_list.clone());
+                    // Eagerly mount a blank WKWebView so the editor
+                    // NSView is constructed (and painted) before the
+                    // user clicks anything — avoids the black NSView
+                    // flash on first open.  The editor shows its
+                    // "Select a note…" placeholder until a click
+                    // swaps real content in.
+                    if let Err(e) = crate::open_note::preload_blank_webview(
+                        &workspace,
+                        &active_note_item,
+                        window,
+                        model_cx,
+                    ) {
+                        log::error!("preload_blank_webview failed: {e:#}");
+                    }
                     // Subscribe inside the workspace's Context so the
                     // subscription lifetime tracks the workspace entity.
+                    let slot = active_note_item.clone();
                     model_cx
                         .subscribe_in(
                             &note_list,
@@ -257,9 +285,9 @@ mod macos {
                                 // (which takes `&self`) directly on it instead
                                 // of re-entering via `entity.update(...)`.  See
                                 // `open_note.rs` for the re-entrancy story.
-                                if let Err(e) =
-                                    crate::open_note::open_note(ws_view, event.id, window, cx)
-                                {
+                                if let Err(e) = crate::open_note::open_note(
+                                    ws_view, event.id, &slot, window, cx,
+                                ) {
                                     log::error!("open_note failed: {e:#}");
                                 }
                             },

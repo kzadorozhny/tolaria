@@ -29,10 +29,7 @@ use std::collections::BTreeSet;
 use gpui::{
     div, px, App, Context, IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Window,
 };
-use gpui_component::{
-    button::{Button, ButtonVariants as _},
-    ActiveTheme, StyledExt as _,
-};
+use gpui_component::{ActiveTheme, StyledExt as _};
 use mock_fixtures::{MockVault, NoteKind};
 use std::path::PathBuf;
 use vault::Vault;
@@ -83,6 +80,9 @@ pub const ACTIVATION_PRIORITY: u32 = 10;
 /// [`SidebarPanel::from_mock`] panics if the [`MockVault`] global has not been
 /// installed on `cx` prior to the call.
 pub struct SidebarPanel {
+    /// Total number of notes — drives the "All Notes" row's count chip
+    /// and the fallback for empty vault state.
+    total_count: usize,
     types: Vec<TypeEntry>,
     views: Vec<SavedView>,
     folders: Vec<FolderEntry>,
@@ -94,6 +94,7 @@ impl SidebarPanel {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            total_count: 0,
             types: Vec::new(),
             views: Vec::new(),
             folders: Vec::new(),
@@ -234,6 +235,7 @@ impl SidebarPanel {
             .collect();
 
         Self {
+            total_count: markdown_count + asset_count + folder_count,
             types,
             views,
             folders,
@@ -306,94 +308,158 @@ fn kind_label(kind: NoteKind) -> &'static str {
 
 impl Render for SidebarPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let header_color = cx.theme().muted_foreground;
+        let theme = cx.theme();
+        // gpui-component ships a dedicated `sidebar_*` palette that
+        // mirrors the dock-chrome semantics in
+        // `tolaria-demo-vault-v2.png`: distinct bg, accent fill for
+        // the active row, and a muted foreground for section headers.
+        let bg = theme.sidebar;
+        let border = theme.sidebar_border;
+        let fg = theme.sidebar_foreground;
+        let muted = theme.muted_foreground;
+        let accent_bg = theme.sidebar_accent;
+        let accent_fg = theme.sidebar_accent_foreground;
 
-        // Types section rows.
-        let type_rows: Vec<gpui::AnyElement> = self
-            .types
-            .iter()
-            .enumerate()
-            .map(|(i, entry)| {
-                let label =
-                    SharedString::from(format!("{} {}", kind_label(entry.kind), entry.count));
-                Button::new(("sidebar-type", i))
-                    .label(label)
-                    .ghost()
-                    .into_any_element()
-            })
-            .collect();
+        let fixed_top = vec![
+            // (label, count, selected)
+            ("Inbox", 0usize, false),
+            ("All Notes", self.total_count, true),
+            ("Archive", 0usize, false),
+        ];
 
-        // Views section rows.
-        let view_rows: Vec<gpui::AnyElement> = self
-            .views
-            .iter()
-            .enumerate()
-            .map(|(i, view)| {
-                let label = SharedString::from(format!("{} {}", view.name, view.count));
-                Button::new(("sidebar-view", i))
-                    .label(label)
-                    .ghost()
-                    .into_any_element()
-            })
-            .collect();
+        let fixed_rows =
+            fixed_top
+                .into_iter()
+                .enumerate()
+                .map(move |(i, (label, count, selected))| {
+                    sidebar_row(i, label, count, selected, accent_bg, accent_fg, muted)
+                });
 
-        // Folders section rows with depth-proportional left indent.
-        let folder_rows: Vec<gpui::AnyElement> = self
-            .folders
-            .iter()
-            .enumerate()
-            .map(|(i, folder)| {
-                let indent = px(f32::from(folder.depth) * 12.0);
-                div()
-                    .pl(indent)
-                    .child(
-                        Button::new(("sidebar-folder", i))
-                            .label(folder.path.clone())
-                            .ghost(),
-                    )
-                    .into_any_element()
-            })
-            .collect();
+        let type_rows = self.types.iter().enumerate().map(|(i, entry)| {
+            sidebar_row(
+                100 + i,
+                kind_label(entry.kind),
+                entry.count,
+                false,
+                accent_bg,
+                accent_fg,
+                muted,
+            )
+        });
+
+        let view_rows = self.views.iter().enumerate().map(|(i, view)| {
+            sidebar_row(
+                200 + i,
+                view.name.as_ref(),
+                view.count,
+                false,
+                accent_bg,
+                accent_fg,
+                muted,
+            )
+        });
+
+        // Truncate folder paths to their final segment for display so
+        // the narrow column doesn't ellipsise everything to the prefix.
+        let folder_rows = self.folders.iter().enumerate().map(|(i, folder)| {
+            let leaf = folder
+                .path
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| folder.path.as_ref());
+            sidebar_folder_row(300 + i, leaf, folder.depth, muted)
+        });
 
         div()
             .flex()
             .flex_col()
             .h_full()
             .w_full()
-            // ── Types ──────────────────────────────────────────────────────
-            .child(
-                div()
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(header_color)
-                    .child("Types"),
-            )
-            .children(type_rows)
-            // ── Views ──────────────────────────────────────────────────────
-            .child(
-                div()
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(header_color)
-                    .child("Views"),
-            )
+            .bg(bg)
+            .text_color(fg)
+            .border_r_1()
+            .border_color(border)
+            .py(px(8.0))
+            // Top fixed group: Inbox / All Notes / Archive.
+            .children(fixed_rows)
+            // VIEWS section.
+            .child(section_header("VIEWS", muted))
             .children(view_rows)
-            // ── Folders ────────────────────────────────────────────────────
-            .child(
-                div()
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(header_color)
-                    .child("Folders"),
-            )
+            // TYPES section.
+            .child(section_header("TYPES", muted))
+            .children(type_rows)
+            // FOLDERS section.
+            .child(section_header("FOLDERS", muted))
             .children(folder_rows)
     }
+}
+
+/// One small-caps section header rendered between two row groups.
+fn section_header(label: &'static str, muted: gpui::Hsla) -> gpui::AnyElement {
+    div()
+        .px(px(12.0))
+        .pt(px(14.0))
+        .pb(px(4.0))
+        .text_color(muted)
+        .text_xs()
+        .font_semibold()
+        .child(SharedString::new_static(label))
+        .into_any_element()
+}
+
+/// One regular sidebar row: label on the left, count chip on the right.
+///
+/// `selected` paints the row full-width with the theme accent
+/// background; `accent_fg` overrides the label colour so it stays
+/// legible against the accent fill.
+fn sidebar_row(
+    _ix: usize,
+    label: &str,
+    count: usize,
+    selected: bool,
+    accent_bg: gpui::Hsla,
+    accent_fg: gpui::Hsla,
+    muted: gpui::Hsla,
+) -> gpui::AnyElement {
+    let row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .w_full()
+        .px(px(12.0))
+        .py(px(5.0))
+        .text_sm()
+        .child(div().flex_1().child(SharedString::from(label.to_string())))
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(SharedString::from(format!("{count}"))),
+        );
+    if selected {
+        row.bg(accent_bg).text_color(accent_fg).into_any_element()
+    } else {
+        row.into_any_element()
+    }
+}
+
+/// One folder row with depth-proportional left padding.  Count chip is
+/// suppressed because the count of notes per folder is not yet
+/// computed (Phase 7+ work).
+fn sidebar_folder_row(_ix: usize, label: &str, depth: u8, _muted: gpui::Hsla) -> gpui::AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .w_full()
+        .pl(px(12.0 + f32::from(depth) * 12.0))
+        .pr(px(12.0))
+        .py(px(5.0))
+        .text_sm()
+        .child(SharedString::from(label.to_string()))
+        .into_any_element()
 }
 
 // ---------------------------------------------------------------------------

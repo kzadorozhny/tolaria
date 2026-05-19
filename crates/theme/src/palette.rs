@@ -1,0 +1,190 @@
+//! Tolaria-branded colour palette, derived from `src/index.css`.
+//!
+//! `src/index.css` is the authoritative theme contract for the
+//! Tauri-era app; the Rust shell must reproduce those exact values so
+//! the native chrome lines up pixel-for-pixel with the reference
+//! screenshots [`tolaria-demo-vault-v2-light.png`] /
+//! [`tolaria-demo-vault-v2-dark.png`].  The mapping below preserves
+//! the shadcn aliases (`background`, `foreground`, `sidebar`,
+//! `accent`, `primary`, …) and points each `gpui_component::ThemeColor`
+//! field at the matching CSS variable.
+//!
+//! Keep this file in lockstep with `src/index.css` — any CSS variable
+//! change there must land here in the same commit.
+//!
+//! Values are stored as 24-bit hex (`0xRRGGBB`) or 32-bit hex with
+//! alpha (`0xRRGGBBAA`).  rgba()-style CSS values are rounded to the
+//! nearest 8-bit alpha — the eyeballed difference is well below the
+//! periscope diff threshold.
+
+use gpui::{rgb, rgba, Hsla};
+use gpui_component::theme::{Theme, ThemeColor};
+
+fn h(c: u32) -> Hsla {
+    rgb(c).into()
+}
+
+fn ha(c: u32) -> Hsla {
+    rgba(c).into()
+}
+
+/// Overwrite `theme`'s `ThemeColor` block with the Tauri-era **light**
+/// palette from `src/index.css`.
+pub fn apply_light(theme: &mut Theme) {
+    let c: &mut ThemeColor = theme;
+
+    // --- Surfaces (shadcn aliases at the bottom of the light block) ---
+    // NOTE: `gpui_component::ThemeColor` has no dedicated `card`
+    // token — chrome that wants a card surface reads `popover`
+    // (visually equivalent in both light and dark).
+    c.background = h(0xFFFFFF); // --surface-app
+    c.popover = h(0xFFFFFF); // --surface-popover, also covers --surface-card
+    c.popover_foreground = h(0x37352F);
+    c.sidebar = h(0xF7F6F3); // --surface-sidebar
+    c.sidebar_foreground = h(0x37352F);
+    c.sidebar_border = h(0xE9E9E7);
+    c.sidebar_primary = h(0x155DFF);
+    c.sidebar_primary_foreground = h(0xFFFFFF);
+    c.sidebar_accent = h(0xE8F4FE); // --state-selected
+    c.sidebar_accent_foreground = h(0x37352F);
+
+    // --- Text + borders ---
+    c.foreground = h(0x37352F); // --text-primary
+    c.muted_foreground = h(0x787774); // --text-secondary
+    c.muted = h(0xF0F0EF); // --state-hover-subtle
+    c.border = h(0xE9E9E7); // --border-default
+    c.input = h(0xE9E9E7); // --border-input
+    c.ring = h(0x155DFF); // --state-focus-ring
+
+    // --- Primary / accent (shadcn names) ---
+    c.primary = h(0x155DFF); // --accent-blue
+    c.primary_active = h(0x0D4AD6);
+    c.primary_hover = h(0x0D4AD6);
+    c.primary_foreground = h(0xFFFFFF);
+    c.secondary = h(0xEBEBEA); // --state-hover
+    c.secondary_active = h(0xEBEBEA);
+    c.secondary_hover = h(0xEBEBEA);
+    c.secondary_foreground = h(0x37352F);
+    c.accent = h(0xEBEBEA); // --state-hover
+    c.accent_foreground = h(0x37352F);
+    c.selection = ha(0x155DFF40); // --state-active w/ visible alpha
+
+    // --- Feedback ---
+    c.danger = h(0xE53E3E); // --accent-red
+    c.danger_active = h(0xE53E3E);
+    c.danger_hover = h(0xE53E3E);
+    c.danger_foreground = h(0xFFFFFF);
+    c.success = h(0x38A169); // --accent-green
+    c.success_active = h(0x38A169);
+    c.success_hover = h(0x38A169);
+    c.success_foreground = h(0xFFFFFF);
+    c.warning = h(0xD9730D); // --accent-orange
+    c.warning_active = h(0xD9730D);
+    c.warning_hover = h(0xD9730D);
+    c.warning_foreground = h(0xFFFFFF);
+    c.info = h(0x155DFF);
+    c.info_active = h(0x155DFF);
+    c.info_hover = h(0x155DFF);
+    c.info_foreground = h(0xFFFFFF);
+
+    // --- Misc surfaces ---
+    c.tab_bar = h(0xF7F6F3);
+    c.tab = h(0xFFFFFF);
+    c.tab_active = h(0xFFFFFF);
+    c.tab_foreground = h(0x787774);
+    c.tab_active_foreground = h(0x37352F);
+    c.list = h(0xFFFFFF);
+    c.list_active = h(0xE8F4FE);
+    c.list_hover = h(0xF0F0EF);
+    c.list_even = h(0xFFFFFF);
+    c.list_head = h(0xF7F6F3);
+    c.list_active_border = h(0x155DFF);
+    c.scrollbar = h(0xF7F6F3);
+    c.scrollbar_thumb = h(0xD9D9D6);
+    c.scrollbar_thumb_hover = h(0xB4B4B4);
+    c.drag_border = h(0x155DFF);
+    c.drop_target = ha(0x155DFF24); // --state-drag-target
+    c.caret = h(0x155DFF);
+    c.link = h(0x155DFF);
+    c.link_active = h(0x0D4AD6);
+    c.link_hover = h(0x0D4AD6);
+}
+
+/// Overwrite `theme`'s `ThemeColor` block with the Tauri-era **dark**
+/// palette from `src/index.css`.
+pub fn apply_dark(theme: &mut Theme) {
+    let c: &mut ThemeColor = theme;
+
+    // --- Surfaces ---
+    c.background = h(0x1F1E1B); // --surface-app
+    c.popover = h(0x292823); // also covers --surface-card
+    c.popover_foreground = h(0xE6E1D8);
+    c.sidebar = h(0x191814);
+    c.sidebar_foreground = h(0xE6E1D8);
+    c.sidebar_border = h(0x34322D);
+    c.sidebar_primary = h(0x78A4FF);
+    c.sidebar_primary_foreground = h(0x151411);
+    c.sidebar_accent = h(0x1E344C); // --state-selected (dark)
+    c.sidebar_accent_foreground = h(0xE6E1D8);
+
+    // --- Text + borders ---
+    c.foreground = h(0xE6E1D8);
+    c.muted_foreground = h(0xB8B1A6);
+    c.muted = h(0x262520);
+    c.border = h(0x34322D);
+    c.input = h(0x3A3832);
+    c.ring = h(0x78A4FF);
+
+    // --- Primary / accent ---
+    c.primary = h(0x78A4FF);
+    c.primary_active = h(0x9BBEFF);
+    c.primary_hover = h(0x9BBEFF);
+    c.primary_foreground = h(0x151411);
+    c.secondary = h(0x2D2B27);
+    c.secondary_active = h(0x2D2B27);
+    c.secondary_hover = h(0x2D2B27);
+    c.secondary_foreground = h(0xE6E1D8);
+    c.accent = h(0x2D2B27);
+    c.accent_foreground = h(0xE6E1D8);
+    c.selection = ha(0x78A4FF40);
+
+    // --- Feedback ---
+    c.danger = h(0xFF8A86);
+    c.danger_active = h(0xFF8A86);
+    c.danger_hover = h(0xFF8A86);
+    c.danger_foreground = h(0x151411);
+    c.success = h(0x79D89D);
+    c.success_active = h(0x79D89D);
+    c.success_hover = h(0x79D89D);
+    c.success_foreground = h(0x151411);
+    c.warning = h(0xF3A15B);
+    c.warning_active = h(0xF3A15B);
+    c.warning_hover = h(0xF3A15B);
+    c.warning_foreground = h(0x151411);
+    c.info = h(0x78A4FF);
+    c.info_active = h(0x78A4FF);
+    c.info_hover = h(0x78A4FF);
+    c.info_foreground = h(0x151411);
+
+    // --- Misc surfaces ---
+    c.tab_bar = h(0x191814);
+    c.tab = h(0x23221F);
+    c.tab_active = h(0x23221F);
+    c.tab_foreground = h(0xB8B1A6);
+    c.tab_active_foreground = h(0xE6E1D8);
+    c.list = h(0x23221F);
+    c.list_active = h(0x1E344C);
+    c.list_hover = h(0x2D2B27);
+    c.list_even = h(0x1F1E1B);
+    c.list_head = h(0x191814);
+    c.list_active_border = h(0x78A4FF);
+    c.scrollbar = h(0x191814);
+    c.scrollbar_thumb = h(0x46433B);
+    c.scrollbar_thumb_hover = h(0x625B53);
+    c.drag_border = h(0x78A4FF);
+    c.drop_target = ha(0x78A4FF33);
+    c.caret = h(0x78A4FF);
+    c.link = h(0x78A4FF);
+    c.link_active = h(0x9BBEFF);
+    c.link_hover = h(0x9BBEFF);
+}

@@ -23,8 +23,8 @@
 //! `toast_count`) is unchanged.
 
 use gpui::{
-    div, px, App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render, Styled,
-    Window,
+    div, px, AnyView, App, AppContext as _, Context, Entity, IntoElement, ParentElement, Render,
+    Styled, Window,
 };
 use gpui_component::{
     resizable::{h_resizable, resizable_panel},
@@ -50,6 +50,13 @@ pub struct TolariaWorkspace {
     modal_layer: Entity<ModalLayer>,
     toast_layer: Entity<ToastLayer>,
     left_dock: Entity<Dock>,
+    /// Fixed-position column between the left dock and the center
+    /// `PaneGroup`.  Holds the vault note list — mirrors the two-column
+    /// "vault tree | note list" structure of `tolaria-demo-vault-v2.png`
+    /// where the left dock carries `sidebar_panel` and this column
+    /// carries `note_list_pane`.  `None` for tests / when no note list
+    /// is attached.
+    note_list_column: Option<AnyView>,
     right_dock: Entity<Dock>,
     bottom_dock: Entity<Dock>,
     center_group: Entity<PaneGroup>,
@@ -78,6 +85,7 @@ impl TolariaWorkspace {
             modal_layer,
             toast_layer,
             left_dock,
+            note_list_column: None,
             right_dock,
             bottom_dock,
             center_group,
@@ -135,6 +143,15 @@ impl TolariaWorkspace {
             .update(cx, |dock, cx| dock.set_panel(panel, cx));
     }
 
+    /// Mount `view` in the fixed-position column between the left
+    /// [`Dock`] and the center [`PaneGroup`].  Used to host
+    /// `note_list_pane::NoteListPane` next to the vault-tree sidebar,
+    /// matching the two-column layout in `tolaria-demo-vault-v2.png`.
+    /// Re-attaching replaces the previous occupant.
+    pub fn attach_note_list_column<V: Render + 'static>(&mut self, view: gpui::Entity<V>) {
+        self.note_list_column = Some(view.into());
+    }
+
     /// Append `item` to the center [`PaneGroup`]'s active [`Pane`].
     ///
     /// Creates a fresh `Pane` and pushes it onto the group if the group
@@ -175,6 +192,7 @@ impl Render for TolariaWorkspace {
         let left_dock = self.left_dock.clone();
         let right_dock = self.right_dock.clone();
         let center_group = self.center_group.clone();
+        let note_list_column = self.note_list_column.clone();
         // Paint our own `theme.background` instead of relying on
         // `gpui_component::Root` to bleed through.  Each pane/dock
         // returns a transparent `div()`, but the Metal window default
@@ -196,16 +214,44 @@ impl Render for TolariaWorkspace {
             .text_color(fg)
             // Native macOS title bar spacer (~28 pt).
             .child(div().h(px(28.0)))
-            // Horizontal split: Left Dock | Center PaneGroup | Right Dock.
-            // Phase 2b will wire ResizableState for drag-resize persistence.
-            .child(
-                div().flex_1().child(
-                    h_resizable("workspace-main-layout")
-                        .child(resizable_panel().child(left_dock))
-                        .child(resizable_panel().child(center_group))
-                        .child(resizable_panel().child(right_dock)),
-                ),
-            )
+            // Horizontal split: Left Dock | (Note List Column?) |
+            // Center PaneGroup | Right Dock.
+            //
+            // `.size(...)` on each panel is the *initial* width; the
+            // resizable group keeps its own keyed `ResizableState`
+            // (via the "workspace-main-layout" id), so the user's
+            // drag-resize survives subsequent renders.  Left, note
+            // list, and right are pinned to their dock defaults; the
+            // center gets the remaining space implicitly.  Without an
+            // initial width the panels split the row evenly, which
+            // hides the chrome at ~25% of window width on the first
+            // paint.
+            //
+            // The note-list column is rendered between the left dock
+            // and the center group when one is attached
+            // (`attach_note_list_column`) — matches the two-column
+            // sidebar + note-list layout in `tolaria-demo-vault-v2.png`.
+            .child({
+                let mut panels: Vec<gpui_component::resizable::ResizablePanel> =
+                    vec![resizable_panel().size(px(200.0)).child(left_dock)];
+                if let Some(view) = note_list_column {
+                    panels.push(resizable_panel().size(px(300.0)).child(view));
+                }
+                panels.push(resizable_panel().child(center_group));
+                panels.push(resizable_panel().size(px(240.0)).child(right_dock));
+                // `min_h_0` + `overflow_hidden` is the classic flex
+                // trick that lets this row shrink below its content's
+                // natural height.  Without it, an overflowing panel
+                // (e.g. a tall sidebar list) pushes its flex_col
+                // siblings — title spacer, bottom dock, status bar —
+                // off the bottom of the window and they become
+                // invisible.
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(h_resizable("workspace-main-layout").children(panels))
+            })
             // Bottom dock (empty placeholder in Phase 2a).
             .child(self.bottom_dock.clone())
             // Status bar (Phase 2c — empty unless mock globals installed).

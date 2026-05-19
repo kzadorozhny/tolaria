@@ -29,17 +29,18 @@
 use std::collections::HashSet;
 
 use chrono::{DateTime, Utc};
+use gpui::prelude::FluentBuilder as _;
 use gpui::EventEmitter;
 use gpui::{
-    div, px, AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px, rems, AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Window,
 };
 use gpui_component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
     h_flex,
     scroll::ScrollableElement as _,
-    v_flex, ActiveTheme,
+    v_flex, ActiveTheme, StyledExt as _,
 };
 use mock_fixtures::{MockVault, NoteId, NoteKind};
 use vault::Vault;
@@ -70,8 +71,7 @@ pub struct OpenNoteEvent {
 struct RowData {
     id: NoteId,
     title: SharedString,
-    kind_label: &'static str,
-    date_str: SharedString,
+    snippet: SharedString,
     checked: bool,
 }
 
@@ -86,6 +86,51 @@ pub struct NoteEntry {
     pub kind: NoteKind,
     /// Last-modified timestamp (UTC).
     pub modified: DateTime<Utc>,
+    /// First non-frontmatter, non-heading line of the note body,
+    /// truncated to fit the row.  Empty when the body is empty or
+    /// the loader did not populate it.
+    pub snippet: SharedString,
+}
+
+/// Extract a one-line preview from a note's raw markdown body.
+///
+/// Strips a YAML frontmatter block (when present), then returns the
+/// first non-empty, non-heading line truncated to `SNIPPET_MAX_CHARS`
+/// graphemes with a trailing ellipsis if the line was longer.
+fn extract_snippet(body: &str) -> String {
+    const SNIPPET_MAX_CHARS: usize = 120;
+
+    let mut lines = body.lines().peekable();
+
+    // Skip a leading YAML frontmatter block: `---` ... `---`.
+    if lines.peek().map(|l| l.trim()) == Some("---") {
+        let _ = lines.next();
+        let mut closed = false;
+        for line in lines.by_ref() {
+            if line.trim() == "---" {
+                closed = true;
+                break;
+            }
+        }
+        if !closed {
+            return String::new();
+        }
+    }
+
+    for line in lines {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let count = t.chars().count();
+        if count <= SNIPPET_MAX_CHARS {
+            return t.to_string();
+        }
+        let mut out: String = t.chars().take(SNIPPET_MAX_CHARS).collect();
+        out.push('…');
+        return out;
+    }
+    String::new()
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +184,10 @@ impl NoteListPane {
                     title: note.title.clone(),
                     kind: note.kind,
                     modified: note.modified,
+                    // MockVault doesn't expose bodies; snippets stay
+                    // empty for the demo-mode path.  Real bodies show
+                    // up via `from_vault`.
+                    snippet: SharedString::default(),
                 });
             }
         }
@@ -162,11 +211,22 @@ impl NoteListPane {
         let mut entries = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(note) = executor.block_on(vault.note(id)) {
+                // Load the body to derive a one-line preview.  Cheap
+                // for the demo vault (~30 files); future work can
+                // batch this through a vault-side snippet cache.
+                let snippet = executor
+                    .block_on(vault.note_content(id))
+                    .ok()
+                    .as_deref()
+                    .map(extract_snippet)
+                    .unwrap_or_default()
+                    .into();
                 entries.push(NoteEntry {
                     id: note.id,
                     title: note.title.clone(),
                     kind: note.kind,
                     modified: note.modified,
+                    snippet,
                 });
             }
         }
@@ -315,12 +375,7 @@ impl Render for NoteListPane {
             .map(|e| RowData {
                 id: e.id,
                 title: e.title.clone(),
-                kind_label: match e.kind {
-                    NoteKind::Markdown => "Note",
-                    NoteKind::Asset => "Asset",
-                    NoteKind::Folder => "Folder",
-                },
-                date_str: e.modified.format("%b %d").to_string().into(),
+                snippet: e.snippet.clone(),
                 checked: self.selected.contains(&e.id),
             })
             .collect();
@@ -373,12 +428,44 @@ impl Render for NoteListPane {
                     };
 
                     let open_handle = entity.clone();
+                    // Card-style row matching `component/NoteListItem`
+                    // in `ui-design.pen`: padding [14, 16], gap 8,
+                    // title-row (Inter 13/500) above a snippet line
+                    // (Inter 12, muted, line-height 1.5).
+                    let content = v_flex()
+                        .flex_1()
+                        .gap_2()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .justify_between()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_medium()
+                                        .text_color(fg)
+                                        .child(row.title),
+                                ),
+                        )
+                        .when(!row.snippet.is_empty(), |this| {
+                            this.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .line_height(rems(1.5))
+                                    .child(row.snippet),
+                            )
+                        });
+
                     h_flex()
                         .id(("nlp-row", ix as u64))
                         .w_full()
-                        .px(px(8.0))
-                        .py(px(3.0))
+                        .items_start()
                         .gap_2()
+                        .px(px(16.0))
+                        .py(px(14.0))
                         .border_b_1()
                         .border_color(border_color)
                         .cursor_pointer()
@@ -386,14 +473,7 @@ impl Render for NoteListPane {
                             open_handle.update(cx, |this, cx| this.open(note_id, cx));
                         })
                         .child(checkbox)
-                        .child(div().flex_1().text_sm().text_color(fg).child(row.title))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(muted)
-                                .child(SharedString::new_static(row.kind_label)),
-                        )
-                        .child(div().text_xs().text_color(muted).child(row.date_str))
+                        .child(content)
                 }))
                 .into_any_element()
         };
@@ -580,6 +660,73 @@ mod tests {
 
         // Trigger a render cycle to exercise the bulk-bar branch.
         cx.run_until_parked();
+    }
+
+    /// `extract_snippet` skips a YAML frontmatter block, then takes
+    /// the first non-empty, non-heading line.
+    #[test]
+    fn extract_snippet_skips_frontmatter_and_headings() {
+        let body = "---\n\
+                    type: Topic\n\
+                    aliases: [foo]\n\
+                    ---\n\
+                    \n\
+                    # Heading\n\
+                    \n\
+                    The body line we want to preview.\n\
+                    Trailing content that should not appear.\n";
+        assert_eq!(
+            extract_snippet(body),
+            "The body line we want to preview.",
+            "snippet must be the first non-empty, non-heading line after frontmatter"
+        );
+    }
+
+    /// Long lines must be truncated with an ellipsis.
+    #[test]
+    fn extract_snippet_truncates_long_lines() {
+        let long: String = "x".repeat(200);
+        let snippet = extract_snippet(&long);
+        assert_eq!(snippet.chars().count(), 121, "120 chars + 1 ellipsis");
+        assert!(snippet.ends_with('…'));
+    }
+
+    /// An unterminated frontmatter must yield an empty snippet rather
+    /// than spilling the frontmatter contents into the preview.
+    #[test]
+    fn extract_snippet_handles_unterminated_frontmatter() {
+        let body = "---\n\
+                    type: Topic\n\
+                    aliases: [foo]\n";
+        assert_eq!(extract_snippet(body), "");
+    }
+
+    /// A body with no frontmatter still picks the first non-heading
+    /// content line.
+    #[test]
+    fn extract_snippet_no_frontmatter() {
+        let body = "# Title\n\n  \nActual preview line.\nMore.\n";
+        assert_eq!(extract_snippet(body), "Actual preview line.");
+    }
+
+    /// `from_vault` populates `NoteEntry::snippet` from each file body.
+    #[gpui::test]
+    fn from_vault_populates_snippet(cx: &mut TestAppContext) {
+        use std::fs;
+        install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("a.md"),
+            "---\ntype: Topic\n---\n\n# Heading\nFirst preview line.\nSecond line.\n",
+        )
+        .unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let pane = NoteListPane::from_vault(cx);
+            assert_eq!(pane.entries.len(), 1);
+            assert_eq!(pane.entries[0].snippet.as_ref(), "First preview line.");
+        });
     }
 
     /// `clear_selection` must reset selection count to zero.

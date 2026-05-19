@@ -35,8 +35,8 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
-use editor_bridge::{FromHost, NoteOpen, ToHost};
+use anyhow::{Context as _, Result};
+use editor_bridge::{encode_to_host, FromHost, NoteOpen, ToHost};
 use gpui::{
     div, App, Context, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window,
 };
@@ -116,6 +116,16 @@ pub struct NoteItem {
     title: SharedString,
     path: PathBuf,
     dirty: bool,
+    /// `true` once the editor host has emitted [`FromHost::Ready`].
+    /// `open_in_webview` uses this to decide between sending the
+    /// [`ToHost::NoteOpen`] immediately and stashing it in
+    /// `pending_open` so the dispatch loop can drain it once Ready
+    /// fires.
+    editor_ready: bool,
+    /// [`NoteOpen`] queued for delivery once the editor announces
+    /// Ready.  Drained by the dispatch task on receipt of
+    /// [`FromHost::Ready`].
+    pending_open: Option<NoteOpen>,
     #[cfg(target_os = "macos")]
     macos: MacosState,
 }
@@ -137,6 +147,8 @@ impl NoteItem {
             title: note.title,
             path: note.path,
             dirty: false,
+            editor_ready: false,
+            pending_open: None,
             #[cfg(target_os = "macos")]
             macos: MacosState::default(),
         }
@@ -161,7 +173,10 @@ impl NoteItem {
     /// unit-testable.
     pub fn apply_from_host(&mut self, msg: FromHost) -> Outcome {
         match msg {
-            FromHost::Ready => Outcome::None,
+            FromHost::Ready => {
+                self.editor_ready = true;
+                Outcome::None
+            }
             FromHost::Dirty(r) => {
                 if self.check_own("Dirty", r.id) {
                     self.dirty = true;
@@ -215,6 +230,75 @@ impl NoteItem {
         })
     }
 
+    /// Swap the note hosted in this item's WebView **without**
+    /// reconstructing the underlying WKWebView.  Updates `id`, `title`,
+    /// `path`, clears the dirty flag, and dispatches a fresh
+    /// [`ToHost::NoteOpen`] over the existing IPC channel.
+    ///
+    /// If the editor host has not yet emitted [`FromHost::Ready`], the
+    /// `NoteOpen` is queued in `pending_open` and drained the moment
+    /// Ready arrives — so the call is safe to make at any point in the
+    /// WebView's lifecycle.
+    ///
+    /// Eliminates the flicker that came from constructing a new
+    /// [`gpui_wry::WebView`] per note click in Phase 5d.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if [`encode_to_host`] fails (should not happen
+    /// — `NoteOpen` is serialisable by construction) or if the
+    /// underlying [`wry::WebView::evaluate_script`] call fails.
+    pub fn open_in_webview(
+        &mut self,
+        note: Note,
+        body: String,
+        cx: &mut Context<Self>,
+    ) -> Result<()> {
+        self.id = note.id;
+        self.title = note.title;
+        self.path = note.path;
+        self.dirty = false;
+
+        let payload = NoteOpen {
+            id: self.id,
+            path: self.path.display().to_string(),
+            body,
+        };
+
+        if self.editor_ready {
+            self.send_note_open(payload, cx)?;
+        } else {
+            self.pending_open = Some(payload);
+        }
+        cx.notify();
+        Ok(())
+    }
+
+    /// Serialise `payload` and inject it into the WKWebView via
+    /// `tolariaBridge.receive(...)`.  No-op on non-macOS builds.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    fn send_note_open(&self, payload: NoteOpen, cx: &Context<Self>) -> Result<()> {
+        let json = encode_to_host(&ToHost::NoteOpen(payload))
+            .context("encode_to_host(NoteOpen) failed")?;
+        #[cfg(target_os = "macos")]
+        if let Some(webview) = self.macos.webview.as_ref() {
+            // `tolariaBridge` is installed by editor-host's `onReceive`
+            // call once `ready` has been announced.  The dispatch loop
+            // only calls this after editor_ready is `true`, so the
+            // global is guaranteed to be present.
+            let js = format!(
+                "window.tolariaBridge && window.tolariaBridge.receive({});",
+                serde_json::to_string(&json).expect("string→json never fails"),
+            );
+            webview
+                .read(cx)
+                .raw()
+                .evaluate_script(&js)
+                .context("wry::WebView::evaluate_script(NoteOpen) failed")?;
+        }
+        Ok(())
+    }
+
     /// Spawn a detached foreground task that drains `rx` and routes
     /// each [`FromHost`] message through [`apply_from_host`][Self::apply_from_host].
     /// `PersistSave` outcomes call `vault::Vault::save` via the global
@@ -255,6 +339,16 @@ impl NoteItem {
                                 "PersistSave outcome but no Vault global installed; \
                                  body dropped (note id={id:?})"
                             );
+                        }
+                    }
+                    if this.editor_ready {
+                        if let Some(pending) = this.pending_open.take() {
+                            if let Err(e) = this.send_note_open(pending, cx) {
+                                log::warn!(
+                                    target: "note_item::ipc",
+                                    "draining pending NoteOpen failed: {e:#}"
+                                );
+                            }
                         }
                     }
                 });
@@ -305,9 +399,51 @@ impl Render for NoteItem {
 
 #[cfg(target_os = "macos")]
 impl NoteItem {
+    /// Build an *empty* `NoteItem` with a live WKWebView but no note
+    /// mounted.  The editor host renders its "Select a note…"
+    /// placeholder until [`open_in_webview`][Self::open_in_webview]
+    /// swaps a real note into it.
+    ///
+    /// Construction is the heavy step (NSView allocation, HTML load,
+    /// JS bootstrap — about 100-300 ms).  Calling this at workspace
+    /// startup means the user never sees the black NSView flash that
+    /// would otherwise occur on the first click.
+    ///
+    /// # Errors
+    ///
+    /// Same conditions as [`new_with_webview`][Self::new_with_webview]
+    /// — window-handle race, sandboxed CI host, wry build failure.
+    pub fn new_blank_with_webview(window: &mut Window, cx: &mut App) -> Result<gpui::Entity<Self>> {
+        use gpui::AppContext as _;
+
+        let (tx, rx) = flume::unbounded::<FromHost>();
+        let webview = spawn_webview(NoteId::from_raw(0), tx, window, cx)?;
+
+        let entity = cx.new(|_cx| Self {
+            id: NoteId::from_raw(0),
+            title: SharedString::default(),
+            path: PathBuf::new(),
+            dirty: false,
+            editor_ready: false,
+            pending_open: None,
+            macos: MacosState {
+                webview: Some(webview),
+                last_bounds: FrameSyncState::default(),
+            },
+        });
+
+        Self::install_dispatch_task(entity.downgrade(), rx, cx);
+
+        Ok(entity)
+    }
+
     /// Build a `NoteItem` with a live WKWebView hosting the embedded
     /// editor and a foreground task that routes IPC messages from the
     /// editor back into the entity.  macOS only.
+    ///
+    /// `body` is the on-disk content as of construction; it is queued
+    /// in `pending_open` and delivered to the editor host as a
+    /// [`ToHost::NoteOpen`] the moment [`FromHost::Ready`] arrives.
     ///
     /// # Errors
     ///
@@ -318,6 +454,7 @@ impl NoteItem {
     /// should surface a toast rather than panic.
     pub fn new_with_webview(
         note: Note,
+        body: String,
         window: &mut Window,
         cx: &mut App,
     ) -> Result<gpui::Entity<Self>> {
@@ -325,12 +462,19 @@ impl NoteItem {
 
         let (tx, rx) = flume::unbounded::<FromHost>();
         let webview = spawn_webview(note.id, tx, window, cx)?;
+        let pending_open = NoteOpen {
+            id: note.id,
+            path: note.path.display().to_string(),
+            body,
+        };
 
         let entity = cx.new(|_cx| Self {
             id: note.id,
             title: note.title,
             path: note.path,
             dirty: false,
+            editor_ready: false,
+            pending_open: Some(pending_open),
             macos: MacosState {
                 webview: Some(webview),
                 last_bounds: FrameSyncState::default(),
@@ -395,6 +539,14 @@ mod macos {
         let handle = window
             .window_handle()
             .context("window handle unavailable while building NoteItem WebView")?;
+
+        // NOTE: `WebViewBuilder::with_background_color` is a no-op on
+        // macOS in `lb-wry` 0.53.3 (only the iOS path applies the
+        // color).  The "black flash" before the first paint is
+        // therefore solved upstream: we eagerly construct the
+        // `NoteItem` at workspace startup (see
+        // `crate::open_note::preload_first_note`) so the WKWebView is
+        // already painted by the time the user clicks anything.
 
         let webview_raw = WebViewBuilder::new()
             .with_html(EDITOR_HOST_HTML)
@@ -689,6 +841,73 @@ mod tests {
             "EDITOR_HOST_HTML must contain `<div id=\"editor-root\">`; \
              rebuild editor-host/dist with `pnpm --ignore-workspace build`"
         );
+    }
+
+    #[test]
+    fn ready_marks_editor_ready_flag() {
+        let mut item = NoteItem::new_for_tests(fresh_note(1));
+        assert!(!item.editor_ready, "fresh NoteItem must not be ready yet");
+        let outcome = item.apply_from_host(FromHost::Ready);
+        assert_eq!(outcome, Outcome::None);
+        assert!(
+            item.editor_ready,
+            "apply_from_host(Ready) must flip editor_ready so pending_open drains"
+        );
+    }
+
+    /// Regression for the Phase 5d-followup flicker fix: swapping the
+    /// hosted note via `open_in_webview` updates id/title/path/dirty
+    /// atomically and queues the [`NoteOpen`] payload until the editor
+    /// announces `Ready`.  Locks the reuse contract that
+    /// `crate::open_note::open_note` relies on to keep a single
+    /// WKWebView alive across note clicks.
+    #[gpui::test]
+    fn open_in_webview_swaps_state_and_queues_until_ready(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+
+        let a = fresh_note(1);
+        let b = fresh_note(2);
+        let entity = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(a.clone())));
+
+        // Before Ready, `open_in_webview` must queue the payload.
+        cx.update(|cx| {
+            entity.update(cx, |item, cx| {
+                // Force-dirty so we can prove the swap clears it.
+                item.dirty = true;
+                item.open_in_webview(b.clone(), "body B".into(), cx)
+                    .expect("queue NoteOpen");
+                assert_eq!(item.id(), b.id);
+                assert!(!item.is_dirty(), "open_in_webview must clear dirty");
+                match &item.pending_open {
+                    Some(p) => {
+                        assert_eq!(p.id, b.id);
+                        assert_eq!(p.body, "body B");
+                    }
+                    None => panic!("pending_open must hold the queued NoteOpen before Ready"),
+                }
+            });
+        });
+
+        // After Ready, dispatch the pending payload would normally fire
+        // via the dispatch task; here we exercise the
+        // `editor_ready=true` path directly by simulating Ready and
+        // calling `open_in_webview` again — it must *not* queue.
+        cx.update(|cx| {
+            entity.update(cx, |item, cx| {
+                item.apply_from_host(FromHost::Ready);
+                // No live WebView in the test fixture, so the send is a
+                // no-op; the important contract is that `pending_open`
+                // is *not* re-populated on the Ready path.
+                item.pending_open = None;
+                item.open_in_webview(a.clone(), "body A".into(), cx)
+                    .expect("send NoteOpen");
+                assert_eq!(item.id(), a.id);
+                assert!(
+                    item.pending_open.is_none(),
+                    "post-Ready open_in_webview must dispatch directly, not queue"
+                );
+            });
+        });
     }
 
     /// End-to-end: `install_dispatch_task` routes a `FromHost::Save`

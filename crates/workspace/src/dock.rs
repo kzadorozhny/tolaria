@@ -116,12 +116,20 @@ impl Dock {
 
 impl Render for Dock {
     /// Pure pass-through render; observes nothing directly.
+    ///
+    /// Left/Right docks fill width and height of whatever container
+    /// wraps them — for the workspace that's a
+    /// `gpui_component::resizable::ResizablePanel`, which owns the
+    /// width and drives drag-to-resize.  Clamping to
+    /// `self.panel_size` here would override the resizable panel and
+    /// freeze the dock at its initial width; instead we let the
+    /// parent decide.  Bottom docks still own their height because
+    /// the workspace mounts the bottom dock outside the `h_resizable`
+    /// row (see `crates/workspace/src/workspace.rs:210`).
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         match &self.state {
             DockState::Open(panel) => match self.position {
-                DockPosition::Left | DockPosition::Right => {
-                    div().h_full().w(self.panel_size).child(panel.clone())
-                }
+                DockPosition::Left | DockPosition::Right => div().size_full().child(panel.clone()),
                 DockPosition::Bottom => div().w_full().h(self.panel_size).child(panel.clone()),
             },
             _ => div(),

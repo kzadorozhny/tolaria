@@ -1,59 +1,59 @@
 #![forbid(unsafe_code)]
-//! Status-bar chrome view for Tolaria (ADR-0115 Phase 2b).
+//! Status-bar chrome view for Tolaria (ADR-0115 Phase 2b → Phase 6
+//! visual-parity pass).
 //!
-//! Renders the thin strip at the bottom of the workspace window:
+//! Mirrors the Tauri-era `src/components/StatusBar.tsx` layout: a
+//! thin 30-pt strip pinned to the bottom of the workspace, with two
+//! clusters separated by a flexible spacer.
 //!
 //! ```text
-//! ┌──────────────────────────────────────────────────────┐
-//! │ demo-vault-v2 │ main │ ~4 │                  Normal │
-//! └──────────────────────────────────────────────────────┘
+//! ┌─────────────────────────────────────────────────────────────────┐
+//! │ demo-vault-v2 ▾  2026.5.18                                       │
+//! │                              ⚠ Git disabled  ⚠ MCP  ⚠ Claude     │
+//! │                                      📣 Contribute  📖 Docs  🌙 ⚙ │
+//! └─────────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! Items are separated by thin vertical dividers.  The vault name renders as
-//! a [`gpui_component::button::Button`] (clickable popover-trigger placeholder);
-//! all other items are plain text labels.
-//!
-//! # Usage
-//!
-//! ```rust,ignore
-//! // In mock / dev mode — globals must be installed first:
-//! cx.set_global(MockVault::seeded());
-//! cx.set_global(MockGit::seeded());
-//! let bar = cx.new(|_| StatusBar::from_mock(cx));
-//! ```
+//! Stream (a) — visible chrome parity against
+//! [`tolaria-demo-vault-v2-light.png` / `…-dark.png`].  The right
+//! cluster's `Contribute / Docs / Theme / Settings` cells are
+//! interactive in the React source; Phase 6 ships them as visual
+//! placeholders, wired in a later iteration alongside their actions.
 
 use gpui::{
     div, px, AnyElement, App, Context, IntoElement, ParentElement, Render, SharedString, Styled,
     Window,
 };
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    ActiveTheme,
-};
+use gpui_component::ActiveTheme;
 use mock_fixtures::{FileStatus, MockGit, MockVault};
+use vault::Vault;
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
-/// Editor interaction mode shown in the right-hand status slot.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EditorMode {
-    Normal,
-    Search,
+/// Severity of a service-status chip in the middle cluster.
+///
+/// Maps to a colour swatch in [`Render`].  `Ok` paints the chip in
+/// `theme.foreground` (default text colour); `Warning` paints it in
+/// `theme.warning`; `Error` paints it in `theme.danger`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceSeverity {
+    /// Healthy / live (e.g. git connected, MCP running).
+    Ok,
+    /// Disabled or degraded — amber tone in the reference screenshots.
+    Warning,
+    /// Hard failure — red tone.
+    Error,
 }
 
-/// A single logically-distinct slot in the [`StatusBar`].
-#[derive(Debug, Clone, PartialEq)]
-pub enum StatusItem {
-    /// Name of the open vault (clickable popover trigger).
-    VaultName(SharedString),
-    /// Current git branch name.
-    GitBranch(SharedString),
-    /// Count of uncommitted (modified + untracked) files.
-    DirtyCount(usize),
-    /// Current editor interaction mode.
-    Mode(EditorMode),
+/// A single service-status chip rendered in the middle cluster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceChip {
+    /// Short label, e.g. `Git disabled` / `MCP` / `Claude`.
+    pub label: SharedString,
+    /// Severity colouring; see [`ServiceSeverity`].
+    pub severity: ServiceSeverity,
 }
 
 // ---------------------------------------------------------------------------
@@ -61,75 +61,126 @@ pub enum StatusItem {
 // ---------------------------------------------------------------------------
 
 /// Horizontal status strip rendered at the bottom of `TolariaWorkspace`.
-///
-/// Constructed via [`StatusBar::empty`] for a blank bar or
-/// [`StatusBar::from_mock`] to populate items from the installed mock globals.
-///
-/// # Panics
-///
-/// [`StatusBar::from_mock`] panics if the [`MockGit`] global has not been
-/// installed on `cx` prior to the call.
 pub struct StatusBar {
-    items: Vec<StatusItem>,
+    /// Workspace name shown in the left cluster (last segment of the
+    /// vault root path, or `""` when no vault is open).
+    vault_name: SharedString,
+    /// Build / version label shown next to the vault name.
+    version: SharedString,
+    /// Service-status chips in the middle cluster.
+    services: Vec<ServiceChip>,
 }
 
 impl StatusBar {
-    /// An empty status bar with no items.
+    /// An empty status bar (no vault, no chips).  Still paints the
+    /// background + border so the bottom of the window has a status
+    /// strip instead of a bare void.
+    #[must_use]
     pub fn empty() -> Self {
-        Self { items: Vec::new() }
+        Self {
+            vault_name: SharedString::default(),
+            version: SharedString::new_static(env!("CARGO_PKG_VERSION")),
+            services: Vec::new(),
+        }
     }
 
-    /// Build from mock globals if both [`MockGit`] and [`MockVault`] are
-    /// installed; otherwise return an empty bar. Used by `TolariaWorkspace`
-    /// so the status bar populates under `TOLARIA_MOCK=1` and degrades
-    /// gracefully in normal launches before Phase 3 services land.
+    /// Build from globals if any are installed.  Phase 5-MVP precedence:
+    /// `vault::Vault` > `mock_fixtures::MockVault` > empty.  Service
+    /// chips are always populated with the legacy "Git disabled / MCP
+    /// / Claude" placeholder set — wiring them to real services is
+    /// Phase 7+ work but the visual is in place today.
     pub fn from_or_empty(cx: &mut App) -> Self {
-        if cx.try_global::<MockGit>().is_some() && cx.try_global::<MockVault>().is_some() {
+        if cx.try_global::<Vault>().is_some() {
+            Self::from_vault(cx)
+        } else if cx.try_global::<MockVault>().is_some() {
             Self::from_mock(cx)
         } else {
-            Self::empty()
+            Self {
+                services: placeholder_services(),
+                ..Self::empty()
+            }
+        }
+    }
+
+    /// Build from the real `vault::Vault` global.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the [`Vault`] global is not installed on `cx`.
+    pub fn from_vault(cx: &mut App) -> Self {
+        let vault = cx.global::<Vault>();
+        let vault_name = vault
+            .root()
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .map(SharedString::from)
+            .unwrap_or_default();
+        Self {
+            vault_name,
+            version: SharedString::new_static(env!("CARGO_PKG_VERSION")),
+            services: placeholder_services(),
         }
     }
 
     /// Build a status bar populated from the [`MockVault`] and [`MockGit`]
     /// globals installed on `cx`.
     ///
-    /// - **VaultName** — synthesised as `"demo-vault-v2"` (MockVault carries no
-    ///   name field).
-    /// - **GitBranch** — synthesised as `"main"` (MockGit carries no branch
-    ///   field).
-    /// - **DirtyCount** — modified-file count + untracked-file count resolved
-    ///   synchronously from [`MockGit::status`] via the foreground executor.
-    /// - **Mode** — defaults to [`EditorMode::Normal`].
-    ///
     /// # Panics
     ///
-    /// Panics if the [`MockGit`] global is not installed on `cx`, or if
-    /// [`MockGit::status`] returns a non-ready task (i.e. `block_on` would
-    /// block the foreground thread). Phase 3 will replace this constructor
-    /// with an async-safe service injection path.
+    /// Panics if the [`MockVault`] or [`MockGit`] globals are not installed.
     pub fn from_mock(cx: &mut App) -> Self {
-        // MockVault has no name field → synthesise the demo-vault identifier.
+        // MockVault has no name field — synthesise the demo vault id.
         let vault_name: SharedString = "demo-vault-v2".into();
-
-        // MockGit has no branch field → synthesise the primary branch name.
-        let branch: SharedString = "main".into();
-
-        // status() returns Task::ready(…) — block_on returns immediately.
+        // Eagerly resolve dirty count from MockGit so the placeholder
+        // "Git disabled" chip can surface a real count later.  Today
+        // the value is dropped because Phase 6 doesn't show counts on
+        // service chips, but keeping the read here documents the
+        // shape for the Phase 7 service-wired version.
         let status_task = cx.global::<MockGit>().status();
         let git_status = cx.foreground_executor().block_on(status_task);
-        let dirty_count =
+        let _dirty_count =
             git_status.count(FileStatus::Modified) + git_status.count(FileStatus::Untracked);
 
         Self {
-            items: vec![
-                StatusItem::VaultName(vault_name),
-                StatusItem::GitBranch(branch),
-                StatusItem::DirtyCount(dirty_count),
-                StatusItem::Mode(EditorMode::Normal),
-            ],
+            vault_name,
+            version: SharedString::new_static(env!("CARGO_PKG_VERSION")),
+            services: placeholder_services(),
         }
     }
+
+    /// Service chips currently shown in the middle cluster (test
+    /// helper — production renders these via [`Render`]).
+    #[cfg(test)]
+    pub fn services(&self) -> &[ServiceChip] {
+        &self.services
+    }
+
+    /// Workspace name shown in the left cluster (test helper).
+    #[cfg(test)]
+    pub fn vault_name(&self) -> &SharedString {
+        &self.vault_name
+    }
+}
+
+/// Three legacy placeholder service chips that mirror the
+/// `Git disabled / MCP / Claude` warnings in the reference
+/// screenshots.  When the real services land they replace this
+/// helper at call sites.
+fn placeholder_services() -> Vec<ServiceChip> {
+    vec![
+        ServiceChip {
+            label: "Git disabled".into(),
+            severity: ServiceSeverity::Warning,
+        },
+        ServiceChip {
+            label: "MCP".into(),
+            severity: ServiceSeverity::Warning,
+        },
+        ServiceChip {
+            label: "Claude".into(),
+            severity: ServiceSeverity::Warning,
+        },
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -138,61 +189,79 @@ impl StatusBar {
 
 impl Render for StatusBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let divider_color = cx.theme().border;
+        let theme = cx.theme();
+        // The reference's status strip sits on the sidebar palette so
+        // it visually anchors with the left dock; mirror that here.
+        let bg = theme.sidebar;
+        let border = theme.border;
+        let fg = theme.foreground;
+        let muted = theme.muted_foreground;
+        let warning = theme.warning;
+        let danger = theme.danger;
 
-        // TODO(phase3): cache rendered children — items rarely change but this
-        // Vec is re-allocated on every frame.
-        let children: Vec<AnyElement> = self
-            .items
+        let left = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .text_color(fg)
+                    .child(self.vault_name.clone())
+                    .into_any_element(),
+            )
+            .child(
+                div()
+                    .text_color(muted)
+                    .child(self.version.clone())
+                    .into_any_element(),
+            );
+
+        let service_chips: Vec<AnyElement> = self
+            .services
             .iter()
-            .enumerate()
-            .flat_map(|(i, item)| {
-                // Insert a thin vertical divider before every item except the first.
-                let separator: Option<AnyElement> = if i > 0 {
-                    Some(
-                        div()
-                            .w(px(1.0))
-                            .h(px(14.0))
-                            .mx(px(4.0))
-                            .bg(divider_color)
-                            .into_any_element(),
-                    )
-                } else {
-                    None
+            .map(|chip| {
+                let color = match chip.severity {
+                    ServiceSeverity::Ok => fg,
+                    ServiceSeverity::Warning => warning,
+                    ServiceSeverity::Error => danger,
                 };
-
-                let element: AnyElement = match item {
-                    StatusItem::VaultName(name) => Button::new("status-vault-name")
-                        .label(name.clone())
-                        .ghost()
-                        .into_any_element(),
-                    StatusItem::GitBranch(branch) => {
-                        div().px(px(8.0)).child(branch.clone()).into_any_element()
-                    }
-                    StatusItem::DirtyCount(n) => div()
-                        .px(px(8.0))
-                        .child(SharedString::from(format!("~{n}")))
-                        .into_any_element(),
-                    StatusItem::Mode(mode) => {
-                        let label: SharedString = match mode {
-                            EditorMode::Normal => "Normal".into(),
-                            EditorMode::Search => "Search".into(),
-                        };
-                        div().px(px(8.0)).child(label).into_any_element()
-                    }
-                };
-
-                separator.into_iter().chain(std::iter::once(element))
+                div()
+                    .text_color(color)
+                    .child(chip.label.clone())
+                    .into_any_element()
             })
             .collect();
+
+        let right = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(12.0))
+            .text_color(muted)
+            .children(service_chips)
+            .child(div().child(SharedString::new_static("Contribute")))
+            .child(div().child(SharedString::new_static("Docs")))
+            // Theme switcher + settings glyphs — text placeholders for
+            // now so they take their space in the layout; swapped for
+            // real glyphs once the `ui` icon palette lands.
+            .child(div().child(SharedString::new_static("Theme")))
+            .child(div().child(SharedString::new_static("Settings")));
 
         div()
             .flex()
             .flex_row()
             .items_center()
-            .h(px(24.0))
+            .justify_between()
+            .flex_shrink_0()
+            .h(px(30.0))
             .px(px(8.0))
-            .children(children)
+            .bg(bg)
+            .border_t_1()
+            .border_color(border)
+            .text_xs()
+            .child(left)
+            .child(right)
     }
 }
 
@@ -207,7 +276,7 @@ mod tests {
     use mock_fixtures::{MockGit, MockVault};
 
     /// Install the `gpui_component::Theme` global required by any view that
-    /// reads it during render (mirrors `embed_poc/src/layout.rs:243`).
+    /// reads it during render.
     fn install_theme(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
     }
@@ -220,40 +289,59 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// `from_mock` must pull the git branch and dirty count from the installed
-    /// globals.  MockGit seeded: 3 modified + 1 untracked = 4 dirty files.
+    /// `from_mock` must seed the legacy three placeholder service chips.
     #[gpui::test]
-    fn from_mock_pulls_branch_and_dirty_count(cx: &mut TestAppContext) {
+    fn from_mock_populates_placeholder_services(cx: &mut TestAppContext) {
         install_theme(cx);
         cx.update(|cx| {
             cx.set_global(MockVault::seeded());
             cx.set_global(MockGit::seeded());
             let bar = StatusBar::from_mock(cx);
+            let labels: Vec<&str> = bar.services().iter().map(|c| c.label.as_ref()).collect();
+            assert_eq!(labels, vec!["Git disabled", "MCP", "Claude"]);
             assert!(
-                bar.items.contains(&StatusItem::DirtyCount(4)),
-                "expected DirtyCount(4), got items: {:?}",
-                bar.items,
-            );
-            assert!(
-                bar.items.contains(&StatusItem::GitBranch("main".into())),
-                "expected GitBranch(\"main\"), got items: {:?}",
-                bar.items,
+                bar.services()
+                    .iter()
+                    .all(|c| c.severity == ServiceSeverity::Warning),
+                "all placeholder chips must use ServiceSeverity::Warning until services land",
             );
         });
     }
 
-    /// The default mode must be `EditorMode::Normal`.
+    /// `from_vault` must derive `vault_name` from the vault root path.
     #[gpui::test]
-    fn editor_mode_normal_is_default(cx: &mut TestAppContext) {
+    fn from_vault_uses_last_path_segment(cx: &mut TestAppContext) {
+        use std::fs;
         install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("vault-name");
+        fs::create_dir(&nested).unwrap();
+        let vault = vault::Vault::open_at(&nested).expect("open vault");
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let bar = StatusBar::from_vault(cx);
+            assert_eq!(bar.vault_name().as_ref(), "vault-name");
+        });
+    }
+
+    /// `from_or_empty` must prefer the real `Vault` over `MockVault`.
+    #[gpui::test]
+    fn from_or_empty_prefers_real_vault(cx: &mut TestAppContext) {
+        use std::fs;
+        install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nested = dir.path().join("real-vault");
+        fs::create_dir(&nested).unwrap();
+        let vault = vault::Vault::open_at(&nested).expect("open vault");
         cx.update(|cx| {
             cx.set_global(MockVault::seeded());
             cx.set_global(MockGit::seeded());
-            let bar = StatusBar::from_mock(cx);
-            assert!(
-                bar.items.contains(&StatusItem::Mode(EditorMode::Normal)),
-                "expected Mode(Normal), got items: {:?}",
-                bar.items,
+            cx.set_global(vault);
+            let bar = StatusBar::from_or_empty(cx);
+            assert_eq!(
+                bar.vault_name().as_ref(),
+                "real-vault",
+                "real Vault must win over MockVault when both globals present"
             );
         });
     }

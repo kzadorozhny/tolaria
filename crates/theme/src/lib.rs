@@ -10,6 +10,8 @@
 use std::fmt;
 use std::str::FromStr;
 
+mod palette;
+
 /// Install the `gpui_component::Theme` global into `cx`.
 ///
 /// Must be called before any `gpui_component` primitive is rendered.
@@ -90,6 +92,15 @@ pub fn apply_choice(cx: &mut gpui::App, choice: ThemeChoice) {
         ThemeChoice::System => Theme::sync_system_appearance(None, cx),
         ThemeChoice::Light => Theme::change(ThemeMode::Light, None, cx),
         ThemeChoice::Dark => Theme::change(ThemeMode::Dark, None, cx),
+    }
+    // Overwrite the just-installed `ThemeColor` with our CSS-derived
+    // palette so the native chrome matches `src/index.css` and the
+    // Tauri-era reference screenshots exactly.
+    let theme = cx.global_mut::<Theme>();
+    if theme.is_dark() {
+        palette::apply_dark(theme);
+    } else {
+        palette::apply_light(theme);
     }
     log::info!(
         "theme: applied {choice} (resolved is_dark={})",
