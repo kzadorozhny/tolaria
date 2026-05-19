@@ -1,12 +1,13 @@
 # Ephemeral planning notes for ADR-0115
 
-These files exist for the duration of the native-GPUI chrome migration
-(branch `feat/native-gpui-chrome`).  They mirror the conversation-level
-plans, todo lists, and phase-by-phase progress that informed each
-commit, so the work is reviewable and resumable across sessions.
+These files exist for the duration of the native-GPUI chrome
+migration (branch `feat/native-gpui-chrome`).  They mirror the
+conversation-level plans, todo lists, and phase-by-phase progress
+that informed each commit, so the work is reviewable and resumable
+across sessions.
 
-**Delete this entire directory before merging `feat/native-gpui-chrome`
-into `main`.**  Permanent context belongs in:
+**Delete this entire directory** before merging
+`feat/native-gpui-chrome` into `main`.  Permanent context belongs in:
 
 - `docs/adr/0115-native-gpui-chrome.md` — the ADR itself
 - `docs/ARCHITECTURE.md` / `docs/ABSTRACTIONS.md` — long-lived shape docs
@@ -15,18 +16,17 @@ into `main`.**  Permanent context belongs in:
 
 | File | Purpose |
 |------|---------|
-| `roadmap.md` | **Live phase order** — MVP-first.  Authoritative; supersedes §A of `00-overview.md`. |
-| `mvp-scope.md` | What "MVP" means: open a local vault, navigate notes, render + save in the editor.  Lists what's in and explicitly defers everything else. |
-| `progress.md` | Running ledger: what shipped per phase, with commit refs + test counts + key API decisions. |
-| `00-overview.md` | Original full multi-phase plan (Phases 1–7) generated at the start of the migration.  **Frozen for reference** — `roadmap.md` is the live order now.  Section B / C still have the deep specs for Phases 1 and 2 verbatim. |
-| `phase-2d-next.md` | Outline for Phase 2d (large chrome panels) + **authoritative per-component visual guide** anchored on `tolaria-demo-vault-v2.png`.  Skeleton shipped at `6d96cca8`; visual-parity pass against the screenshot is ongoing. |
-| `tolaria-demo-vault-v2-light.png` / `tolaria-demo-vault-v2-dark.png` | Reference captures of the Tauri-era app rendering `demo-vault-v2/` in both light and dark mode (toggled via the moon-icon theme switcher in the bottom-right of the status bar).  The single visual source of truth for every chrome component — implementations strive for minimum visible delta against these images in **both** themes. |
-| `tolaria-demo-vault-v2.png` | Legacy single-mode capture kept for backward links; superseded by the light/dark pair above. |
-| `eval-gpui-component-removal.md` | Evaluation pass scheduled as **Phase 7** in the new MVP-first roadmap (post-MVP, before service expansion).  Decision matrix: keep / pin / vendor / replace. |
+| [`roadmap.md`](roadmap.md) | **Single canonical phase order.**  Shipped phases 0–6 (MVP cut) + active Phase 7 (visual fidelity) + planned 8 (modal chrome) / 9 (services) / 10 (parity). |
+| [`progress.md`](progress.md) | Running ledger — per-phase commit refs, test counts, key API decisions.  Mirrors `roadmap.md`'s numbering. |
+| [`mvp-scope.md`](mvp-scope.md) | What "MVP" meant: open a local vault, navigate notes, render + save in the editor.  Now an immutable historical reference — MVP shipped at `9509f092`. |
+| [`components.md`](components.md) | Per-component visual + behavioural spec.  Reference screenshots, React-source mapping, per-crate visual contracts.  Authoritative for every chrome surface's look and behaviour in every phase. |
+| [`process.md`](process.md) | Crate naming, branch policy, per-iteration verification loop, phase-boundary sweep, hard rules.  Workflow invariants applied throughout. |
+| [`e2e-harness.md`](e2e-harness.md) | Periscope screenshot + click harness (`screenshot` / `watch` / `click` / `click-id` / `dump-tree` / `list`) plus the SIGUSR1 tree-dump IPC contract. |
+| [`tolaria-demo-vault-v2-light.png`](tolaria-demo-vault-v2-light.png) / [`tolaria-demo-vault-v2-dark.png`](tolaria-demo-vault-v2-dark.png) | Reference captures of the Tauri-era app rendering `demo-vault-v2/` in both light and dark modes.  Single visual source of truth for every chrome component. |
+| [`tolaria-demo-vault-v2.png`](tolaria-demo-vault-v2.png) | Legacy single-mode capture kept for backward links; superseded by the light/dark pair above. |
 
-Add more files here for any future phase that needs a dedicated plan
-(`phase-3-services.md`, `phase-4-editor-host.md`, etc.) or evaluation
-work item (`eval-*.md`).
+Add more files here only for future phase-specific planning that
+won't fit in the live docs above.
 
 ## Why not Todoist / Linear / etc
 

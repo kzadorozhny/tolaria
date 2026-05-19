@@ -1,0 +1,80 @@
+# Process & invariants
+
+Workflow, naming, and verification rules that apply throughout the
+ADR-0115 migration.
+
+## Crate naming
+
+No prefixes (Zed style).  `workspace`, `actions`, `vault` — not
+`tolaria_workspace`.  Deviates from ADR-0115 §1 but matches the
+reference codebase.
+
+## Branch policy
+
+ADR-0021 push-to-`main`.  All intermediates land on
+`feat/native-gpui-chrome` and are dogfood-only.  The Tauri stack
+under `src-tauri/` stays untouched throughout every chrome /
+service / harness phase.
+
+## Per-iteration verification loop
+
+After **every iteration** of Rust source changes (per crate or per
+logical sub-task within a phase), in this order:
+
+1. `cargo fmt -p <crate>` (or `--all` if multi-crate).
+2. `cargo test -p <crate>` — confirm green.
+3. **Spawn `oh-my-claudecode:code-reviewer` with the
+   `idiomatic-rust-review` skill** against the changed files.
+   **Auto-apply every MUST and SHOULD finding** without prompting
+   the user (MAY findings get surfaced separately for the user to
+   decide).
+4. Re-run `cargo fmt` + `cargo test` after applying review findings.
+5. Commit.
+
+## Phase-boundary sweep
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build -p tolaria --release
+```
+
+Parallel sanity (Tauri stack stays alive throughout every chrome /
+service / harness phase):
+
+```sh
+pnpm tauri dev                                        # legacy app still runs
+pnpm test                                             # editor-body Playwright suite
+```
+
+## Hard rules (carry-over from Phase 2b)
+
+- Each chrome crate is **self-contained**; no cross-panel deps.
+  Plumbing through `TolariaWorkspace` events lands in later phases.
+- Every crate's tests use the `install_theme(cx)` helper pattern
+  from `crates/embed_poc/src/layout.rs:243`.
+- Mock services are accessed via the `Global` accessor pattern;
+  never hold mock data inline in panel state.
+- `cargo fmt` + per-crate test green + workspace clippy
+  `-D warnings` before any commit.
+- `cargo build --workspace` clean per crate landing (no cascade
+  breakage on `tolaria`, `embed_poc`, or sibling chrome crates).
+- Mock methods return `Task<T>` (via `Task::ready` for instant) so
+  the shape stays forward-compatible with the real service swap.
+
+## Visual fidelity rule
+
+Every chrome surface, in every phase, targets **minimum visible
+delta** against
+[`tolaria-demo-vault-v2-light.png`](tolaria-demo-vault-v2-light.png)
+and
+[`tolaria-demo-vault-v2-dark.png`](tolaria-demo-vault-v2-dark.png),
+in both themes.  When implementation shortcuts the visual
+(placeholder styling, missing icons, wrong weights), it carries a
+`TODO(visual-parity)` comment so a periscope diff pass can find it
+later.
+
+[`components.md`](components.md) holds the per-component visual
+contract; [`e2e-harness.md`](e2e-harness.md) is the verification
+loop.

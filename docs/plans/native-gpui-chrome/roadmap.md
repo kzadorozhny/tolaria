@@ -1,103 +1,122 @@
-# Live roadmap — MVP-first
+# Live roadmap — single canonical phase order
 
-> **Authoritative.**  Supersedes the §A roadmap table in
-> [`00-overview.md`](00-overview.md) (kept for historical reference
-> only).
+> **Authoritative.**  Anchored to [`mvp-scope.md`](mvp-scope.md)
+> (what "MVP" means) and [`components.md`](components.md) (the
+> per-component visual contract).  [`progress.md`](progress.md)
+> mirrors this numbering as the running ledger.
 >
-> See [`mvp-scope.md`](mvp-scope.md) for the MVP cut definition.
-
-## Visual guide
-
-[`tolaria-demo-vault-v2-light.png`](tolaria-demo-vault-v2-light.png)
-and [`tolaria-demo-vault-v2-dark.png`](tolaria-demo-vault-v2-dark.png)
-are the authoritative visual targets for every chrome component the
-native GPUI shell ships.  The dark variant is reached in the reference
-app via the moon-icon theme switcher at the right end of the status
-bar.  Every implementation, in any phase, must strive for the
-**minimum visible delta** against these screenshots — same spacings,
-weights, colours, glyph treatment, row geometry — in **both** light
-and dark modes.
-
-Per-panel match-to-image notes live in
-[`phase-2d-next.md` § Visual guide](phase-2d-next.md#visual-guide-authoritative).
-New chrome surfaces (Phase 6 modals, Phase 8/9 service-wired panels)
-inherit the same constraint: when in doubt, sample pixels off the
-reference images instead of improvising.
-
-The periscope harness ([`e2e-harness.md`](e2e-harness.md)) is the
-verification loop: capture the live app in both themes, diff against
-these images, refine.  To regenerate the references, launch the
-shipped Tauri build (`/Applications/Tolaria.app/Contents/MacOS/tolaria`)
-on `demo-vault-v2/`, capture with `periscope screenshot --pid <pid>`,
-click the moon-icon at the bottom-right of the status bar to flip
-themes, and capture again.
-
-### React source = behavioural reference
-
-The screenshots lock the look; the existing React + TypeScript
-implementations under `src/components/` (the Tauri-era frontend) lock
-the behaviour.  When porting a chrome surface to Rust, **read the
-React counterpart first** and follow it as the spec — hover / active
-states, count derivation, keyboard handling, multi-select model,
-sort/filter rules, copy text, and edge cases all live there (and in
-the colocated `*.test.{ts,tsx}` files).  The per-crate React ↔ Rust
-mapping is in
-[`phase-2d-next.md` § React source = behavioural reference](phase-2d-next.md#react-source--behavioural-reference).
-
-## Phase order
-
-| # | Name | Cut | Notes |
-|---|------|-----|-------|
-| 0 | `embed_poc` spike | ✅ shipped | WKWebView-in-GPUI viability proof |
-| 1 | Foundation crates | ✅ shipped | `paths`/`theme`/`actions`/`ui`/`settings_store`/`workspace`/`tolaria` |
-| 2a | Workspace topology + mocks + Picker | ✅ shipped | Dock/Pane/PaneGroup/Panel/Item/MockNoteItem; `mock_fixtures`; Picker port |
-| 2b | First chrome surfaces | ✅ shipped | `status_bar`/`breadcrumb_bar`/`toasts`/`banners` |
-| 2c | Chrome wiring + TOLARIA_MOCK | ✅ shipped | 3-dock layout populated; typed toasts; mock-globals bootstrap |
-| 2d | Big panels | ✅ shipped | `sidebar_panel`/`inspector_panel`/`ai_panel`/`search_panel`/`settings_panel`/`diff_view`/`note_list_pane` |
-| **3-MVP** | Vault service (minimal) | ✅ shipped | `vault` crate: open dir, list, read, save, basic notify.  Shape-compatible swap with `mock_fixtures::MockVault`. |
-| **4-MVP** | Editor host integration | ✅ shipped | `editor_host/` Vite project, `editor_bridge` crate, `note_item` crate (per-note `WKWebView` via `gpui-wry`).  Per ADR-0115 §4 + §5. |
-| **5-MVP** | MVP wiring + launch | ✅ shipped | `tolaria --vault <path>` CLI arg; swap `sidebar_panel` / `note_list_pane` from MockVault to real `vault::Vault` global; open-note → spawn `note_item` in center Pane. |
-| **6-MVP** | Rust e2e screenshot harness | ✅ shipped | `periscope` crate; xcap + AX bindings; CLI; smoke test.  Closes the diff-against-screenshot loop. |
-| **✅ MVP cut** | | shipped | App opens local vault, navigates, renders + saves notes.  Tauri stack still alongside. |
-| **6** | **Remaining chrome surfaces + visual fidelity pass** | ⏳ active | Two streams:  **(a) visible chrome parity** — sidebar/note-list/status-bar/window-chrome polish until live capture matches `tolaria-demo-vault-v2.png` row-by-row;  **(b) missing modal surfaces** — `command_palette`/`quick_open`/`dialogs`/`wikilink_inputs`/`image_lightbox`/`emoji_picker`/`startup`.  Stream (a) is the higher visible delta and runs first. |
-| 8 | Service expansion | ⏳ planned | Remaining services: `git_provider`, full `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`.  Wire AI/search/settings_panel chrome to real services. |
-| 9 | Parity hardening | ⏳ planned | Multi-tab `Pane` UX; autogit + conflict resolver; onboarding flow; measurement gate (memory, startup time). |
+> Workflow and verification rules live in [`process.md`](process.md);
+> the periscope screenshot loop is in
+> [`e2e-harness.md`](e2e-harness.md).
 
 ## Why MVP-first
 
 Original plan ordered work as **chrome → services → editor host** to
-maximize visible UI progress.  After Phase 2d we have a populated
-chrome shell (3 docks + 7 panels + status bar + breadcrumb + toasts +
-banners) running against `mock_fixtures` Globals.  That's a strong
-visual deliverable but doesn't let the user *do* anything yet.
+maximize visible UI progress.  After Phase 2 we had a populated
+chrome shell (3 docks + 7 panels + status bar + breadcrumb + toasts
++ banners) running against `mock_fixtures` Globals.  Strong visual
+deliverable but didn't let the user *do* anything yet.
 
-The MVP cut reorders the remaining work so the next three phases
-(3-MVP / 4-MVP / 5-MVP) land an actually-usable app — open a vault,
-navigate, render and save a note — before we sink time into the
-remaining chrome modals, service expansion, parity work, or
-cross-platform.
+The MVP cut reordered the remaining work so phases 3 / 4 / 5 / 6
+landed an actually-usable app — open a vault, navigate, render and
+save a note — before the long tail of chrome modals, service
+expansion, and cross-platform.  Effect:
 
-This lets us:
-
-- **Dogfood sooner.**  Phase 6+ work happens with the maintainer
+- **Dogfood sooner.**  Phase 7+ work happens with the maintainer
   using the new app for actual notes.
-- **De-risk the editor-host bridge earlier.**  Phase 4 is the
-  highest-risk integration point (ADR-0115 §6 re-eval triggers were
-  validated in Phase 0, but the production bridge is bigger).
-  Doing it before the long tail of chrome means bridge bugs surface
-  on a tighter feedback loop.
-- **Make the cut-over decision visible.**  Once MVP ships, we know
-  how much of the legacy app still has parity gaps, which makes
-  Phase 10 cut-over scoping concrete instead of speculative.
+- **De-risk the editor-host bridge earlier.**  Phase 4 was the
+  highest-risk integration; the production bridge is bigger than
+  the `embed_poc` spike validated.
 
-## Where MockVault still lives after MVP
+## Shipped
 
-Even after Phase 3-MVP / 5-MVP swap the chrome panels to use the real
-`vault::Vault` global, `mock_fixtures::MockVault` stays around for:
+| # | Name | Notes |
+|---|------|-------|
+| 0 | `embed_poc` spike | WKWebView-in-GPUI viability proof; 26 in-process GPUI tests for the ADR-0115 §6 re-eval triggers |
+| 1 | Foundation crates | `paths` / `theme` / `actions` / `ui` / `settings_store` / `workspace` / `tolaria` |
+| 2 | Chrome surfaces against mocks | 2a topology + Picker; 2b first chrome (`status_bar`, `breadcrumb_bar`, `toasts`, `banners`); 2c wiring + `TOLARIA_MOCK`; 2d big panels (`sidebar_panel`, `note_list_pane`, `inspector_panel`, `ai_panel`, `search_panel`, `settings_panel`, `diff_view`) |
+| 3 | Vault service (minimal) | `vault` crate: open dir / list / read / save / basic rescan.  Shape-compatible swap with `mock_fixtures::MockVault` |
+| 4 | Editor host integration | `editor-host/` Vite project; `editor_bridge` crate; `note_item` crate (per-note WKWebView via `gpui-wry`) |
+| 5 | MVP wiring + launch | `tolaria --vault <path>`; chrome `from_vault`; `open_note` helper; IPC channel routing; `NoteListPane` mounted in the left dock |
+| 6 | Periscope e2e screenshot harness | macOS-only Rust harness (`xcap` + `accessibility`); `screenshot` / `watch` / `click` / `click-id` / `dump-tree` / `list` CLI; SIGUSR1 tree-dump IPC; window-frame-aware CGEvent click |
+
+**✅ MVP cut shipped at `9509f092`** — app opens a local vault,
+navigates, renders + saves notes.  Tauri stack still parallel.
+
+## Active
+
+### Phase 7 — Visual fidelity pass
+
+Polish the shipped chrome until the live capture matches
+[`tolaria-demo-vault-v2-light.png`](tolaria-demo-vault-v2-light.png)
+and [`tolaria-demo-vault-v2-dark.png`](tolaria-demo-vault-v2-dark.png)
+row-by-row in both themes.  Each sub-task ships its own commit.
+
+| # | Task | Status |
+|---|------|--------|
+| 7.1 | 4-column workspace + sidebar mount + status bar + CSS-derived theme | ✅ shipped (`6454140c`) |
+| 7.2 | Clickable theme toggle (`theme::cycle`) + reference window dimensions (1516×1052 default) | ✅ shipped (`721a2fb4`) |
+| 7.3 | `tolaria --width` / `--height` CLI overrides + periscope smoke pins reference size | ✅ shipped (`dac9441c`) |
+| 7.4 | `actions::ToggleInspector` → `Window::toggle_inspector` (`Cmd+Alt+I`); `ui::tree_dump` SIGUSR1 IPC; periscope `click-id` / `dump-tree` | ✅ shipped (`5cd51756`) |
+| 7.5 | Dark-mode panel-background parity — note-list pane and center pane stay white in dark; sidebar and status-bar already track theme | ⏳ open |
+| 7.6 | Sidebar visual parity — type-coded glyphs, count chips, full-width accent on selected row | ⏳ open |
+| 7.7 | Note-list visual parity — `May X · Created May X` metadata line, selected-row pale accent, trailing status glyphs | ⏳ open |
+| 7.8 | Custom title-bar strip — back / forward / new-note triplet + right-side action cluster (search / star / lock / language / more / profile) | ⏳ open |
+| 7.9 | WKWebView editor-body dark-mode CSS — body theming inside the embedded `editor-host/` HTML | ⏳ open |
+
+## Planned
+
+### Phase 8 — Modal chrome surfaces
+
+One crate per task; each lands as its own commit.  Phase 2 inventory
+carried over; behavioural reference in
+[`components.md`](components.md).
+
+| # | Crate | React source under `src/components/` |
+|---|-------|---------------------------------------|
+| 8.1 | `command_palette` (`Picker<CommandPaletteDelegate>` modal; uses `ui::Picker`) | `CommandPalette.tsx`, `CommandPaletteAiMode.tsx` |
+| 8.2 | `quick_open` (`Picker<QuickOpenDelegate>` modal) | `QuickOpenPalette.tsx` |
+| 8.3 | `dialogs` — Commit, ConfirmDelete, CreateNote, CreateType, CreateView, Feedback, McpSetup, TelemetryConsent, GitRequiredModal, ConflictResolverModal, AddRemoteModal, CloneVaultModal, NoteRetargetingDialogs, RetargetNoteDialog, OnboardingShell | every `*Dialog.tsx` / `*Modal.tsx` |
+| 8.4 | `wikilink_inputs` — Picker-based wikilink combobox | `Wikilink{Chat,Suggestion,Inline}.tsx` |
+| 8.5 | `image_lightbox` — full-screen image viewer | `ImageLightbox.tsx` |
+| 8.6 | `emoji_picker` — popover grid | `EmojiPicker.tsx`, `TagsDropdown.tsx` |
+| 8.7 | `startup` — Welcome + Startup screens | `WelcomeScreen.tsx`, `StartupScreen.tsx` |
+
+### Phase 9 — Service expansion
+
+Each service is its own crate landing as its own commit.  Real
+services replace mock fixtures shape-for-shape via the
+`mock_fixtures` → `Global` swap pattern Phase 3 established.
+
+| # | Service | Replaces |
+|---|---------|----------|
+| 9.1 | `git_provider` — git status / commit / push / pull / history | `MockGit` |
+| 9.2 | `vault_search` — full-text + tag search index | `MockSearch` |
+| 9.3 | `vault_watcher` (advanced — fs-notify, debounced refresh) | basic rescan in `vault` |
+| 9.4 | `cli_agents` — Claude / Codex agent process management | `MockAi` |
+| 9.5 | `mcp_bridge` — MCP server discovery + RPC | (new surface) |
+| 9.6 | `telemetry` — PostHog event sink | (new surface) |
+| 9.7 | `app_updater` — Sparkle-style updater | (new surface) |
+| 9.8 | `localization` — `lara` translation pipeline | (new surface) |
+| 9.9 | `settings_panel` persistence wiring | mock settings → real `settings_store` |
+
+### Phase 10 — Parity hardening
+
+| # | Task |
+|---|------|
+| 10.1 | Multi-tab `Pane` UX (close hotkey, drag-reorder, persistence) |
+| 10.2 | Autogit checkpoints + conflict resolver flow |
+| 10.3 | Onboarding flow (vault picker, first-run experience) |
+| 10.4 | Measurement gate — memory, startup time, frame budgets; CI assertion |
+
+## Where MockVault still lives after Phase 9
+
+Even after Phase 9 swaps real services in, `mock_fixtures::MockVault`
+stays around for:
 
 - Test harnesses (every panel crate's `from_or_empty` + tests).
-- The `TOLARIA_MOCK=1` launch path (handy for chrome work without a
-  real vault on disk).
+- The `TOLARIA_MOCK=1` launch path (handy for chrome work without
+  a real vault on disk).
 
-Removal of `mock_fixtures` is **not** on the roadmap; it's a permanent
-test/dev utility.
+Removal of `mock_fixtures` is **not** on the roadmap; it's a
+permanent test/dev utility.
