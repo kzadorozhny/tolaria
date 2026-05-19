@@ -42,7 +42,7 @@ mod macos {
     use std::path::PathBuf;
 
     use gpui::{
-        px, size, App, AppContext, Bounds, SharedString, TitlebarOptions, WindowBounds,
+        px, size, App, AppContext, Bounds, QuitMode, SharedString, TitlebarOptions, WindowBounds,
         WindowOptions,
     };
     use gpui_platform::application;
@@ -191,263 +191,271 @@ mod macos {
 
         let args = parse_args();
 
-        application().run(move |cx: &mut App| {
-            // 3. Theme / gpui-component global (must precede any primitive render).
-            //    `theme::init` always lands the theme on Light; `apply_choice`
-            //    immediately follows so we open in the user-requested mode
-            //    instead of flashing Light on launch.
-            theme::init(cx);
-            theme::apply_choice(cx, args.theme);
+        // Exit the process when the last window closes — Tolaria is
+        // a single-window editor without a menu-bar persistent mode,
+        // so the macOS default (`QuitMode::Explicit`, where the app
+        // lingers after the close button) feels broken from a user's
+        // perspective.  `LastWindowClosed` makes red-button-close
+        // and `Cmd+W` behave the same as `Cmd+Q`.
+        application()
+            .with_quit_mode(QuitMode::LastWindowClosed)
+            .run(move |cx: &mut App| {
+                // 3. Theme / gpui-component global (must precede any primitive render).
+                //    `theme::init` always lands the theme on Light; `apply_choice`
+                //    immediately follows so we open in the user-requested mode
+                //    instead of flashing Light on launch.
+                theme::init(cx);
+                theme::apply_choice(cx, args.theme);
 
-            // 4. Settings global (reads or creates
-            //    ~/Library/Application Support/Tolaria/settings.json).
-            //    Log the full error chain and exit cleanly rather than panicking
-            //    inside the GPUI event-loop closure (avoids an opaque crash dialog).
-            if let Err(err) = settings_store::SettingsStore::load_and_install(cx) {
-                log::error!("failed to initialise settings store: {err:#}");
-                std::process::exit(1);
-            }
+                // 4. Settings global (reads or creates
+                //    ~/Library/Application Support/Tolaria/settings.json).
+                //    Log the full error chain and exit cleanly rather than panicking
+                //    inside the GPUI event-loop closure (avoids an opaque crash dialog).
+                if let Err(err) = settings_store::SettingsStore::load_and_install(cx) {
+                    log::error!("failed to initialise settings store: {err:#}");
+                    std::process::exit(1);
+                }
 
-            // 5. Action registry + keymap (bundled default.json + user override).
-            //    Infallible by construction; bad user keymaps log a warning and
-            //    fall back to defaults rather than blocking startup.
-            actions::init(cx);
+                // 5. Action registry + keymap (bundled default.json + user override).
+                //    Infallible by construction; bad user keymaps log a warning and
+                //    fall back to defaults rather than blocking startup.
+                actions::init(cx);
 
-            // 6. Global action handlers.
-            cx.on_action(|_: &actions::Quit, cx| cx.quit());
-            log_stub::<actions::CloseWindow>(
-                cx,
-                "CloseWindow",
-                "Phase 2 will close the focused window via cx.active_window()",
-            );
-            log_stub::<actions::OpenSettings>(
-                cx,
-                "OpenSettings",
-                "Phase 2 will push the settings panel onto TolariaWorkspace",
-            );
-            log_stub::<actions::ReloadKeymap>(
-                cx,
-                "ReloadKeymap",
-                "Phase 2 will re-run actions::init to reload the user keymap",
-            );
-            // `Cmd+Alt+I` toggles GPUI's built-in element-picker
-            // inspector (always available in debug builds; in release
-            // builds gpui must be compiled with its `inspector` feature
-            // — see `~/.cargo/git/checkouts/zed-…/crates/gpui/Cargo.toml`).
-            //  No-op if the active window is gone (e.g. between close
-            //  and reopen), so dispatching the action is always safe.
-            cx.on_action(|_: &actions::ToggleInspector, cx| {
-                let Some(handle) = cx.active_window() else {
-                    log::warn!("ToggleInspector: no active window");
-                    return;
-                };
-                if let Err(err) =
-                    handle.update(cx, |_, window, app_cx| window.toggle_inspector(app_cx))
+                // 6. Global action handlers.
+                cx.on_action(|_: &actions::Quit, cx| cx.quit());
+                log_stub::<actions::CloseWindow>(
+                    cx,
+                    "CloseWindow",
+                    "Phase 2 will close the focused window via cx.active_window()",
+                );
+                log_stub::<actions::OpenSettings>(
+                    cx,
+                    "OpenSettings",
+                    "Phase 2 will push the settings panel onto TolariaWorkspace",
+                );
+                log_stub::<actions::ReloadKeymap>(
+                    cx,
+                    "ReloadKeymap",
+                    "Phase 2 will re-run actions::init to reload the user keymap",
+                );
+                // `Cmd+Alt+I` toggles GPUI's built-in element-picker
+                // inspector (always available in debug builds; in release
+                // builds gpui must be compiled with its `inspector` feature
+                // — see `~/.cargo/git/checkouts/zed-…/crates/gpui/Cargo.toml`).
+                //  No-op if the active window is gone (e.g. between close
+                //  and reopen), so dispatching the action is always safe.
+                cx.on_action(|_: &actions::ToggleInspector, cx| {
+                    let Some(handle) = cx.active_window() else {
+                        log::warn!("ToggleInspector: no active window");
+                        return;
+                    };
+                    if let Err(err) =
+                        handle.update(cx, |_, window, app_cx| window.toggle_inspector(app_cx))
+                    {
+                        log::error!("ToggleInspector update failed: {err:#}");
+                    }
+                });
+
+                // 7. Native menu bar (installed before window open so AppKit picks
+                //    up accelerators immediately — ADR-0115 §6).
+                cx.set_menus(menus::app_menus());
+
+                // 8. Mock fixtures (TOLARIA_MOCK=1) — installs MockVault /
+                //    MockGit / MockAi / MockSearch as Globals so chrome views
+                //    populate against them. Phase 3 swaps in real services.
+                //    Installed before any `observe_global` so future observers
+                //    see the global state from registration onward.
+                if mock_mode_requested() {
+                    install_mock_globals(cx);
+                }
+
+                // 8b. Real vault (Phase 5-MVP).  `--vault <path>` opens the
+                //     on-disk vault and installs `vault::Vault` as a Global.
+                //     Chrome panels prefer it over `MockVault` via their
+                //     `from_or_empty` helpers (Phase 5c).  Failure to open
+                //     is logged but non-fatal — the app launches into an
+                //     empty workspace so the user can pick a vault later.
+                if let Some(path) = args.vault_path.as_ref() {
+                    match Vault::open_at(path) {
+                        Ok(vault) => {
+                            log::info!("--vault {path:?}: installed vault::Vault global");
+                            cx.set_global(vault);
+                        }
+                        Err(err) => {
+                            log::error!("--vault {path:?}: failed to open: {err:#}");
+                        }
+                    }
+                }
+
+                // 8c. Debug-only: arm the SIGUSR1 tree-dump handler so
+                //     external tools (periscope, lldb, the user from a
+                //     shell) can poke the process and grab a JSON dump of
+                //     every `.dump_as("name")`-tagged element's current
+                //     window-local bounds.  Release builds skip this —
+                //     the IPC surface is strictly a developer affordance.
+                //
+                //     The y-offset matches the workspace's native title
+                //     bar spacer (`workspace::NATIVE_TITLE_BAR_HEIGHT_PT`,
+                //     applied as `.child(div().h(px(...)))`).  GPUI's
+                //     `paint` hands us content-area-relative bounds;
+                //     `periscope click` and `xcap::Window::y()` use
+                //     frame-relative coordinates that *include* the title
+                //     bar.  Adding the offset at register time keeps the
+                //     JSON dump and periscope's click coordinate system
+                //     in lockstep.
+                #[cfg(debug_assertions)]
                 {
-                    log::error!("ToggleInspector update failed: {err:#}");
-                }
-            });
-
-            // 7. Native menu bar (installed before window open so AppKit picks
-            //    up accelerators immediately — ADR-0115 §6).
-            cx.set_menus(menus::app_menus());
-
-            // 8. Mock fixtures (TOLARIA_MOCK=1) — installs MockVault /
-            //    MockGit / MockAi / MockSearch as Globals so chrome views
-            //    populate against them. Phase 3 swaps in real services.
-            //    Installed before any `observe_global` so future observers
-            //    see the global state from registration onward.
-            if mock_mode_requested() {
-                install_mock_globals(cx);
-            }
-
-            // 8b. Real vault (Phase 5-MVP).  `--vault <path>` opens the
-            //     on-disk vault and installs `vault::Vault` as a Global.
-            //     Chrome panels prefer it over `MockVault` via their
-            //     `from_or_empty` helpers (Phase 5c).  Failure to open
-            //     is logged but non-fatal — the app launches into an
-            //     empty workspace so the user can pick a vault later.
-            if let Some(path) = args.vault_path.as_ref() {
-                match Vault::open_at(path) {
-                    Ok(vault) => {
-                        log::info!("--vault {path:?}: installed vault::Vault global");
-                        cx.set_global(vault);
-                    }
-                    Err(err) => {
-                        log::error!("--vault {path:?}: failed to open: {err:#}");
+                    ui::tree_dump::set_window_y_offset(workspace::NATIVE_TITLE_BAR_HEIGHT_PT);
+                    let pid = std::process::id();
+                    let path = ui::tree_dump::default_dump_path_for_pid(pid);
+                    if let Err(err) = ui::tree_dump::install_signal_handler(path.clone()) {
+                        log::error!("tree_dump SIGUSR1 handler install failed: {err:#}");
+                    } else {
+                        log::info!("tree_dump SIGUSR1 handler armed (pid={pid}, dump={path:?})");
                     }
                 }
-            }
 
-            // 8c. Debug-only: arm the SIGUSR1 tree-dump handler so
-            //     external tools (periscope, lldb, the user from a
-            //     shell) can poke the process and grab a JSON dump of
-            //     every `.dump_as("name")`-tagged element's current
-            //     window-local bounds.  Release builds skip this —
-            //     the IPC surface is strictly a developer affordance.
-            //
-            //     The y-offset matches the workspace's native title
-            //     bar spacer (`workspace::NATIVE_TITLE_BAR_HEIGHT_PT`,
-            //     applied as `.child(div().h(px(...)))`).  GPUI's
-            //     `paint` hands us content-area-relative bounds;
-            //     `periscope click` and `xcap::Window::y()` use
-            //     frame-relative coordinates that *include* the title
-            //     bar.  Adding the offset at register time keeps the
-            //     JSON dump and periscope's click coordinate system
-            //     in lockstep.
-            #[cfg(debug_assertions)]
-            {
-                ui::tree_dump::set_window_y_offset(workspace::NATIVE_TITLE_BAR_HEIGHT_PT);
-                let pid = std::process::id();
-                let path = ui::tree_dump::default_dump_path_for_pid(pid);
-                if let Err(err) = ui::tree_dump::install_signal_handler(path.clone()) {
-                    log::error!("tree_dump SIGUSR1 handler install failed: {err:#}");
-                } else {
-                    log::info!("tree_dump SIGUSR1 handler armed (pid={pid}, dump={path:?})");
-                }
-            }
-
-            // 9. Re-apply theme whenever settings change.
-            cx.observe_global::<SettingsStore>(|cx| {
-                theme::reload_from_settings(cx);
-            })
-            .detach();
-
-            // 9b. Phase 7.9 — broadcast every theme change to the
-            //     embedded WKWebView so the editor body's `<html>`
-            //     `data-theme` attribute tracks the native chrome.
-            //     The slot is constructed below so chrome views can
-            //     share the same active-`NoteItem` handle; we create
-            //     it here, register the observer that captures a
-            //     clone, then thread the original into the
-            //     window-open closure.
-            let active_note_item: crate::open_note::ActiveNoteItemSlot =
-                std::rc::Rc::new(std::cell::RefCell::new(None));
-            let theme_slot = active_note_item.clone();
-            cx.observe_global::<gpui_component::theme::Theme>(move |cx| {
-                use gpui_component::ActiveTheme as _;
-                let mode = if cx.theme().is_dark() {
-                    note_item::ThemeMode::Dark
-                } else {
-                    note_item::ThemeMode::Light
-                };
-                let Some(item) = theme_slot.borrow().as_ref().cloned() else {
-                    return;
-                };
-                if let Err(e) = item.update(cx, |item, cx| item.set_theme(mode, cx)) {
-                    log::warn!("note_item::set_theme on theme change failed: {e:#}");
-                }
-            })
-            .detach();
-
-            // 10. Open root window.  Copy f32 size values out before passing cx
-            //    to Bounds::centered so the borrow of SettingsStore is released.
-            //    CLI `--width` / `--height` override the persisted settings —
-            //    periscope and other harnesses use this to pin the window to
-            //    the 1516×1052 logical-point size of the Tauri-era reference
-            //    screenshots without writing through `settings.json`.
-            let (width, height) = {
-                let w = &SettingsStore::get(cx).window;
-                (
-                    args.width.unwrap_or(w.width),
-                    args.height.unwrap_or(w.height),
-                )
-            };
-            let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
-            let opts = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::from("Tolaria")),
-                    // Let the workspace draw its own title-bar strip
-                    // (Phase 7.8) under the macOS chrome — traffic
-                    // lights stay flush-left in their default spot;
-                    // the strip reserves
-                    // `TRAFFIC_LIGHTS_PADDING_PT` so the action
-                    // triplet doesn't collide with them.
-                    appears_transparent: true,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            };
-
-            if let Err(err) = cx.open_window(opts, |window, cx| {
-                use note_list_pane::{NoteListPane, OpenNoteEvent};
-                use workspace::TolariaWorkspace;
-
-                use sidebar_panel::SidebarPanel;
-
-                let sidebar = cx.new(|cx| SidebarPanel::from_or_empty(cx));
-                let note_list = cx.new(|cx| NoteListPane::from_or_empty(cx));
-                // Slot holding the currently mounted `NoteItem` so
-                // successive `OpenNoteEvent`s reuse the same entity
-                // (and underlying WKWebView) instead of constructing a
-                // new one — the latter is what produced the flicker.
-                // Constructed before `cx.open_window` so the
-                // observe-global theme broadcaster (Phase 7.9) and
-                // the open-note subscription can share the same handle.
-                let active_note_item = active_note_item.clone();
-                cx.new(|model_cx| {
-                    let mut workspace = TolariaWorkspace::empty(window, model_cx);
-                    // Sidebar (vault tree) on the left, note list in
-                    // its own column between sidebar and editor —
-                    // matches `tolaria-demo-vault-v2.png`.
-                    workspace.attach_left_dock(sidebar.clone(), model_cx);
-                    workspace.attach_note_list_column(note_list.clone());
-                    // Eagerly mount a blank WKWebView so the editor
-                    // NSView is constructed (and painted) before the
-                    // user clicks anything — avoids the black NSView
-                    // flash on first open.  The editor shows its
-                    // "Select a note…" placeholder until a click
-                    // swaps real content in.
-                    if let Err(e) = crate::open_note::preload_blank_webview(
-                        &workspace,
-                        &active_note_item,
-                        window,
-                        model_cx,
-                    ) {
-                        log::error!("preload_blank_webview failed: {e:#}");
-                    }
-                    // Subscribe inside the workspace's Context so the
-                    // subscription lifetime tracks the workspace entity.
-                    let slot = active_note_item.clone();
-                    let active_handle = note_list.clone();
-                    model_cx
-                        .subscribe_in(
-                            &note_list,
-                            window,
-                            move |ws_view, _list, event: &OpenNoteEvent, window, cx| {
-                                // Pass `&TolariaWorkspace` straight through —
-                                // `open_note` calls `add_item_to_active_pane`
-                                // (which takes `&self`) directly on it instead
-                                // of re-entering via `entity.update(...)`.  See
-                                // `open_note.rs` for the re-entrancy story.
-                                if let Err(e) = crate::open_note::open_note(
-                                    ws_view, event.id, &slot, window, cx,
-                                ) {
-                                    log::error!("open_note failed: {e:#}");
-                                }
-                                // Keep the note-list's pale-accent highlight
-                                // in sync with the editor's mounted note —
-                                // Phase 7.7 visual parity.  This is a no-op
-                                // when the click originated in the list
-                                // (`NoteListPane::open` already set
-                                // `selected_id`), but lets future open paths
-                                // (keymap, palette) drive the highlight too.
-                                active_handle.update(cx, |list, cx| {
-                                    list.set_active(Some(event.id), cx);
-                                });
-                            },
-                        )
-                        .detach();
-                    workspace
+                // 9. Re-apply theme whenever settings change.
+                cx.observe_global::<SettingsStore>(|cx| {
+                    theme::reload_from_settings(cx);
                 })
-            }) {
-                log::error!("failed to open Tolaria window: {err:#}");
-            }
+                .detach();
 
-            // 10. Bring application to foreground.
-            cx.activate(true);
-        });
+                // 9b. Phase 7.9 — broadcast every theme change to the
+                //     embedded WKWebView so the editor body's `<html>`
+                //     `data-theme` attribute tracks the native chrome.
+                //     The slot is constructed below so chrome views can
+                //     share the same active-`NoteItem` handle; we create
+                //     it here, register the observer that captures a
+                //     clone, then thread the original into the
+                //     window-open closure.
+                let active_note_item: crate::open_note::ActiveNoteItemSlot =
+                    std::rc::Rc::new(std::cell::RefCell::new(None));
+                let theme_slot = active_note_item.clone();
+                cx.observe_global::<gpui_component::theme::Theme>(move |cx| {
+                    use gpui_component::ActiveTheme as _;
+                    let mode = if cx.theme().is_dark() {
+                        note_item::ThemeMode::Dark
+                    } else {
+                        note_item::ThemeMode::Light
+                    };
+                    let Some(item) = theme_slot.borrow().as_ref().cloned() else {
+                        return;
+                    };
+                    if let Err(e) = item.update(cx, |item, cx| item.set_theme(mode, cx)) {
+                        log::warn!("note_item::set_theme on theme change failed: {e:#}");
+                    }
+                })
+                .detach();
+
+                // 10. Open root window.  Copy f32 size values out before passing cx
+                //    to Bounds::centered so the borrow of SettingsStore is released.
+                //    CLI `--width` / `--height` override the persisted settings —
+                //    periscope and other harnesses use this to pin the window to
+                //    the 1516×1052 logical-point size of the Tauri-era reference
+                //    screenshots without writing through `settings.json`.
+                let (width, height) = {
+                    let w = &SettingsStore::get(cx).window;
+                    (
+                        args.width.unwrap_or(w.width),
+                        args.height.unwrap_or(w.height),
+                    )
+                };
+                let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+                let opts = WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some(SharedString::from("Tolaria")),
+                        // Let the workspace draw its own title-bar strip
+                        // (Phase 7.8) under the macOS chrome — traffic
+                        // lights stay flush-left in their default spot;
+                        // the strip reserves
+                        // `TRAFFIC_LIGHTS_PADDING_PT` so the action
+                        // triplet doesn't collide with them.
+                        appears_transparent: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+
+                if let Err(err) = cx.open_window(opts, |window, cx| {
+                    use note_list_pane::{NoteListPane, OpenNoteEvent};
+                    use workspace::TolariaWorkspace;
+
+                    use sidebar_panel::SidebarPanel;
+
+                    let sidebar = cx.new(|cx| SidebarPanel::from_or_empty(cx));
+                    let note_list = cx.new(|cx| NoteListPane::from_or_empty(cx));
+                    // Slot holding the currently mounted `NoteItem` so
+                    // successive `OpenNoteEvent`s reuse the same entity
+                    // (and underlying WKWebView) instead of constructing a
+                    // new one — the latter is what produced the flicker.
+                    // Constructed before `cx.open_window` so the
+                    // observe-global theme broadcaster (Phase 7.9) and
+                    // the open-note subscription can share the same handle.
+                    let active_note_item = active_note_item.clone();
+                    cx.new(|model_cx| {
+                        let mut workspace = TolariaWorkspace::empty(window, model_cx);
+                        // Sidebar (vault tree) on the left, note list in
+                        // its own column between sidebar and editor —
+                        // matches `tolaria-demo-vault-v2.png`.
+                        workspace.attach_left_dock(sidebar.clone(), model_cx);
+                        workspace.attach_note_list_column(note_list.clone());
+                        // Eagerly mount a blank WKWebView so the editor
+                        // NSView is constructed (and painted) before the
+                        // user clicks anything — avoids the black NSView
+                        // flash on first open.  The editor shows its
+                        // "Select a note…" placeholder until a click
+                        // swaps real content in.
+                        if let Err(e) = crate::open_note::preload_blank_webview(
+                            &workspace,
+                            &active_note_item,
+                            window,
+                            model_cx,
+                        ) {
+                            log::error!("preload_blank_webview failed: {e:#}");
+                        }
+                        // Subscribe inside the workspace's Context so the
+                        // subscription lifetime tracks the workspace entity.
+                        let slot = active_note_item.clone();
+                        let active_handle = note_list.clone();
+                        model_cx
+                            .subscribe_in(
+                                &note_list,
+                                window,
+                                move |ws_view, _list, event: &OpenNoteEvent, window, cx| {
+                                    // Pass `&TolariaWorkspace` straight through —
+                                    // `open_note` calls `add_item_to_active_pane`
+                                    // (which takes `&self`) directly on it instead
+                                    // of re-entering via `entity.update(...)`.  See
+                                    // `open_note.rs` for the re-entrancy story.
+                                    if let Err(e) = crate::open_note::open_note(
+                                        ws_view, event.id, &slot, window, cx,
+                                    ) {
+                                        log::error!("open_note failed: {e:#}");
+                                    }
+                                    // Keep the note-list's pale-accent highlight
+                                    // in sync with the editor's mounted note —
+                                    // Phase 7.7 visual parity.  This is a no-op
+                                    // when the click originated in the list
+                                    // (`NoteListPane::open` already set
+                                    // `selected_id`), but lets future open paths
+                                    // (keymap, palette) drive the highlight too.
+                                    active_handle.update(cx, |list, cx| {
+                                        list.set_active(Some(event.id), cx);
+                                    });
+                                },
+                            )
+                            .detach();
+                        workspace
+                    })
+                }) {
+                    log::error!("failed to open Tolaria window: {err:#}");
+                }
+
+                // 10. Bring application to foreground.
+                cx.activate(true);
+            });
     }
 }
 
