@@ -5,6 +5,7 @@
 //! `zed/crates/workspace/src/pane_group.rs:30`.
 
 use gpui::{div, Context, Entity, IntoElement, ParentElement, Render, Styled, Window};
+use gpui_component::ActiveTheme as _;
 
 use crate::pane::Pane;
 
@@ -64,15 +65,22 @@ impl Default for PaneGroup {
 }
 
 impl Render for PaneGroup {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Explicit fill so the centre pane tracks dark-mode background
+        // when the active item leaves any uncovered area (no item
+        // mounted, or a child with intrinsic size smaller than the
+        // pane's bounds).  Phase 7.5 fix.
+        let bg = cx.theme().background;
         if let Some(pane) = self.panes.get(self.active_pane_index) {
-            div().size_full().child(pane.clone())
+            div().size_full().bg(bg).child(pane.clone())
         } else {
             div()
                 .size_full()
+                .bg(bg)
                 .flex()
                 .items_center()
                 .justify_center()
+                .text_color(cx.theme().muted_foreground)
                 .child("No panes open")
         }
     }

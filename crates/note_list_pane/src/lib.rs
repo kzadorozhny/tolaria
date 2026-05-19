@@ -28,7 +28,7 @@
 
 use std::collections::HashSet;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use gpui::prelude::FluentBuilder as _;
 use gpui::EventEmitter;
 use gpui::{
@@ -72,7 +72,45 @@ struct RowData {
     id: NoteId,
     title: SharedString,
     snippet: SharedString,
+    metadata: SharedString,
     checked: bool,
+    selected: bool,
+}
+
+/// Render the metadata line shown below the snippet — mirrors the
+/// reference screenshots' `May 17 · Created May 17` pattern.  Phase 7
+/// uses the on-disk modified timestamp for both halves until the vault
+/// surfaces a separate created-at field (Phase 9 vault rewrite — see
+/// `TODO(visual-parity)`).
+fn metadata_line(modified: DateTime<Utc>) -> SharedString {
+    let label = format!(
+        "{month} {day} \u{00B7} Created {month} {day}",
+        month = month_abbr(modified.month()),
+        day = modified.day(),
+    );
+    SharedString::from(label)
+}
+
+/// 3-letter English month abbreviation (Jan, Feb, …) used by the
+/// metadata line.  Avoids pulling in a localisation crate for the
+/// Phase 7 visual-fidelity pass — Phase 9.8 (`localization`) will
+/// route this through `lara`.
+fn month_abbr(month: u32) -> &'static str {
+    match month {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "—",
+    }
 }
 
 /// Snapshot of one note's list-view metadata.
@@ -150,6 +188,10 @@ pub struct NoteListPane {
     entries: Vec<NoteEntry>,
     filter: SharedString,
     selected: HashSet<NoteId>,
+    /// Id of the note currently shown in the editor.  Drives the
+    /// pale-accent background on the matching row — mirrors the
+    /// "active note" highlight in the reference screenshots.
+    selected_id: Option<NoteId>,
     position: DockPosition,
 }
 
@@ -160,6 +202,7 @@ impl NoteListPane {
             entries: Vec::new(),
             filter: SharedString::default(),
             selected: HashSet::new(),
+            selected_id: None,
             position: DockPosition::Left,
         }
     }
@@ -195,6 +238,7 @@ impl NoteListPane {
             entries,
             filter: SharedString::default(),
             selected: HashSet::new(),
+            selected_id: None,
             position: DockPosition::Left,
         }
     }
@@ -234,6 +278,7 @@ impl NoteListPane {
             entries,
             filter: SharedString::default(),
             selected: HashSet::new(),
+            selected_id: None,
             position: DockPosition::Left,
         }
     }
@@ -280,17 +325,17 @@ impl NoteListPane {
 
     /// Entries that pass the current filter, in original insertion order.
     ///
-    /// Returns all entries when the filter is empty.  O(n) per call; called
-    /// once per render.
-    pub fn visible_entries(&self) -> Vec<&NoteEntry> {
+    /// Returns all entries when the filter is empty.  Lazy: no
+    /// allocation per render — the consumer (`render`) drives the
+    /// filter inline.  `S-2` follow-up of the Phase 7 review.
+    pub fn visible_entries(&self) -> impl Iterator<Item = &NoteEntry> + '_ {
+        // MSRV is 1.77 — `Option::is_none_or` (1.82) is not available,
+        // so we keep the `map_or(true, …)` predicate.
         let q = (!self.filter.is_empty()).then(|| self.filter.to_lowercase());
-        self.entries
-            .iter()
-            .filter(|e| {
-                q.as_deref()
-                    .map_or(true, |q| e.title.to_lowercase().contains(q))
-            })
-            .collect()
+        self.entries.iter().filter(move |e| {
+            q.as_deref()
+                .map_or(true, |q| e.title.to_lowercase().contains(q))
+        })
     }
 }
 
@@ -344,9 +389,32 @@ impl Panel for NoteListPane {
 impl NoteListPane {
     /// Emit an [`OpenNoteEvent`] for `id`.  Called by the row click
     /// handler; exposed publicly so test harnesses can drive the event
-    /// without simulating a click.
-    pub fn open(&self, id: NoteId, cx: &mut Context<Self>) {
+    /// without simulating a click.  The row itself is immediately
+    /// marked as the active note so the pale-accent highlight tracks
+    /// the click without waiting for the workspace to round-trip the
+    /// event.
+    pub fn open(&mut self, id: NoteId, cx: &mut Context<Self>) {
+        self.selected_id = Some(id);
         cx.emit(OpenNoteEvent { id });
+        cx.notify();
+    }
+
+    /// Set the active-note highlight without emitting an
+    /// [`OpenNoteEvent`].  Used by the workspace to keep the pale
+    /// accent in sync when the open-note flow originates elsewhere
+    /// (e.g. a keymap action, future quick-open palette).
+    pub fn set_active(&mut self, id: Option<NoteId>, cx: &mut Context<Self>) {
+        if self.selected_id != id {
+            self.selected_id = id;
+            cx.notify();
+        }
+    }
+
+    /// Id of the note currently rendered with the pale-accent
+    /// highlight.  Test / debugging hook.
+    #[must_use]
+    pub fn active(&self) -> Option<NoteId> {
+        self.selected_id
     }
 }
 
@@ -360,23 +428,37 @@ impl Render for NoteListPane {
         let border_color = cx.theme().border;
         let muted = cx.theme().muted_foreground;
         let fg = cx.theme().foreground;
+        // Explicit fill — the workspace root paints
+        // `theme.background`, but with the resizable panel's content
+        // div composited above, dark mode otherwise shows the previous
+        // light fill where the children leave gaps (filter-strip gap
+        // between rows, empty-state stretch).  Without this the
+        // note-list column stays light when the user toggles to dark.
+        let bg = cx.theme().background;
+        // Pale-accent background for the active row — matches the
+        // reference's "selected note" highlight (`Q2 2025` row in
+        // `tolaria-demo-vault-v2-light.png`).  `theme.list_active`
+        // already resolves to `--state-selected` in both modes.
+        let active_row_bg = cx.theme().list_active;
 
         let entity = cx.entity();
         let n_selected = self.selection_count();
         let has_selection = n_selected > 0;
         let filter_text = self.filter.clone();
+        let selected_id = self.selected_id;
 
         // Pre-collect display data before building the element tree so that
         // the immutable borrow of `self.entries` (from visible_entries) does
         // not conflict with simultaneous borrows of other fields.
         let rows: Vec<RowData> = self
             .visible_entries()
-            .into_iter()
             .map(|e| RowData {
                 id: e.id,
                 title: e.title.clone(),
                 snippet: e.snippet.clone(),
+                metadata: metadata_line(e.modified),
                 checked: self.selected.contains(&e.id),
+                selected: selected_id == Some(e.id),
             })
             .collect();
 
@@ -431,10 +513,15 @@ impl Render for NoteListPane {
                     // Card-style row matching `component/NoteListItem`
                     // in `ui-design.pen`: padding [14, 16], gap 8,
                     // title-row (Inter 13/500) above a snippet line
-                    // (Inter 12, muted, line-height 1.5).
+                    // (Inter 12, muted, line-height 1.5), then an
+                    // 11-px muted metadata line mirroring the
+                    // `May 17 · Created May 17` pattern in the
+                    // reference screenshots.
+                    let is_selected = row.selected;
+                    let metadata = row.metadata.clone();
                     let content = v_flex()
                         .flex_1()
-                        .gap_2()
+                        .gap_1()
                         .child(
                             h_flex()
                                 .w_full()
@@ -457,9 +544,10 @@ impl Render for NoteListPane {
                                     .line_height(rems(1.5))
                                     .child(row.snippet),
                             )
-                        });
+                        })
+                        .child(div().text_xs().text_color(muted).child(metadata));
 
-                    h_flex()
+                    let row_div = h_flex()
                         .id(("nlp-row", ix as u64))
                         .w_full()
                         .items_start()
@@ -473,7 +561,12 @@ impl Render for NoteListPane {
                             open_handle.update(cx, |this, cx| this.open(note_id, cx));
                         })
                         .child(checkbox)
-                        .child(content)
+                        .child(content);
+                    if is_selected {
+                        row_div.bg(active_row_bg)
+                    } else {
+                        row_div
+                    }
                 }))
                 .into_any_element()
         };
@@ -505,6 +598,7 @@ impl Render for NoteListPane {
 
         v_flex()
             .size_full()
+            .bg(bg)
             .child(filter_strip)
             .child(list)
             .children(bulk_bar)
@@ -606,7 +700,7 @@ mod tests {
                 // ("Laputa QA Reference") — 4 matches.
                 pane.set_filter("laputa", cx);
                 assert_eq!(
-                    pane.visible_entries().len(),
+                    pane.visible_entries().count(),
                     4,
                     "filter 'laputa' must match exactly 4 titles"
                 );
@@ -727,6 +821,56 @@ mod tests {
             assert_eq!(pane.entries.len(), 1);
             assert_eq!(pane.entries[0].snippet.as_ref(), "First preview line.");
         });
+    }
+
+    /// `open` flips `selected_id` so the row gets the pale-accent
+    /// highlight without waiting for the workspace to round-trip the
+    /// event.  Phase 7.7 visual-parity contract.
+    #[gpui::test]
+    fn open_sets_active_id(cx: &mut TestAppContext) {
+        install_theme(cx);
+
+        let window = cx.add_window(|_window, _cx| NoteListPane::new());
+
+        window
+            .update(cx, |pane, _window, cx| {
+                assert!(pane.active().is_none(), "fresh pane has no active note");
+                pane.open(NoteId::from_raw(7), cx);
+                assert_eq!(
+                    pane.active(),
+                    Some(NoteId::from_raw(7)),
+                    "open must set the pale-accent highlight target",
+                );
+            })
+            .unwrap();
+    }
+
+    /// `set_active` updates the highlight without emitting an
+    /// `OpenNoteEvent` — used by the workspace to sync after a
+    /// keymap-driven open.
+    #[gpui::test]
+    fn set_active_updates_without_emitting(cx: &mut TestAppContext) {
+        install_theme(cx);
+
+        let window = cx.add_window(|_window, _cx| NoteListPane::new());
+
+        window
+            .update(cx, |pane, _window, cx| {
+                pane.set_active(Some(NoteId::from_raw(42)), cx);
+                assert_eq!(pane.active(), Some(NoteId::from_raw(42)));
+                pane.set_active(None, cx);
+                assert!(pane.active().is_none());
+            })
+            .unwrap();
+    }
+
+    /// `metadata_line` formats a UTC modified timestamp as the
+    /// `MMM D · Created MMM D` line shown below each row's snippet.
+    #[test]
+    fn metadata_line_format() {
+        use chrono::TimeZone as _;
+        let m = chrono::Utc.with_ymd_and_hms(2026, 5, 17, 12, 0, 0).unwrap();
+        assert_eq!(metadata_line(m).as_ref(), "May 17 \u{00B7} Created May 17");
     }
 
     /// `clear_selection` must reset selection count to zero.

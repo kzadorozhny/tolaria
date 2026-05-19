@@ -1,14 +1,20 @@
 :root {
     color-scheme: light dark;
+    /* Light defaults — must match `crates/theme/src/palette.rs::apply_light`. */
     --bg: #ffffff;
-    --fg: #1a1a1a;
-    --border: #e5e5e5;
+    --fg: #37352f;
+    --fg-muted: #787774;
+    --border: #e9e9e7;
+    --accent: #155dff;
 }
 
 :root[data-theme="dark"] {
-    --bg: #1f1f1f;
-    --fg: #e8e8e8;
-    --border: #333333;
+    /* Dark overrides — must match `crates/theme/src/palette.rs::apply_dark`. */
+    --bg: #1f1e1b;
+    --fg: #e6e1d8;
+    --fg-muted: #b8b1a6;
+    --border: #34322d;
+    --accent: #78a4ff;
 }
 
 html,
@@ -25,6 +31,8 @@ body {
     height: 100%;
     display: flex;
     flex-direction: column;
+    background: var(--bg);
+    color: var(--fg);
 }
 
 .editor-textarea {
@@ -35,8 +43,9 @@ body {
     border: 0;
     outline: 0;
     resize: none;
-    background: transparent;
-    color: inherit;
+    background: var(--bg);
+    color: var(--fg);
+    caret-color: var(--accent);
     font: inherit;
     font-family: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", monospace;
     line-height: 1.6;
@@ -48,6 +57,11 @@ body {
 }
 
 .editor-textarea::placeholder {
-    color: var(--fg);
-    opacity: 0.45;
+    color: var(--fg-muted);
+    opacity: 1;
+    font-style: italic;
+}
+
+::selection {
+    background: color-mix(in srgb, var(--accent) 25%, transparent);
 }

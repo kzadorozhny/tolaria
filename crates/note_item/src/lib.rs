@@ -36,6 +36,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
+pub use editor_bridge::ThemeMode;
 use editor_bridge::{encode_to_host, FromHost, NoteOpen, ToHost};
 use gpui::{
     div, App, Context, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window,
@@ -280,6 +281,42 @@ impl NoteItem {
             self.pending_open = Some(payload);
         }
         cx.notify();
+        Ok(())
+    }
+
+    /// Forward the GPUI theme mode to the embedded editor's
+    /// `document.documentElement` so the WKWebView body restyles in
+    /// lockstep with the native chrome (Phase 7.9).
+    ///
+    /// Uses raw `document.documentElement.dataset.theme = ...`
+    /// assignment instead of the `tolariaBridge` IPC path — the
+    /// dataset is reflected the moment the document is parsed, so
+    /// theme changes apply even before the editor announces
+    /// [`FromHost::Ready`] and installs the bridge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if [`wry::WebView::evaluate_script`] fails
+    /// (process crashed, handle invalid, etc.).
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    pub fn set_theme(&self, mode: ThemeMode, cx: &Context<Self>) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        if let Some(webview) = self.macos.webview.as_ref() {
+            // Two known-safe ASCII tokens — no escaping needed.
+            // Inlining as a literal also makes it obvious by
+            // inspection that no attacker-controlled bytes can reach
+            // `evaluate_script`.
+            let mode_str = match mode {
+                ThemeMode::Light => "light",
+                ThemeMode::Dark => "dark",
+            };
+            let js = format!(r#"document.documentElement.dataset.theme = "{mode_str}";"#);
+            webview
+                .read(cx)
+                .raw()
+                .evaluate_script(&js)
+                .context("wry::WebView::evaluate_script(ThemeSet) failed")?;
+        }
         Ok(())
     }
 

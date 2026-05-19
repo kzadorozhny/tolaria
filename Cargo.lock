@@ -9447,6 +9447,7 @@ dependencies = [
  "status_bar",
  "theme",
  "toasts",
+ "ui",
 ]
 
 [[package]]

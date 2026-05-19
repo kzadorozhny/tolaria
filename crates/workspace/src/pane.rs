@@ -5,6 +5,7 @@
 //! are Phase 2b additions, modelled on `zed/crates/workspace/src/pane.rs:397`.
 
 use gpui::{div, AnyElement, Context, IntoElement, ParentElement, Render, Styled, Window};
+use gpui_component::ActiveTheme as _;
 
 use crate::item::ItemHandle;
 
@@ -105,7 +106,13 @@ impl Default for Pane {
 }
 
 impl Render for Pane {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Phase 7.5: explicit `theme.background` fill so an empty pane
+        // (or one whose active item leaves uncovered area) tracks the
+        // dark/light theme instead of bleeding the window's default
+        // chrome through.
+        let bg = cx.theme().background;
+        let muted = cx.theme().muted_foreground;
         let content: AnyElement = if let Some(item) = self.items.get(self.active_item_index) {
             item.to_any().into_any_element()
         } else {
@@ -114,9 +121,10 @@ impl Render for Pane {
                 .flex()
                 .items_center()
                 .justify_center()
+                .text_color(muted)
                 .child("No items open")
                 .into_any_element()
         };
-        div().size_full().child(content)
+        div().size_full().bg(bg).child(content)
     }
 }

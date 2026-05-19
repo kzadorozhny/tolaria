@@ -18,6 +18,7 @@ log.workspace = true
 status_bar = { path = "../status_bar" }
 theme = { path = "../theme" }
 toasts = { path = "../toasts" }
+ui = { path = "../ui" }
 
 [dev-dependencies]
 chrono.workspace = true

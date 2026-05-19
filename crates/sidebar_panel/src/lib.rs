@@ -2,17 +2,21 @@
 //! Left-dock sidebar panel chrome view for Tolaria (ADR-0115 Phase 2d).
 //!
 //! `SidebarPanel` implements [`workspace::panel::Panel`] for the Left Dock.
-//! It renders three sections:
+//! It renders four clusters mirroring the reference screenshots
+//! (`tolaria-demo-vault-v2-{light,dark}.png`):
 //!
 //! ```text
 //! ┌────────────────────────────┐
-//! │ TYPES                      │
-//! │  Markdown              30  │
+//! │  Inbox                     │  ← top fixed group
+//! │  All Notes              30 │
+//! │  Archive                   │
 //! │ VIEWS                      │
-//! │  Recent                 5  │
-//! │  Archived               3  │
-//! │  Drafts                 2  │
+//! │  Recent                  5 │
+//! │ TYPES                      │
+//! │  ● Areas                 1 │  ← colored leading glyph per type
+//! │  ● Events                1 │
 //! │ FOLDERS                    │
+//! │   attachments              │
 //! └────────────────────────────┘
 //! ```
 //!
@@ -24,14 +28,16 @@
 //! let panel = cx.new(|_| SidebarPanel::from_mock(cx));
 //! ```
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
 use gpui::{
-    div, px, App, Context, IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Window,
+    div, px, rgb, App, Context, Hsla, IntoElement, ParentElement, Pixels, Render, SharedString,
+    Styled, Window,
 };
 use gpui_component::{ActiveTheme, StyledExt as _};
 use mock_fixtures::{MockVault, NoteKind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use vault::Vault;
 use workspace::panel::{DockPosition, Panel};
 
@@ -39,10 +45,18 @@ use workspace::panel::{DockPosition, Panel};
 // Public types
 // ---------------------------------------------------------------------------
 
-/// A note-kind-grouped entry in the Types section.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One typed group of notes shown in the `TYPES` section.
+///
+/// `label` is the display name (e.g. `Areas`, `Events`); `color`
+/// matches the type's accent in the reference screenshots; `count`
+/// is the number of notes belonging to the type.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TypeEntry {
-    pub kind: NoteKind,
+    /// Display label.
+    pub label: SharedString,
+    /// Leading-glyph fill colour.
+    pub color: Hsla,
+    /// Number of notes in this type.
     pub count: usize,
 }
 
@@ -137,13 +151,6 @@ impl SidebarPanel {
 
     /// Build a sidebar panel populated from the [`MockVault`] global.
     ///
-    /// - **TypeEntry** — groups notes by [`NoteKind`]; only non-zero kinds
-    ///   appear, sorted alphabetically by label.
-    /// - **SavedView** — three synthesised demo views: "Recent", "Archived",
-    ///   "Drafts".
-    /// - **FolderEntry** — unique parent directories derived from note paths,
-    ///   sorted lexicographically; empty for flat (no-subdirectory) vaults.
-    ///
     /// # Panics
     ///
     /// Panics if the [`MockVault`] global is not installed on `cx`.
@@ -162,20 +169,26 @@ impl SidebarPanel {
     }
 
     /// Common post-processing for both [`from_mock`] and [`from_vault`].
-    /// Counts kinds, derives folder hierarchy, attaches the three
-    /// synthesised demo SavedViews.
+    ///
+    /// Types are derived from the leading filename segment
+    /// (`measure-close-rate.md` → `Measures`).  Unknown prefixes — and
+    /// non-Markdown kinds — collapse into a single `Notes` group, so
+    /// the panel always has at least one TypeEntry when the vault is
+    /// non-empty.  Each type carries a fixed accent colour from
+    /// [`type_color`] that mirrors the reference screenshots' palette.
     fn build_from_samples(samples: Vec<(NoteKind, PathBuf)>) -> Self {
-        let mut markdown_count: usize = 0;
-        let mut asset_count: usize = 0;
-        let mut folder_count: usize = 0;
+        let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut folder_paths: BTreeSet<SharedString> = BTreeSet::new();
+        let total_count = samples.len();
 
         for (kind, path) in samples {
-            match kind {
-                NoteKind::Markdown => markdown_count += 1,
-                NoteKind::Asset => asset_count += 1,
-                NoteKind::Folder => folder_count += 1,
-            }
+            let label = match kind {
+                NoteKind::Markdown => type_label_for(&path),
+                NoteKind::Asset => "Assets",
+                NoteKind::Folder => "Folders",
+            };
+            *counts.entry(label).or_insert(0) += 1;
+
             if let Some(parent) = path.parent() {
                 let s = parent.to_string_lossy();
                 if !s.is_empty() {
@@ -184,29 +197,19 @@ impl SidebarPanel {
             }
         }
 
-        // Only include kinds with at least one note; sort alphabetically by label.
-        let mut types: Vec<TypeEntry> = Vec::with_capacity(3);
-        if markdown_count > 0 {
-            types.push(TypeEntry {
-                kind: NoteKind::Markdown,
-                count: markdown_count,
-            });
-        }
-        if asset_count > 0 {
-            types.push(TypeEntry {
-                kind: NoteKind::Asset,
-                count: asset_count,
-            });
-        }
-        if folder_count > 0 {
-            types.push(TypeEntry {
-                kind: NoteKind::Folder,
-                count: folder_count,
-            });
-        }
-        types.sort_by_key(|e| kind_label(e.kind));
+        let mut types: Vec<TypeEntry> = counts
+            .into_iter()
+            .map(|(label, count)| TypeEntry {
+                label: SharedString::new_static(label),
+                color: type_color(label),
+                count,
+            })
+            .collect();
+        // Stable, alphabetical order so toggling between vaults
+        // doesn't re-order the rows from one render to the next.
+        types.sort_by(|a, b| a.label.cmp(&b.label));
 
-        // Three synthesised saved views — Phase 3 will replace with real
+        // Three synthesised saved views — Phase 9 will replace with real
         // persisted view definitions.
         let views = vec![
             SavedView {
@@ -235,12 +238,17 @@ impl SidebarPanel {
             .collect();
 
         Self {
-            total_count: markdown_count + asset_count + folder_count,
+            total_count,
             types,
             views,
             folders,
             position: DockPosition::Left,
         }
+    }
+
+    #[cfg(test)]
+    fn types(&self) -> &[TypeEntry] {
+        &self.types
     }
 }
 
@@ -290,16 +298,54 @@ impl Panel for SidebarPanel {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers — type extraction + colour palette
 // ---------------------------------------------------------------------------
 
-#[must_use]
-fn kind_label(kind: NoteKind) -> &'static str {
-    match kind {
-        NoteKind::Markdown => "Markdown",
-        NoteKind::Asset => "Asset",
-        NoteKind::Folder => "Folder",
+/// Map a `demo-vault-v2`-style filename prefix to its display type.
+///
+/// The Tauri-era app stored a `type` field in each note's frontmatter;
+/// for the GPUI-first chrome we approximate it from the filename
+/// stem until the Phase 9 vault rewrite surfaces the real frontmatter
+/// type.  Unknown prefixes (and untyped notes) collapse into `Notes`.
+fn type_label_for(path: &Path) -> &'static str {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
+    let prefix = stem
+        .split_once('-')
+        .map(|(p, _)| p)
+        .unwrap_or(stem)
+        .to_ascii_lowercase();
+    match prefix.as_str() {
+        "area" => "Areas",
+        "event" => "Events",
+        "measure" => "Measures",
+        "person" => "People",
+        "procedure" => "Procedures",
+        "responsibility" => "Responsibilities",
+        "topic" => "Topics",
+        _ => "Notes",
     }
+}
+
+/// Accent colour for a typed group's leading glyph.  Mirrors the
+/// `--type-*` colour tokens in the Tauri-era app's stylesheet so the
+/// native chrome stays visually consistent with the reference.
+fn type_color(label: &str) -> Hsla {
+    let rgb_u32: u32 = match label {
+        "Areas" => 0x8B5CF6,            // violet
+        "Events" => 0x14B8A6,           // teal
+        "Measures" => 0x3B82F6,         // blue
+        "People" => 0xEF4444,           // red
+        "Procedures" => 0x22C55E,       // green
+        "Responsibilities" => 0xF59E0B, // amber
+        "Topics" => 0xEC4899,           // pink
+        "Assets" => 0x64748B,           // slate
+        "Folders" => 0x6B7280,          // gray
+        _ => 0x6B7280,                  // gray fallback for `Notes`
+    };
+    rgb(rgb_u32).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -310,15 +356,16 @@ impl Render for SidebarPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         // gpui-component ships a dedicated `sidebar_*` palette that
-        // mirrors the dock-chrome semantics in
-        // `tolaria-demo-vault-v2.png`: distinct bg, accent fill for
-        // the active row, and a muted foreground for section headers.
+        // mirrors the dock-chrome semantics in the reference: distinct
+        // bg, accent fill for the active row, and a muted foreground
+        // for section headers.
         let bg = theme.sidebar;
         let border = theme.sidebar_border;
         let fg = theme.sidebar_foreground;
         let muted = theme.muted_foreground;
         let accent_bg = theme.sidebar_accent;
         let accent_fg = theme.sidebar_accent_foreground;
+        let neutral_glyph = muted;
 
         let fixed_top = vec![
             // (label, count, selected)
@@ -327,18 +374,22 @@ impl Render for SidebarPanel {
             ("Archive", 0usize, false),
         ];
 
-        let fixed_rows =
-            fixed_top
-                .into_iter()
-                .enumerate()
-                .map(move |(i, (label, count, selected))| {
-                    sidebar_row(i, label, count, selected, accent_bg, accent_fg, muted)
-                });
-
-        let type_rows = self.types.iter().enumerate().map(|(i, entry)| {
+        let fixed_rows = fixed_top.into_iter().map(move |(label, count, selected)| {
             sidebar_row(
-                100 + i,
-                kind_label(entry.kind),
+                label,
+                neutral_glyph,
+                count,
+                selected,
+                accent_bg,
+                accent_fg,
+                muted,
+            )
+        });
+
+        let type_rows = self.types.iter().map(|entry| {
+            sidebar_row(
+                entry.label.as_ref(),
+                entry.color,
                 entry.count,
                 false,
                 accent_bg,
@@ -347,10 +398,10 @@ impl Render for SidebarPanel {
             )
         });
 
-        let view_rows = self.views.iter().enumerate().map(|(i, view)| {
+        let view_rows = self.views.iter().map(|view| {
             sidebar_row(
-                200 + i,
                 view.name.as_ref(),
+                neutral_glyph,
                 view.count,
                 false,
                 accent_bg,
@@ -361,14 +412,15 @@ impl Render for SidebarPanel {
 
         // Truncate folder paths to their final segment for display so
         // the narrow column doesn't ellipsise everything to the prefix.
-        let folder_rows = self.folders.iter().enumerate().map(|(i, folder)| {
-            let leaf = folder
-                .path
-                .rsplit('/')
-                .next()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| folder.path.as_ref());
-            sidebar_folder_row(300 + i, leaf, folder.depth, muted)
+        // `Path::file_name` strips a trailing separator and handles
+        // Windows separators in case the codebase ever leaves
+        // macOS-only land.
+        let folder_rows = self.folders.iter().map(|folder| {
+            let leaf = Path::new(folder.path.as_ref())
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(folder.path.as_ref());
+            sidebar_folder_row(leaf, folder.depth, muted)
         });
 
         div()
@@ -396,7 +448,7 @@ impl Render for SidebarPanel {
 }
 
 /// One small-caps section header rendered between two row groups.
-fn section_header(label: &'static str, muted: gpui::Hsla) -> gpui::AnyElement {
+fn section_header(label: &'static str, muted: Hsla) -> gpui::AnyElement {
     div()
         .px(px(12.0))
         .pt(px(14.0))
@@ -408,20 +460,30 @@ fn section_header(label: &'static str, muted: gpui::Hsla) -> gpui::AnyElement {
         .into_any_element()
 }
 
-/// One regular sidebar row: label on the left, count chip on the right.
-///
-/// `selected` paints the row full-width with the theme accent
+/// One regular sidebar row: 8-px coloured leading glyph, label, count
+/// chip.  `selected` paints the row full-width with the theme accent
 /// background; `accent_fg` overrides the label colour so it stays
 /// legible against the accent fill.
 fn sidebar_row(
-    _ix: usize,
     label: &str,
+    glyph: Hsla,
     count: usize,
     selected: bool,
-    accent_bg: gpui::Hsla,
-    accent_fg: gpui::Hsla,
-    muted: gpui::Hsla,
+    accent_bg: Hsla,
+    accent_fg: Hsla,
+    muted: Hsla,
 ) -> gpui::AnyElement {
+    let glyph_dot = div()
+        .w(px(8.0))
+        .h(px(8.0))
+        .flex_shrink_0()
+        .rounded_full()
+        .bg(glyph);
+    let count_text = if count > 0 {
+        SharedString::from(format!("{count}"))
+    } else {
+        SharedString::default()
+    };
     let row = div()
         .flex()
         .flex_row()
@@ -431,13 +493,17 @@ fn sidebar_row(
         .px(px(12.0))
         .py(px(5.0))
         .text_sm()
-        .child(div().flex_1().child(SharedString::from(label.to_string())))
         .child(
             div()
-                .text_xs()
-                .text_color(muted)
-                .child(SharedString::from(format!("{count}"))),
-        );
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .flex_1()
+                .child(glyph_dot)
+                .child(SharedString::from(label.to_string())),
+        )
+        .child(div().text_xs().text_color(muted).child(count_text));
     if selected {
         row.bg(accent_bg).text_color(accent_fg).into_any_element()
     } else {
@@ -447,8 +513,8 @@ fn sidebar_row(
 
 /// One folder row with depth-proportional left padding.  Count chip is
 /// suppressed because the count of notes per folder is not yet
-/// computed (Phase 7+ work).
-fn sidebar_folder_row(_ix: usize, label: &str, depth: u8, _muted: gpui::Hsla) -> gpui::AnyElement {
+/// computed (Phase 9 vault rewrite).
+fn sidebar_folder_row(label: &str, depth: u8, _muted: Hsla) -> gpui::AnyElement {
     div()
         .flex()
         .flex_row()
@@ -546,5 +612,48 @@ mod tests {
                 panel.views.len(),
             );
         });
+    }
+
+    /// `type_label_for` extracts the leading prefix and maps it to the
+    /// display label used in the reference screenshots.
+    #[test]
+    fn type_label_extracts_known_prefixes() {
+        for (path, expected) in [
+            ("area-building.md", "Areas"),
+            ("event-team-sync.md", "Events"),
+            ("measure-close-rate.md", "Measures"),
+            ("person-luca-rossi.md", "People"),
+            ("procedure-onboarding.md", "Procedures"),
+            ("responsibility-sponsorships.md", "Responsibilities"),
+            ("topic-writing.md", "Topics"),
+            ("24q4.md", "Notes"),                   // no prefix
+            ("note-on-clear-prose.md", "Notes"),    // explicit `note-` prefix
+            ("rtl-mixed-direction-qa.md", "Notes"), // unrelated prefix
+        ] {
+            assert_eq!(type_label_for(Path::new(path)), expected, "input={path}");
+        }
+    }
+
+    /// Building from a synthetic sample list groups notes by filename
+    /// prefix and emits one TypeEntry per distinct label.
+    #[test]
+    fn build_from_samples_groups_by_filename_prefix() {
+        let samples = vec![
+            (NoteKind::Markdown, PathBuf::from("area-x.md")),
+            (NoteKind::Markdown, PathBuf::from("area-y.md")),
+            (NoteKind::Markdown, PathBuf::from("event-launch.md")),
+            (NoteKind::Markdown, PathBuf::from("untyped.md")),
+        ];
+        let panel = SidebarPanel::build_from_samples(samples);
+        let pairs: Vec<(&str, usize)> = panel
+            .types()
+            .iter()
+            .map(|e| (e.label.as_ref(), e.count))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![("Areas", 2), ("Events", 1), ("Notes", 1)],
+            "types must group by prefix and sort alphabetically",
+        );
     }
 }

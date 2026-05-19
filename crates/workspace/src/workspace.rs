@@ -49,6 +49,7 @@ use crate::{
     modal_layer::{ModalLayer, ModalView},
     pane_group::PaneGroup,
     panel::DockPosition,
+    title_bar::TitleBar,
     toast_layer::ToastLayer,
 };
 
@@ -58,6 +59,7 @@ use crate::{
 /// closure; GPUI wraps the returned `Self` in an `Entity<TolariaWorkspace>`
 /// automatically.
 pub struct TolariaWorkspace {
+    title_bar: Entity<TitleBar>,
     modal_layer: Entity<ModalLayer>,
     toast_layer: Entity<ToastLayer>,
     left_dock: Entity<Dock>,
@@ -89,10 +91,12 @@ impl TolariaWorkspace {
         let right_dock = cx.new(|_| Dock::new(DockPosition::Right));
         let bottom_dock = cx.new(|_| Dock::new(DockPosition::Bottom));
         let center_group = cx.new(|_| PaneGroup::new());
+        let title_bar = cx.new(|_| TitleBar::new());
         // `StatusBar::from_or_empty` populates from mock globals if installed
         // (TOLARIA_MOCK=1 launches), or returns an empty bar otherwise.
         let status_bar = cx.new(|cx| StatusBar::from_or_empty(cx));
         Self {
+            title_bar,
             modal_layer,
             toast_layer,
             left_dock,
@@ -200,6 +204,7 @@ impl TolariaWorkspace {
 
 impl Render for TolariaWorkspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title_bar = self.title_bar.clone();
         let left_dock = self.left_dock.clone();
         let right_dock = self.right_dock.clone();
         let center_group = self.center_group.clone();
@@ -223,12 +228,14 @@ impl Render for TolariaWorkspace {
             .flex_col()
             .bg(bg)
             .text_color(fg)
-            // Native macOS title bar spacer.
-            // [`NATIVE_TITLE_BAR_HEIGHT_PT`] doubles as the value
-            // `ui::tree_dump::set_window_y_offset` is initialised
-            // with — bump them together if the chrome ever uses a
+            // Custom title-bar strip (Phase 7.8) — replaces the bare
+            // spacer that earlier phases used to pad below the macOS
+            // traffic-light region.  [`NATIVE_TITLE_BAR_HEIGHT_PT`]
+            // doubles as the value
+            // `ui::tree_dump::set_window_y_offset` is initialised with
+            // — bump them together if the chrome ever uses a
             // different title-bar style.
-            .child(div().h(px(NATIVE_TITLE_BAR_HEIGHT_PT)))
+            .child(title_bar)
             // Horizontal split: Left Dock | (Note List Column?) |
             // Center PaneGroup | Right Dock.
             //

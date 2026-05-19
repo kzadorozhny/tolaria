@@ -313,6 +313,33 @@ mod macos {
             })
             .detach();
 
+            // 9b. Phase 7.9 — broadcast every theme change to the
+            //     embedded WKWebView so the editor body's `<html>`
+            //     `data-theme` attribute tracks the native chrome.
+            //     The slot is constructed below so chrome views can
+            //     share the same active-`NoteItem` handle; we create
+            //     it here, register the observer that captures a
+            //     clone, then thread the original into the
+            //     window-open closure.
+            let active_note_item: crate::open_note::ActiveNoteItemSlot =
+                std::rc::Rc::new(std::cell::RefCell::new(None));
+            let theme_slot = active_note_item.clone();
+            cx.observe_global::<gpui_component::theme::Theme>(move |cx| {
+                use gpui_component::ActiveTheme as _;
+                let mode = if cx.theme().is_dark() {
+                    note_item::ThemeMode::Dark
+                } else {
+                    note_item::ThemeMode::Light
+                };
+                let Some(item) = theme_slot.borrow().as_ref().cloned() else {
+                    return;
+                };
+                if let Err(e) = item.update(cx, |item, cx| item.set_theme(mode, cx)) {
+                    log::warn!("note_item::set_theme on theme change failed: {e:#}");
+                }
+            })
+            .detach();
+
             // 10. Open root window.  Copy f32 size values out before passing cx
             //    to Bounds::centered so the borrow of SettingsStore is released.
             //    CLI `--width` / `--height` override the persisted settings —
@@ -331,6 +358,13 @@ mod macos {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some(SharedString::from("Tolaria")),
+                    // Let the workspace draw its own title-bar strip
+                    // (Phase 7.8) under the macOS chrome — traffic
+                    // lights stay flush-left in their default spot;
+                    // the strip reserves
+                    // `TRAFFIC_LIGHTS_PADDING_PT` so the action
+                    // triplet doesn't collide with them.
+                    appears_transparent: true,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -348,8 +382,10 @@ mod macos {
                 // successive `OpenNoteEvent`s reuse the same entity
                 // (and underlying WKWebView) instead of constructing a
                 // new one — the latter is what produced the flicker.
-                let active_note_item: crate::open_note::ActiveNoteItemSlot =
-                    std::rc::Rc::new(std::cell::RefCell::new(None));
+                // Constructed before `cx.open_window` so the
+                // observe-global theme broadcaster (Phase 7.9) and
+                // the open-note subscription can share the same handle.
+                let active_note_item = active_note_item.clone();
                 cx.new(|model_cx| {
                     let mut workspace = TolariaWorkspace::empty(window, model_cx);
                     // Sidebar (vault tree) on the left, note list in
@@ -374,6 +410,7 @@ mod macos {
                     // Subscribe inside the workspace's Context so the
                     // subscription lifetime tracks the workspace entity.
                     let slot = active_note_item.clone();
+                    let active_handle = note_list.clone();
                     model_cx
                         .subscribe_in(
                             &note_list,
@@ -389,6 +426,16 @@ mod macos {
                                 ) {
                                     log::error!("open_note failed: {e:#}");
                                 }
+                                // Keep the note-list's pale-accent highlight
+                                // in sync with the editor's mounted note —
+                                // Phase 7.7 visual parity.  This is a no-op
+                                // when the click originated in the list
+                                // (`NoteListPane::open` already set
+                                // `selected_id`), but lets future open paths
+                                // (keymap, palette) drive the highlight too.
+                                active_handle.update(cx, |list, cx| {
+                                    list.set_active(Some(event.id), cx);
+                                });
                             },
                         )
                         .detach();

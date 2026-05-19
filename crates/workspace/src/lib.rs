@@ -18,6 +18,7 @@ pub mod modal_layer;
 pub mod pane;
 pub mod pane_group;
 pub mod panel;
+pub mod title_bar;
 pub mod toast_layer;
 pub mod workspace;
 
@@ -28,6 +29,7 @@ pub use modal_layer::{ModalLayer, ModalView};
 pub use pane::{Activation, Pane};
 pub use pane_group::PaneGroup;
 pub use panel::{DockPosition, Panel};
+pub use title_bar::TitleBar;
 pub use toast_layer::ToastLayer;
 pub use workspace::{TolariaWorkspace, NATIVE_TITLE_BAR_HEIGHT_PT};
 

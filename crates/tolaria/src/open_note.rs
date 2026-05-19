@@ -25,9 +25,23 @@ use std::rc::Rc;
 
 use anyhow::{Context as _, Result};
 use gpui::{Context, Entity, Window};
-use note_item::NoteItem;
+use gpui_component::ActiveTheme as _;
+use note_item::{NoteItem, ThemeMode};
 use vault::{NoteId, Vault};
 use workspace::TolariaWorkspace;
+
+/// Read the active theme mode off the `gpui_component` Theme global.
+/// Phase 7.9: every newly-mounted `NoteItem` immediately propagates
+/// the current mode to its WebView so the editor body never
+/// flash-renders the wrong palette before the theme observer fires
+/// for the first time.
+fn current_theme_mode(cx: &gpui::App) -> ThemeMode {
+    if cx.theme().is_dark() {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    }
+}
 
 /// Slot holding the currently mounted [`NoteItem`].  Threaded through
 /// the `subscribe_in` closure in `main.rs` so successive
@@ -87,6 +101,10 @@ pub fn open_note(
 
     let note_item = NoteItem::new_with_webview(note, body, window, cx)
         .context("constructing NoteItem with embedded WKWebView")?;
+    let initial_mode = current_theme_mode(cx);
+    note_item
+        .update(cx, |item, cx| item.set_theme(initial_mode, cx))
+        .context("propagating initial theme to NoteItem WebView")?;
     *slot.borrow_mut() = Some(note_item.clone());
 
     // Call `add_item_to_active_pane` directly on `&TolariaWorkspace`
@@ -124,6 +142,10 @@ pub fn preload_blank_webview(
 ) -> Result<()> {
     let blank = NoteItem::new_blank_with_webview(window, cx)
         .context("constructing blank NoteItem with embedded WKWebView")?;
+    let initial_mode = current_theme_mode(cx);
+    blank
+        .update(cx, |item, cx| item.set_theme(initial_mode, cx))
+        .context("propagating initial theme to blank NoteItem WebView")?;
     *slot.borrow_mut() = Some(blank.clone());
     workspace.add_item_to_active_pane(blank, cx);
     Ok(())
