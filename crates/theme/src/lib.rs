@@ -108,6 +108,26 @@ pub fn apply_choice(cx: &mut gpui::App, choice: ThemeChoice) {
     );
 }
 
+/// Toggle the active theme between [`ThemeChoice::Light`] and
+/// [`ThemeChoice::Dark`].  Reads the live state via
+/// `gpui_component::ActiveTheme::is_dark`, then calls
+/// [`apply_choice`] with the inverse.  Used by the status-bar
+/// theme-switcher button so users can flip the chrome without going
+/// through the menu / settings.
+///
+/// `System` is intentionally not part of the cycle — the user opts
+/// into "follow system" via the `--theme` CLI flag or future
+/// settings UI, not the status-bar toggle.
+pub fn cycle(cx: &mut gpui::App) {
+    use gpui_component::ActiveTheme as _;
+    let next = if cx.theme().is_dark() {
+        ThemeChoice::Light
+    } else {
+        ThemeChoice::Dark
+    };
+    apply_choice(cx, next);
+}
+
 /// Reload the active theme from the current `SettingsStore` global.
 ///
 /// Phase 1 stub — `cx` is accepted now so the Phase 2 wiring

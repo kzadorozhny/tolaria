@@ -21,8 +21,8 @@
 //! placeholders, wired in a later iteration alongside their actions.
 
 use gpui::{
-    div, px, AnyElement, App, Context, IntoElement, ParentElement, Render, SharedString, Styled,
-    Window,
+    div, px, AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement as _, Styled, Window,
 };
 use gpui_component::ActiveTheme;
 use mock_fixtures::{FileStatus, MockGit, MockVault};
@@ -198,6 +198,15 @@ impl Render for StatusBar {
         let muted = theme.muted_foreground;
         let warning = theme.warning;
         let danger = theme.danger;
+        // Theme-switcher label reflects the target appearance — clicking
+        // "Dark" flips to dark, clicking "Light" flips back.  Mirrors
+        // the moon-icon ↔ sun-icon behaviour in the reference status
+        // bar.
+        let theme_toggle_label: SharedString = if theme.is_dark() {
+            SharedString::new_static("Light")
+        } else {
+            SharedString::new_static("Dark")
+        };
 
         let left = div()
             .flex()
@@ -242,10 +251,19 @@ impl Render for StatusBar {
             .children(service_chips)
             .child(div().child(SharedString::new_static("Contribute")))
             .child(div().child(SharedString::new_static("Docs")))
-            // Theme switcher + settings glyphs — text placeholders for
-            // now so they take their space in the layout; swapped for
-            // real glyphs once the `ui` icon palette lands.
-            .child(div().child(SharedString::new_static("Theme")))
+            // Theme switcher — clickable.  Calls `theme::cycle` which
+            // flips between [`ThemeChoice::Light`] and `Dark`.  The
+            // label shows the target mode so the click affordance is
+            // obvious (matches the moon/sun icon behaviour in the
+            // reference status bar).
+            .child(
+                div()
+                    .id("status-bar-theme-toggle")
+                    .cursor_pointer()
+                    .on_click(|_, _window, cx| theme::cycle(cx))
+                    .child(theme_toggle_label),
+            )
+            // Settings glyph — placeholder until the action lands.
             .child(div().child(SharedString::new_static("Settings")));
 
         div()

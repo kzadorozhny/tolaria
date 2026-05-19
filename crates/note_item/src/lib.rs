@@ -309,9 +309,7 @@ impl NoteItem {
             // control chars) — safe argument to `receive(...)`.
             let payload_js = serde_json::to_string(&json)
                 .context("re-encode NoteOpen JSON as JS string literal")?;
-            let js = format!(
-                "window.tolariaBridge && window.tolariaBridge.receive({payload_js});"
-            );
+            let js = format!("window.tolariaBridge && window.tolariaBridge.receive({payload_js});");
             webview
                 .read(cx)
                 .raw()

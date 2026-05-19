@@ -7077,6 +7077,7 @@ dependencies = [
  "gpui_platform",
  "mock_fixtures",
  "tempfile",
+ "theme",
  "vault",
 ]
 

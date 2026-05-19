@@ -47,9 +47,17 @@ pub struct WindowSettings {
 
 impl Default for WindowSettings {
     fn default() -> Self {
+        // Logical-point dimensions of the Tauri-era reference
+        // screenshot pair under `docs/plans/native-gpui-chrome/`:
+        // `tolaria-demo-vault-v2-{light,dark}.png` are 3032×2104
+        // physical pixels at 2× Retina scaling, so the window the
+        // designer intended is 1516×1052 logical points.  Pin the
+        // first-launch defaults to those numbers so periscope
+        // captures of the native shell line up with the references
+        // without any window-resizing wrangling.
         Self {
-            width: 1200.0,
-            height: 800.0,
+            width: 1516.0,
+            height: 1052.0,
             restore_position: true,
         }
     }
