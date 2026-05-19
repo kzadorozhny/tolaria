@@ -61,18 +61,29 @@ mod macos {
     const MOCK_ENV_VAR: &str = "TOLARIA_MOCK";
 
     /// Parsed command-line arguments.  Phase 5-MVP carries `--vault
-    /// <path>` and `--theme <system|light|dark>`; everything else is
-    /// forwarded by GPUI / AppKit (e.g. `--bundle` arguments from
-    /// `open`).
+    /// <path>` and `--theme <system|light|dark>`; Phase 6 adds
+    /// `--width`/`--height` so periscope and other harnesses can
+    /// open the window at the exact logical-point size of the
+    /// reference screenshots (1516×1052) without relying on the
+    /// persisted `settings.json`.  Everything else is forwarded by
+    /// GPUI / AppKit (e.g. `--bundle` arguments from `open`).
     struct CliArgs {
         vault_path: Option<PathBuf>,
         theme: theme::ThemeChoice,
+        /// Override initial window width (logical points).  `None`
+        /// falls back to `SettingsStore::get(cx).window.width`.
+        width: Option<f32>,
+        /// Override initial window height (logical points).  `None`
+        /// falls back to `SettingsStore::get(cx).window.height`.
+        height: Option<f32>,
     }
 
     fn parse_args() -> CliArgs {
         let mut iter = std::env::args().skip(1);
         let mut vault_path = None;
         let mut theme = theme::ThemeChoice::default();
+        let mut width: Option<f32> = None;
+        let mut height: Option<f32> = None;
         while let Some(arg) = iter.next() {
             match arg.as_str() {
                 "--vault" => {
@@ -91,8 +102,17 @@ mod macos {
                         }
                     }
                 }
+                "--width" => {
+                    width = Some(parse_window_dim(iter.next().as_deref(), "--width"));
+                }
+                "--height" => {
+                    height = Some(parse_window_dim(iter.next().as_deref(), "--height"));
+                }
                 "--help" | "-h" => {
-                    eprintln!("Usage: tolaria [--vault <path>] [--theme <system|light|dark>]");
+                    eprintln!(
+                        "Usage: tolaria [--vault <path>] [--theme <system|light|dark>] \
+                         [--width <pts>] [--height <pts>]"
+                    );
                     std::process::exit(0);
                 }
                 _ => {
@@ -101,7 +121,34 @@ mod macos {
                 }
             }
         }
-        CliArgs { vault_path, theme }
+        CliArgs {
+            vault_path,
+            theme,
+            width,
+            height,
+        }
+    }
+
+    /// Parse a `--width` / `--height` value: a strictly-positive,
+    /// finite f32 in logical points.  Negative, zero, NaN, or
+    /// missing values exit with a usage error rather than silently
+    /// degrading the window geometry.
+    fn parse_window_dim(value: Option<&str>, flag: &str) -> f32 {
+        let Some(raw) = value else {
+            eprintln!("{flag} requires a positive number of logical points");
+            std::process::exit(2);
+        };
+        match raw.parse::<f32>() {
+            Ok(v) if v.is_finite() && v > 0.0 => v,
+            Ok(v) => {
+                eprintln!("{flag}: {v} is not a positive finite number");
+                std::process::exit(2);
+            }
+            Err(err) => {
+                eprintln!("{flag}: {raw:?} is not a number ({err})");
+                std::process::exit(2);
+            }
+        }
     }
 
     /// Whether the mock-fixture launch path is requested.
@@ -223,9 +270,16 @@ mod macos {
 
             // 10. Open root window.  Copy f32 size values out before passing cx
             //    to Bounds::centered so the borrow of SettingsStore is released.
+            //    CLI `--width` / `--height` override the persisted settings —
+            //    periscope and other harnesses use this to pin the window to
+            //    the 1516×1052 logical-point size of the Tauri-era reference
+            //    screenshots without writing through `settings.json`.
             let (width, height) = {
                 let w = &SettingsStore::get(cx).window;
-                (w.width, w.height)
+                (
+                    args.width.unwrap_or(w.width),
+                    args.height.unwrap_or(w.height),
+                )
             };
             let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
             let opts = WindowOptions {

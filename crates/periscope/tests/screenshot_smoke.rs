@@ -33,6 +33,16 @@ use std::{
 const SMOKE_TIMEOUT_SECS: u64 = 15;
 const SMOKE_POLL_INTERVAL_MS: u64 = 500;
 
+/// Logical-point window dimensions taken from the Tauri-era reference
+/// captures at `docs/plans/native-gpui-chrome/tolaria-demo-vault-v2-{light,dark}.png`.
+/// The PNGs are 3032×2104 physical pixels at 2× Retina, so the
+/// designer-intended logical size is 1516×1052.  Passing these
+/// explicitly via `--width` / `--height` pins the window to the
+/// reference geometry regardless of what's currently persisted in
+/// `~/Library/Application Support/Tolaria/settings.json` on the host.
+const REFERENCE_WIDTH: u32 = 1516;
+const REFERENCE_HEIGHT: u32 = 1052;
+
 /// Window-local coordinates of the first row in `NoteListPane`.
 /// Title bar ≈ 28 pt + filter strip 32 pt + ~half a row → ~y = 100 lands
 /// reliably inside the first list row; x = 200 sits inside the left dock
@@ -107,6 +117,10 @@ fn screenshot_smoke() {
     let child = Command::new(&bin)
         .arg("--vault")
         .arg(&vault_path)
+        .arg("--width")
+        .arg(REFERENCE_WIDTH.to_string())
+        .arg("--height")
+        .arg(REFERENCE_HEIGHT.to_string())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

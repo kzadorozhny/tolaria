@@ -39,8 +39,14 @@ ran the test.
 ## One-shot screenshot (the common case)
 
 ```sh
-# Terminal A — user starts the app once
-cargo run -p tolaria -- --vault demo-vault-v2
+# Terminal A — user starts the app once.  `--width` / `--height`
+# pin the window to the logical-point size of the Tauri-era
+# reference captures (`docs/plans/native-gpui-chrome/tolaria-demo-vault-v2-*.png`,
+# 3032×2104 @ 2× Retina) so harness screenshots line up with
+# the references without any window-resizing wrangling.
+cargo run -p tolaria -- \
+    --vault demo-vault-v2 \
+    --width 1516 --height 1052
 
 # Terminal B — Claude (via the Bash tool) captures the current state
 cargo run -q -p periscope -- screenshot \
@@ -53,6 +59,12 @@ returns the image content directly to the model.
 `--raise` brings the Tolaria window forward via the Accessibility
 API before capture.  Drop it if the window is already focused (saves
 a ~250 ms settle delay).
+
+`--width` / `--height` are independent overrides for the persisted
+`WindowSettings` in `~/Library/Application Support/Tolaria/settings.json`.
+Each takes a strictly-positive `f32` in logical points; omit either
+to fall back to the persisted value.  The smoke test passes both —
+see `crates/periscope/tests/screenshot_smoke.rs`.
 
 ---
 
