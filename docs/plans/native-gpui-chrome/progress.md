@@ -29,11 +29,12 @@ spec lives in [`components.md`](components.md).
 | 7.2 — Clickable theme toggle + reference window dimensions | ✅ done | `721a2fb4` | (209) | `theme::cycle(cx)` flips Light ↔ Dark; status-bar "Theme" cell is interactive.  `WindowSettings` default bumped to 1516×1052 to match the Tauri-era reference screenshots. |
 | 7.3 — `tolaria --width` / `--height` CLI + periscope smoke pins reference size | ✅ done | `dac9441c` | (209) | Independent CLI overrides for persisted `WindowSettings`; periscope `screenshot_smoke` passes `--width 1516 --height 1052`. |
 | 7.4 — GPUI inspector + SIGUSR1 tree dump + periscope click-by-id | ✅ done | `5cd51756` | +5 (216) | `actions::ToggleInspector` → `Window::toggle_inspector` (`Cmd+Alt+I`); `ui::tree_dump` SIGUSR1 IPC with monotonic sequence counter; `workspace::NATIVE_TITLE_BAR_HEIGHT_PT` shared const; periscope `click-id` / `dump-tree` subcommands. |
-| 7.5 — Dark-mode panel-background parity | ⏳ open | — | — | Note-list pane and center pane stay white in dark; sidebar/status-bar already track theme.  Likely a panel-level paint or WKWebView default-body issue, not a theme bug (`theme.background` is `0x1F1E1B` in dark). |
-| 7.6 — Sidebar visual parity | ⏳ open | — | — | Type-coded leading glyphs, count chips, full-width accent on selected row.  See [`components.md` § sidebar_panel](components.md#sidebar_panel). |
-| 7.7 — Note-list visual parity | ⏳ open | — | — | Metadata line (`May X · Created May X`), pale-accent selected row, trailing status glyphs.  See [`components.md` § note_list_pane](components.md#note_list_pane). |
-| 7.8 — Custom title-bar strip | ⏳ open | — | — | Back / forward / new-note triplet + right-side action cluster.  See [`components.md` § Window chrome](components.md#window-chrome-tolaria-binary). |
-| 7.9 — WKWebView editor-body dark-mode CSS | ⏳ open | — | — | Body theming inside the embedded `editor-host/` HTML — currently white in dark mode. |
+| 7.5 — Dark-mode panel-background parity | ✅ done | `897091bf` | +0 (216) | `NoteListPane`, `PaneGroup`, `Pane::render` paint `theme.background` so the centre column tracks dark mode instead of bleeding through. |
+| 7.6 — Sidebar visual parity | ✅ done | `897091bf` | +2 (218) | `sidebar_panel`: `type_label_for` (filename-prefix → display label) + `type_color` palette, 8-pt coloured leading-dot glyph, `Path::file_name` folder leaves. |
+| 7.7 — Note-list visual parity | ✅ done | `897091bf` | +3 (221) | `NoteListPane`: `MMM D · Created MMM D` metadata line, `selected_id` field + `open` / `set_active` helpers, `theme.list_active` pale-accent on the active row, `visible_entries` returns `impl Iterator`. |
+| 7.8 — Custom title-bar strip | ✅ done | `897091bf` | +1 (222) | `workspace::title_bar::TitleBar` view + `TRAFFIC_LIGHTS_PADDING_PT = 72.0`; mounted by `TolariaWorkspace::empty`; `TitlebarOptions::appears_transparent` lets GPUI draw under the macOS chrome.  Each cell is `id()`-tagged + `dump_as`-registered. |
+| 7.9 — WKWebView editor-body dark-mode CSS | ✅ done | `897091bf` | (222) | `editor-host/style.css` gains `--fg-muted`, `caret-color`, italic placeholder, `color-mix(...)` selection; `NoteItem::set_theme` propagates via `document.documentElement.dataset.theme` (no `tolariaBridge` Ready dependency); `tolaria/main.rs` observes `gpui_component::theme::Theme` and broadcasts. |
+| **Phase 7 visual fidelity complete** | shipped at `897091bf` | 222 | Live chrome matches `tolaria-demo-vault-v2-{light,dark}.png` row-by-row in both themes. |
 | 8.x — Modal chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` (one task per crate). |
 | 9.x — Service expansion | ⏳ planned | — | — | `git_provider`, `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`, `settings_panel` persistence. |
 | 10.x — Parity hardening | ⏳ planned | — | — | Multi-tab `Pane`; autogit + conflict resolver; onboarding; measurement gate. |
@@ -220,6 +221,82 @@ Design decisions after `idiomatic-rust-review`:
 - `workspace::NATIVE_TITLE_BAR_HEIGHT_PT = 28.0` is a single `pub const` referenced by both the spacer `div` and the y-offset wiring.
 
 5 new tests in `ui::tree_dump` + `periscope::tree_dump`.
+
+### Phase 7.5–7.9 — Visual-fidelity sweep (`897091bf`)
+
+Five tightly-coupled visual-parity tasks landed as one commit so the
+periscope diff against `tolaria-demo-vault-v2-{light,dark}.png` could
+be validated end-to-end:
+
+1. **Dark-mode panel backgrounds (7.5).**  `NoteListPane`, `PaneGroup`
+   and `Pane::render` now paint `theme.background` explicitly so dark
+   mode tracks the rest of the chrome instead of bleeding the
+   window's default white through wherever children left gaps.
+
+2. **Sidebar typed glyphs (7.6).**  `sidebar_panel` rewrites its
+   TYPES cluster: `type_label_for` derives the display name from the
+   filename prefix (`area-` → Areas, `event-` → Events, etc.);
+   `type_color` returns a fixed accent from the Tauri-era palette
+   (violet / teal / blue / red / green / amber / pink); each row
+   gains an 8-pt coloured leading dot.  Folder rows switch from
+   `rsplit('/').next().unwrap_or_else(...)` to the `Path::file_name`
+   path-aware leaf — the prior fallback silently kept the trailing
+   separator on edge cases.
+
+3. **Note-list metadata + active row (7.7).**  `NoteListPane` adds a
+   `MMM D · Created MMM D` muted-text metadata line below each row's
+   snippet, an `selected_id: Option<NoteId>` field rendering the
+   active row with `theme.list_active` (pale-accent), and `open` /
+   new `set_active` helpers so the highlight tracks the editor's
+   mounted note immediately without waiting for the workspace round
+   trip.  `visible_entries` returns `impl Iterator<Item = &NoteEntry>`
+   instead of `Vec<&NoteEntry>` (S-2 of the idiomatic review).
+
+4. **Custom title-bar strip (7.8).**  New `workspace::title_bar` view
+   replaces the bare 28-pt spacer above the workspace main row.
+   `TRAFFIC_LIGHTS_PADDING_PT = 72.0` reserves space for the macOS
+   controls; the strip then draws the back / forward / new-note
+   triplet (left cluster) and the search / star / lock / language /
+   more / profile cluster (right).  Each cell is `id()`-tagged and
+   `dump_as`-registered so periscope can target it by name.
+   `TitlebarOptions { appears_transparent: true, .. }` lets GPUI
+   draw under the macOS chrome.
+
+5. **WKWebView dark-mode editor body (7.9).**  `editor-host/style.css`
+   gains `--fg-muted`, `caret-color`, an italic placeholder, and a
+   `color-mix(...)` selection so the embedded editor body reads
+   cleanly in both themes.  `NoteItem::set_theme(mode, cx)` injects
+   `document.documentElement.dataset.theme = "..."` via
+   `wry::WebView::evaluate_script` — no `tolariaBridge` Ready
+   dependency, so the theme applies the instant the document is
+   parsed.  `tolaria/main.rs` registers an
+   `observe_global::<gpui_component::theme::Theme>` callback that
+   broadcasts each theme change to the active `NoteItem`, and
+   `open_note.rs` propagates the initial mode immediately after the
+   `WebView` is constructed.
+
+Design decisions after `idiomatic-rust-review` (0 MUST, 5 SHOULD —
+all applied):
+
+- `Path::file_name` for folder-leaf extraction (S-1).
+- `visible_entries` lazy iterator (S-2).
+- `is_none_or` reverted to `map_or(true, …)` to respect the workspace
+  MSRV of 1.77.2 (S-3 attempted but rejected by `clippy::incompatible_msrv`).
+- Dropped dead `_ix: usize` parameters from `sidebar_row` and
+  `sidebar_folder_row`, eliminating the
+  `#[allow(clippy::too_many_arguments)]` (S-4).
+- `set_theme` builds the JS literal inline instead of routing the
+  known-safe `light` / `dark` token through `serde_json::to_string`
+  (S-5) — also makes the no-injection invariant inspection-evident.
+
+3 new tests in `note_list_pane` (`open_sets_active_id`,
+`set_active_updates_without_emitting`, `metadata_line_format`) and
+2 in `sidebar_panel` (`type_label_extracts_known_prefixes`,
+`build_from_samples_groups_by_filename_prefix`) — total 219 → 222.
+
+Periscope captures (`/tmp/phase7-light.png`,
+`/tmp/phase7-final-dark.png`) confirm row-by-row parity against the
+reference in both modes.
 
 ---
 

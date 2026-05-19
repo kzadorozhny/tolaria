@@ -58,11 +58,15 @@ row-by-row in both themes.  Each sub-task ships its own commit.
 | 7.2 | Clickable theme toggle (`theme::cycle`) + reference window dimensions (1516×1052 default) | ✅ shipped (`721a2fb4`) |
 | 7.3 | `tolaria --width` / `--height` CLI overrides + periscope smoke pins reference size | ✅ shipped (`dac9441c`) |
 | 7.4 | `actions::ToggleInspector` → `Window::toggle_inspector` (`Cmd+Alt+I`); `ui::tree_dump` SIGUSR1 IPC; periscope `click-id` / `dump-tree` | ✅ shipped (`5cd51756`) |
-| 7.5 | Dark-mode panel-background parity — note-list pane and center pane stay white in dark; sidebar and status-bar already track theme | ⏳ open |
-| 7.6 | Sidebar visual parity — type-coded glyphs, count chips, full-width accent on selected row | ⏳ open |
-| 7.7 | Note-list visual parity — `May X · Created May X` metadata line, selected-row pale accent, trailing status glyphs | ⏳ open |
-| 7.8 | Custom title-bar strip — back / forward / new-note triplet + right-side action cluster (search / star / lock / language / more / profile) | ⏳ open |
-| 7.9 | WKWebView editor-body dark-mode CSS — body theming inside the embedded `editor-host/` HTML | ⏳ open |
+| 7.5 | Dark-mode panel-background parity — `NoteListPane`, `PaneGroup`, `Pane` paint `theme.background` | ✅ shipped (`897091bf`) |
+| 7.6 | Sidebar visual parity — filename-prefix-derived TYPES, colour-coded leading dot, `Path::file_name` folder leaves | ✅ shipped (`897091bf`) |
+| 7.7 | Note-list visual parity — `MMM D · Created MMM D` metadata line; `selected_id` + `theme.list_active` pale-accent row | ✅ shipped (`897091bf`) |
+| 7.8 | Custom title-bar strip — `workspace::title_bar::TitleBar` + `TRAFFIC_LIGHTS_PADDING_PT`; `TitlebarOptions::appears_transparent` | ✅ shipped (`897091bf`) |
+| 7.9 | WKWebView editor-body dark-mode CSS — `editor-host/style.css` palette + `NoteItem::set_theme` + theme-observer broadcast | ✅ shipped (`897091bf`) |
+
+**Phase 7 visual-fidelity pass complete** at `897091bf` — live chrome
+matches `tolaria-demo-vault-v2-{light,dark}.png` row-by-row in both
+themes.
 
 ## Planned
 
