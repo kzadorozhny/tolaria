@@ -104,6 +104,12 @@ pub enum Outcome {
     },
     /// Caller should resolve a wikilink target or open an external URL.
     NavigateLink(LinkTarget),
+    /// Editor just announced [`FromHost::Ready`] and a queued
+    /// [`NoteOpen`] was waiting in `pending_open` — caller must inject
+    /// it into the WebView.  Surfaces the drain as part of the
+    /// pure-logic state machine instead of leaving the dispatch loop
+    /// to poll for it on every message.
+    DeliverPending(NoteOpen),
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +181,10 @@ impl NoteItem {
         match msg {
             FromHost::Ready => {
                 self.editor_ready = true;
-                Outcome::None
+                match self.pending_open.take() {
+                    Some(p) => Outcome::DeliverPending(p),
+                    None => Outcome::None,
+                }
             }
             FromHost::Dirty(r) => {
                 if self.check_own("Dirty", r.id) {
@@ -276,6 +285,14 @@ impl NoteItem {
 
     /// Serialise `payload` and inject it into the WKWebView via
     /// `tolariaBridge.receive(...)`.  No-op on non-macOS builds.
+    ///
+    /// # Errors
+    ///
+    /// - [`encode_to_host`] fails (should not happen for a typed
+    ///   [`NoteOpen`], but propagated rather than panicked).
+    /// - Re-encoding the JSON envelope as a JS string literal fails.
+    /// - [`wry::WebView::evaluate_script`] fails (process crashed,
+    ///   handle invalid, etc.).
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     fn send_note_open(&self, payload: NoteOpen, cx: &Context<Self>) -> Result<()> {
         let json = encode_to_host(&ToHost::NoteOpen(payload))
@@ -286,9 +303,14 @@ impl NoteItem {
             // call once `ready` has been announced.  The dispatch loop
             // only calls this after editor_ready is `true`, so the
             // global is guaranteed to be present.
+            //
+            // The second `to_string` re-encodes the JSON payload as a
+            // properly-escaped JS string literal (quotes, backslashes,
+            // control chars) — safe argument to `receive(...)`.
+            let payload_js = serde_json::to_string(&json)
+                .context("re-encode NoteOpen JSON as JS string literal")?;
             let js = format!(
-                "window.tolariaBridge && window.tolariaBridge.receive({});",
-                serde_json::to_string(&json).expect("string→json never fails"),
+                "window.tolariaBridge && window.tolariaBridge.receive({payload_js});"
             );
             webview
                 .read(cx)
@@ -318,9 +340,8 @@ impl NoteItem {
                 let Some(this) = entity.upgrade() else {
                     break;
                 };
-                this.update(cx, |this, cx| {
-                    let outcome = this.apply_from_host(msg);
-                    if let Outcome::PersistSave { body } = outcome {
+                this.update(cx, |this, cx| match this.apply_from_host(msg) {
+                    Outcome::PersistSave { body } => {
                         let id = this.id();
                         if cx.has_global::<vault::Vault>() {
                             // `Vault::save` is sync for MVP — the
@@ -341,16 +362,15 @@ impl NoteItem {
                             );
                         }
                     }
-                    if this.editor_ready {
-                        if let Some(pending) = this.pending_open.take() {
-                            if let Err(e) = this.send_note_open(pending, cx) {
-                                log::warn!(
-                                    target: "note_item::ipc",
-                                    "draining pending NoteOpen failed: {e:#}"
-                                );
-                            }
+                    Outcome::DeliverPending(pending) => {
+                        if let Err(e) = this.send_note_open(pending, cx) {
+                            log::warn!(
+                                target: "note_item::ipc",
+                                "draining pending NoteOpen failed: {e:#}"
+                            );
                         }
                     }
+                    Outcome::None | Outcome::NavigateLink(_) => {}
                 });
             }
         })
@@ -852,6 +872,27 @@ mod tests {
         assert!(
             item.editor_ready,
             "apply_from_host(Ready) must flip editor_ready so pending_open drains"
+        );
+    }
+
+    /// Ready with a queued `NoteOpen` must surface
+    /// [`Outcome::DeliverPending`] and clear `pending_open`.  Locks
+    /// the state-machine contract that the dispatch loop relies on.
+    #[test]
+    fn ready_with_pending_open_emits_deliver_pending() {
+        let mut item = NoteItem::new_for_tests(fresh_note(7));
+        let queued = NoteOpen {
+            id: item.id,
+            path: item.path.display().to_string(),
+            body: "queued body".into(),
+        };
+        item.pending_open = Some(queued.clone());
+        let outcome = item.apply_from_host(FromHost::Ready);
+        assert_eq!(outcome, Outcome::DeliverPending(queued));
+        assert!(item.editor_ready);
+        assert!(
+            item.pending_open.is_none(),
+            "pending_open must be drained when DeliverPending is emitted"
         );
     }
 
