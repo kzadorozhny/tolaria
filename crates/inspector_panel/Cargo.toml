@@ -9,8 +9,10 @@ description = "Inspector panel for the Tolaria right dock (ADR-0115 Phase 2d)."
 
 [dependencies]
 actions = { path = "../actions" }
+editor_bridge = { path = "../editor_bridge" }
 gpui.workspace = true
 gpui-component.workspace = true
+log.workspace = true
 mock_fixtures = { path = "../mock_fixtures" }
 vault = { path = "../vault" }
 workspace = { path = "../workspace" }

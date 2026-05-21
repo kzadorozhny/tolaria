@@ -712,6 +712,24 @@ mod macos {
                     });
                 });
 
+                // Worklist 9.2.8 — sibling slot for the InspectorPanel.
+                // Stays `None` until the inspector mount lands (the
+                // `ToggleInspector` action currently routes to GPUI's
+                // built-in element-picker; a follow-up row will swap
+                // the mount target).  The slot is declared here so the
+                // workspace subscribers below (HeadingsUpdated /
+                // OpenNote / InspectorOpenNoteEvent) can write through
+                // to the panel the moment a mount appears, with no
+                // additional plumbing required at that point.  The
+                // inspector_panel crate already owns the data-source
+                // wiring (vault::backlinks / outbound_links /
+                // type-instance filter / editor-bridge headings); this
+                // slot provides the seam from the live workspace into
+                // those methods.
+                let inspector_panel_slot: std::rc::Rc<
+                    std::cell::RefCell<Option<gpui::Entity<inspector_panel::InspectorPanel>>>,
+                > = std::rc::Rc::new(std::cell::RefCell::new(None));
+
                 // 10. Open root window.  Copy f32 size values out before passing cx
                 //    to Bounds::centered so the borrow of SettingsStore is released.
                 //    CLI `--width` / `--height` override the persisted settings —
@@ -924,6 +942,7 @@ mod macos {
                         // headings are lost.
                         if let Some(blank_item) = active_note_item.borrow().as_ref().cloned() {
                             let headings_panel_slot = toc_panel_slot.clone();
+                            let inspector_headings_slot = inspector_panel_slot.clone();
                             model_cx
                                 .subscribe(
                                     &blank_item,
@@ -931,18 +950,39 @@ mod macos {
                                           _item,
                                           event: &note_item::HeadingsUpdatedEvent,
                                           cx| {
-                                        let Some(panel) =
+                                        // Fan the same `Headings`
+                                        // envelope out to both right-dock
+                                        // panels (toc + inspector
+                                        // Outline section).  Either slot
+                                        // may be empty — a missing panel
+                                        // drops the payload silently
+                                        // (next attach receives a fresh
+                                        // payload as soon as the editor
+                                        // ticks again).
+                                        if let Some(panel) =
                                             headings_panel_slot.borrow().as_ref().cloned()
-                                        else {
+                                        {
+                                            let headings = event.headings.clone();
+                                            panel.update(cx, |panel, cx| {
+                                                panel.set_headings(headings, cx);
+                                            });
+                                        } else {
                                             log::debug!(
                                                 "HeadingsUpdated dropped: TocPanel not attached"
                                             );
-                                            return;
-                                        };
-                                        let headings = event.headings.clone();
-                                        panel.update(cx, |panel, cx| {
-                                            panel.set_headings(headings, cx);
-                                        });
+                                        }
+                                        if let Some(panel) =
+                                            inspector_headings_slot.borrow().as_ref().cloned()
+                                        {
+                                            let headings = event.headings.clone();
+                                            panel.update(
+                                                cx,
+                                                |panel: &mut inspector_panel::InspectorPanel,
+                                                 cx| {
+                                                    panel.set_headings(headings, cx);
+                                                },
+                                            );
+                                        }
                                     },
                                 )
                                 .detach();
@@ -1054,6 +1094,7 @@ mod macos {
                             )
                             .detach();
 
+                        let open_note_inspector_slot = inspector_panel_slot.clone();
                         model_cx
                             .subscribe_in(
                                 &note_list,
@@ -1079,6 +1120,24 @@ mod macos {
                                     active_handle.update(cx, |list, cx| {
                                         list.set_active(Some(event.id), cx);
                                     });
+                                    // Worklist 9.2.8 — keep the inspector
+                                    // panel's active-note pointer in
+                                    // sync so its vault-driven sections
+                                    // (Backlinks / Instances /
+                                    // References) re-resolve against the
+                                    // newly-opened note.  No-op when the
+                                    // panel isn't mounted yet.
+                                    if let Some(panel) =
+                                        open_note_inspector_slot.borrow().as_ref().cloned()
+                                    {
+                                        let id = event.id;
+                                        panel.update(
+                                            cx,
+                                            |panel: &mut inspector_panel::InspectorPanel, cx| {
+                                                panel.set_active(Some(id), cx);
+                                            },
+                                        );
+                                    }
                                 },
                             )
                             .detach();

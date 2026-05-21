@@ -28,7 +28,7 @@
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
 9.2.6. ✅ ToC action → new `toc_panel` crate + headings bridge
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
-9.2.8. ⏳ Note Inspector Panel content — backlinks, references, type instances, outline
+9.2.8. ✅ Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
@@ -360,6 +360,85 @@ wiring — replace the mock-fixture seeds with vault-driven reads;
 the workspace's `active_item()`).  **Size:** large — depends on
 9.2.3 and 9.2.6 for shared infrastructure but its UI shape is
 independent; can land in parallel once those primitives exist.
+
+**Closure (commit `<this-commit>`).**  Wired four sections in
+`crates/inspector_panel/src/lib.rs` to live data sources:
+
+- **Backlinks** — `vault::Vault::backlinks(id)` resolves inbound
+  wikilinks; titles come from `vault::Vault::note_sync(id).title`.
+- **References** — `vault::Vault::outbound_links(id)` resolves
+  outbound wikilinks.  `InspectorSection::ReferencedBy.label()`
+  now returns `"References"`; the enum variant name is preserved
+  for back-compat with any persisted expansion state.
+- **Instances** — when the active note's file stem starts with
+  `type-X`, every note whose stem starts with `X-` is listed.
+  Implemented in `resolve_type_instances`; non-type notes surface
+  zero rows so the section renders its "not a type definition"
+  empty state.
+- **Outline** — driven by `note_item::HeadingsUpdatedEvent` (the
+  `FromHost::Headings` envelope from worklist 9.2.6).
+  `InspectorPanel::set_headings` short-circuits on identical
+  payloads to avoid re-painting the dock for the editor's
+  duplicate-debounce ticks.
+
+**Click-to-open.**  All three vault-driven list sections (Backlinks
+/ Instances / References) emit `InspectorOpenNoteEvent { id }` on
+row click.  The panel implements `EventEmitter<InspectorOpenNoteEvent>`;
+workspace subscribers route it through the same `open_note` helper
+the note-list pane uses.
+
+**Active-note tracking seam.**  `InspectorPanel::set_active(id, cx)`
+is the canonical write seam — `tolaria/src/main.rs` calls it from
+the existing `OpenNoteEvent` subscriber when an inspector panel
+slot is populated (see `open_note_inspector_slot`, mirrors the
+`toc_panel_slot` pattern from 9.2.6).  `set_active` clears the
+stale outline so heading lists don't bleed across notes.
+
+**Vault → panel state refresh.**  `InspectorPanel::refresh_state`
+re-resolves all vault-driven sections without changing
+`note_id`.  Tolaria's workspace doesn't yet consume
+`Vault::watch_events` for any panel — when the Phase 9.6
+`vault_lifecycle` workspace-level rescan trigger lands, calling
+`refresh_state` from there is a one-liner.
+
+**Workspace wiring (`crates/tolaria/src/main.rs`).**  Added
+`inspector_panel_slot: Rc<RefCell<Option<Entity<InspectorPanel>>>>`
+alongside `toc_panel_slot`.  The `HeadingsUpdatedEvent` subscriber
+now fans the same envelope out to both panels; the `OpenNoteEvent`
+subscriber writes through `set_active` to the inspector when
+mounted.  The slot stays `None` today (no mount path — the
+`ToggleInspector` action currently routes to GPUI's element-picker)
+so the subscribers are no-ops until a follow-up row attaches an
+`InspectorPanel` entity.  Once that happens (e.g. the deferred
+Phase 8 8.3.1 follow-up that opens InspectorPanel in a separate
+window, or a right-dock attach), Backlinks / References / Instances
+/ Outline will populate without further wiring.
+
+**MockVault fallback.**  Existing fixture-driven tests
+(`InspectorState::resolve_from_mock` + `MockVault::seeded`) keep
+passing — the resolver prefers `vault::Vault` over `MockVault`
+when both are installed, mirroring `sidebar_panel::from_or_empty`
+and `note_list_pane::from_or_empty`.
+
+**Tests added.**  Six new `#[gpui::test]`s in `inspector_panel`:
+`real_vault_backlinks_lists_inbound_notes` (the A → B, C → B
+regression specified in the row),
+`real_vault_references_lists_outbound_notes`,
+`real_vault_instances_listed_by_prefix` (the `type-event.md` +
+`event-foo.md` / `event-bar.md` regression — also asserts
+`eventually.md` is excluded as a false-positive),
+`real_vault_instances_empty_for_non_type_notes`,
+`set_headings_short_circuits_on_unchanged_payload`,
+`set_active_swaps_state_and_clears_outline`.  Total inspector_panel
+test count: 16 (was 10).
+
+**Out of scope (deferred).**  Heading-click body-anchor navigation
+(no `ToHost::ScrollToAnchor` envelope today — same gap toc_panel
+sits behind from 9.2.6); Properties / Relationships / GitHistory
+section data sources (their own rows); per-section collapse-state
+persistence; the live-app mount path for `InspectorPanel` (Phase 8
+8.3.1 follow-up); vault `watch_events` → `refresh_state` consumer
+(Phase 9.6 `vault_lifecycle`).
 
 #### 9.2.9
 
