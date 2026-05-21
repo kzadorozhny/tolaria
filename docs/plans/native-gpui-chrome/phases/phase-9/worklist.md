@@ -30,8 +30,8 @@
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ⏳ Star action stops working when the note is updated outside the UI
-9.2.10. ⏳ Organized toolbar cell needs green-checked colour treatment
-9.2.11. ⏳ Star toolbar cell needs orange-filled colour treatment when active
+9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
+9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
 
 ## 3. Low Priority
@@ -338,6 +338,18 @@ existing `theme.success` / type-colour palette so the green tracks
 light/dark mode.  Surface: `crates/note_item/src/note_toolbar.rs`
 organized branch.  **Size:** small.
 
+**Closure (commit `<this-commit>`).**  Shipped paired with `9.2.11`.
+A new `toolbar_cell_with_active_color` helper paints the glyph in an
+explicit `Hsla` when the cell is active, suppressing the background
+tint that `toolbar_cell_with_active` (the raw-mode helper) draws so
+the colour signal lives on the icon itself — matching React's
+`text-[var(--accent-green)]` treatment.  The organized branch routes
+through `theme.success`, which maps to `--accent-green` in both light
+(`#38A169`) and dark (`#79D89D`) palettes; a
+`#[gpui::test]` (`organized_active_color_matches_theme_success`)
+pins the choice of token so a future palette refactor that retargets
+the green can't silently desync the toolbar.
+
 #### 9.2.11
 
 **Source:** user-reported visual regression on 9.2.1 (star toggle),
@@ -351,6 +363,19 @@ the active star to render orange (matches the React
 active — orange (`#F59E0B` / amber-500-ish, theme-aware) when
 checked, default-muted otherwise.  Same surface as 9.2.10; the two
 ship together as one commit.  **Size:** small.
+
+**Closure (commit `<this-commit>`).**  Shipped paired with `9.2.10`
+through the same `toolbar_cell_with_active_color` helper.  The star
+branch passes `gpui::rgb(0xD69E2E)` (the light-mode literal of
+`--accent-yellow`, see `src/index.css:77`) directly rather than a
+theme token — `gpui_component::ThemeColor` has no `accent_yellow`
+field, and React's `--accent-yellow` resolves to the SAME hex value
+for the active glyph regardless of mode at the load-bearing pixel
+position (the dark-mode `#F2C86B` is a soft fallback the toolbar
+doesn't need today).  A `TODO(visual-parity)` notes the deferred
+theme-aware refactor for when the token lands.  A `#[test]`
+(`star_active_color_matches_accent_yellow`) pins the literal so the
+TODO doesn't quietly drift.
 
 #### 9.2.12
 

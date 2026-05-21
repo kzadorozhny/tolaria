@@ -23,7 +23,7 @@
 use std::path::Path;
 
 use gpui::{
-    div, px, AnyElement, App, ClipboardItem, InteractiveElement, IntoElement, ParentElement,
+    div, px, AnyElement, App, ClipboardItem, Hsla, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement as _, Styled, Window,
 };
 use gpui_component::{h_flex, tooltip::Tooltip, ActiveTheme, IconName};
@@ -143,10 +143,16 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         .items_center()
         .gap(px(4.0))
         .text_color(muted)
-        .child(toolbar_cell(
+        // Star — when `_favorite: true` the glyph paints `--accent-yellow`
+        // (worklist 9.2.11) so the active state matches React's
+        // `FavoriteAction` styling (`text-[var(--accent-yellow)]`,
+        // `BreadcrumbBar.tsx:225`).
+        .child(toolbar_cell_with_active_color(
             "note-toolbar-star",
             star_icon,
             star_tooltip,
+            is_favorite,
+            star_active_color(),
             move |_window, cx| toggle_frontmatter_flag(id, "_favorite", !is_favorite, cx),
         ))
         // The React tooltip says "Show in Organized view", but the
@@ -156,10 +162,19 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         // `useInboxOrganizeAdvance` is gated on
         // `settings_store::explicit_organization_enabled`; revisit
         // when the setting lands.
-        .child(toolbar_cell(
+        //
+        // When `_organized: true` the glyph paints `theme.success`
+        // (worklist 9.2.10) so the active state matches React's
+        // `OrganizedAction` styling (`text-[var(--accent-green)]`,
+        // `BreadcrumbBar.tsx:231`).  `theme.success` is the
+        // theme-aware mapping of `--accent-green` (see
+        // `crates/theme/src/palette.rs` light + dark blocks).
+        .child(toolbar_cell_with_active_color(
             "note-toolbar-organized",
             IconName::CircleCheck,
             organized_tooltip,
+            is_organized,
+            organized_active_color(cx),
             move |_window, cx| toggle_frontmatter_flag(id, "_organized", !is_organized, cx),
         ))
         .child(stub_cell(
@@ -284,12 +299,53 @@ fn toolbar_cell_with_active(
     active: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    toolbar_cell_inner(id, icon, tooltip, active, None, on_click)
+}
+
+/// [`toolbar_cell`] variant that paints the glyph in `active_color` when
+/// `active` is true — used by the star (worklist 9.2.11) and organized
+/// (worklist 9.2.10) cells where the React reference colours the
+/// **icon** rather than the cell background.  When `active && active_color`
+/// is `Some`, the background tint that [`toolbar_cell_with_active`] would
+/// paint is suppressed so the glyph itself carries the active signal,
+/// matching `BreadcrumbBar.tsx` (`text-[var(--accent-yellow)]`,
+/// `text-[var(--accent-green)]`).
+fn toolbar_cell_with_active_color(
+    id: &'static str,
+    icon: IconName,
+    tooltip: &'static str,
+    active: bool,
+    active_color: Hsla,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    toolbar_cell_inner(id, icon, tooltip, active, Some(active_color), on_click)
+}
+
+/// Shared body of [`toolbar_cell_with_active`] and
+/// [`toolbar_cell_with_active_color`].  Splitting the public surfaces
+/// keeps the call sites self-describing (`with_active` vs.
+/// `with_active_color`) while the visual chain stays one source of
+/// truth.
+fn toolbar_cell_inner(
+    id: &'static str,
+    icon: IconName,
+    tooltip: &'static str,
+    active: bool,
+    active_color: Option<Hsla>,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
     use gpui::prelude::FluentBuilder as _;
     // Baseline tint matches the hover overlay so an active cell looks
     // exactly like a hovered one even when the cursor is elsewhere —
     // no new colour token required, and the chrome's existing dark /
-    // light theming carries through.
-    let active_bg = gpui::hsla(0.0, 0.0, 0.5, 0.12);
+    // light theming carries through.  Suppressed when the caller wants
+    // the glyph itself to carry the active signal (star + organized,
+    // worklist 9.2.10 / 9.2.11).  Single source of truth for the tint
+    // so a future tweak to the active / hover overlay updates both
+    // states in lockstep.
+    let cell_tint = gpui::hsla(0.0, 0.0, 0.5, 0.12);
+    let want_active_bg = active && active_color.is_none();
+    let glyph_color = if active { active_color } else { None };
     div()
         .id(id)
         .flex()
@@ -299,13 +355,39 @@ fn toolbar_cell_with_active(
         .w(px(24.0))
         .rounded_sm()
         .cursor_pointer()
-        .when(active, move |this| this.bg(active_bg))
-        .hover(|this| this.bg(gpui::hsla(0.0, 0.0, 0.5, 0.12)))
+        .when(want_active_bg, move |this| this.bg(cell_tint))
+        .when_some(glyph_color, |this, c| this.text_color(c))
+        .hover(move |this| this.bg(cell_tint))
         .on_click(move |_, window, cx| on_click(window, cx))
         .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
         .child(icon)
         .dump_as(id)
         .into_any_element()
+}
+
+/// Active-state colour for the star toolbar cell — mirrors React's
+/// `FavoriteAction` styling, which uses the `--accent-yellow` CSS
+/// custom property (`#D69E2E` light / `#F2C86B` dark, see
+/// `src/index.css:77,229`).  `gpui_component::ThemeColor` has no
+/// dedicated yellow accent today, so the colour is inlined as the
+/// light-mode value with a TODO so a periscope diff catches the
+/// dark-mode discrepancy when the token lands.
+///
+/// TODO(visual-parity): route through a theme-aware yellow accent once
+/// `ThemeColor` exposes one (or once `crates/theme` grows a Tolaria-side
+/// `accent_yellow` field).  Until then the dark palette renders this
+/// the same light-mode hue, which still reads as "active star" against
+/// both backgrounds.
+fn star_active_color() -> Hsla {
+    gpui::rgb(0xD69E2E).into()
+}
+
+/// Active-state colour for the organized toolbar cell — mirrors
+/// React's `OrganizedAction` styling, which uses the `--accent-green`
+/// CSS custom property.  Tracks `theme.success` directly so the colour
+/// follows light / dark mode without an extra constant.
+fn organized_active_color(cx: &App) -> Hsla {
+    cx.theme().success
 }
 
 /// Convenience wrapper around [`toolbar_cell`] for cells whose
@@ -592,5 +674,64 @@ mod tests {
             assert!(!cx.has_global::<vault::Vault>());
             toggle_frontmatter_flag(NoteId::from_raw(7), "_favorite", true, cx);
         });
+    }
+
+    /// Worklist 9.2.11 — the star cell's active-state glyph must paint
+    /// `--accent-yellow` (`#D69E2E`).  Pins the literal hue so a future
+    /// theme refactor that wires `ThemeColor::accent_yellow` updates
+    /// this assertion at the same time.
+    #[test]
+    fn star_active_color_matches_accent_yellow() {
+        let color = star_active_color();
+        let expected: Hsla = gpui::rgb(0xD69E2E).into();
+        // `Hsla` has no `PartialEq`, so compare the four channels
+        // directly; rgb→hsla is deterministic so byte-identity holds.
+        assert_eq!(color.h, expected.h);
+        assert_eq!(color.s, expected.s);
+        assert_eq!(color.l, expected.l);
+        assert_eq!(color.a, expected.a);
+    }
+
+    /// Worklist 9.2.10 — the organized cell's active-state glyph must
+    /// paint `theme.success` (i.e. `--accent-green`).  Anchors the
+    /// toolbar's choice of token so a future palette refactor that
+    /// retargets the green can't silently desync the toolbar.
+    #[gpui::test]
+    fn organized_active_color_matches_theme_success(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            let color = organized_active_color(cx);
+            let expected = cx.theme().success;
+            assert_eq!(color.h, expected.h);
+            assert_eq!(color.s, expected.s);
+            assert_eq!(color.l, expected.l);
+            assert_eq!(color.a, expected.a);
+        });
+    }
+
+    /// Worklist 9.2.10 / 9.2.11 — the active-color cell helper must
+    /// build successfully in both states.  Click behaviour is covered
+    /// by the toggle-dispatch tests; this asserts only that the
+    /// `Some(color)` path doesn't trip a builder invariant (e.g. by
+    /// shadowing `text_color` with a bad ordering).
+    #[test]
+    fn toolbar_cell_with_active_color_builds_in_both_states() {
+        let yellow: Hsla = gpui::rgb(0xD69E2E).into();
+        let _on = toolbar_cell_with_active_color(
+            "note-toolbar-star",
+            IconName::StarFill,
+            "Unstar this note",
+            true,
+            yellow,
+            |_window, _cx| {},
+        );
+        let _off = toolbar_cell_with_active_color(
+            "note-toolbar-star",
+            IconName::Star,
+            "Star this note",
+            false,
+            yellow,
+            |_window, _cx| {},
+        );
     }
 }
