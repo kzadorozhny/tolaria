@@ -46,6 +46,7 @@ env_logger.workspace = true
 # scaffolding never links into the release binary.
 [dev-dependencies]
 chrono.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { workspace = true, features = ["test-support"] }

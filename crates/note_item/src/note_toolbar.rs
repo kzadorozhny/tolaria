@@ -20,13 +20,21 @@
 //! `id()`-tagged + `dump_as`-registered so periscope can target them
 //! by name once the actions land.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui::{
     div, px, AnyElement, App, ClipboardItem, Hsla, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement as _, Styled, Window,
 };
-use gpui_component::{h_flex, tooltip::Tooltip, ActiveTheme, IconName};
+use gpui_component::{
+    button::{Button, ButtonVariants as _},
+    h_flex,
+    menu::{PopupMenu, PopupMenuItem},
+    popover::Popover,
+    tooltip::Tooltip,
+    ActiveTheme, IconName, Sizable as _,
+};
 use ui::tree_dump::DumpAsExt as _;
 use vault::{NoteId, Vault};
 
@@ -283,11 +291,7 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
             "Copy note path",
             move |_window, cx| copy_path_to_clipboard(&copy_path, cx),
         ))
-        .child(stub_cell(
-            "note-toolbar-more",
-            IconName::Ellipsis,
-            "More actions",
-        ))
+        .child(more_overflow_cell(path.to_path_buf()))
         .child(toolbar_cell(
             "note-toolbar-inspector",
             IconName::PanelRight,
@@ -554,13 +558,108 @@ fn organized_icon_for(active: bool) -> IconName {
 
 /// Convenience wrapper around [`toolbar_cell`] for cells whose
 /// behaviour hasn't been wired yet — logs the stub message on click,
-/// matching the previous helper's body.  Used by the seven worklist
-/// rows (2.9-2.14, 2.17) that need real product work (frontmatter
-/// mutation, new panels, AI integration) before they can dispatch.
+/// matching the previous helper's body.  Used by the remaining
+/// unwired toolbar cells (notably `note-toolbar-width` and
+/// `note-toolbar-ai`) that need real product work (note-width chrome
+/// knob, AI panel attach) before they can dispatch.
 fn stub_cell(id: &'static str, icon: IconName, tooltip: &'static str) -> AnyElement {
     toolbar_cell(id, icon, tooltip, move |_, _| {
         log::info!("note toolbar action stub: {id}");
     })
+}
+
+/// More-overflow popover cell for the `note-toolbar-more` slot
+/// (worklist 9.2.7).  Mirrors React's `BreadcrumbOverflowMenu`
+/// (`BreadcrumbBar.tsx:892-993`): a [`Popover`] anchored to a small
+/// ellipsis button whose body is a [`PopupMenu`] listing the
+/// overflow actions in the same order as the React reference.
+///
+/// `note_path` is captured by the reveal/copy items so the dispatched
+/// helpers (which take a `&Path` runtime value, not an action) carry
+/// the correct path for the active note.
+///
+/// Responsive collapse (the React menu also absorbs neighbourhood +
+/// file-path actions when the toolbar is narrow) is intentionally
+/// deferred to a `9.2.7-followup` — measuring the toolbar's available
+/// width and conditionally moving cells into the menu is out of
+/// scope for this commit.
+///
+/// TODO(9.2.7-followup): apply `theme.danger` to the **Delete** label
+/// to mirror React's destructive-action styling.  `PopupMenuItem`
+/// doesn't expose a direct text-color override today; routing through
+/// [`PopupMenuItem::element`] with a custom rendered row is the
+/// follow-up shape.  The `Trash2` glyph + "Delete" label already
+/// signals destructiveness in the meantime.
+fn more_overflow_cell(note_path: PathBuf) -> AnyElement {
+    let reveal_path = note_path.clone();
+    let copy_path = note_path;
+    // `Rc` lets the per-render `content` closure share the captured
+    // paths across every PopupMenu rebuild without re-cloning per
+    // item (the menu is reconstructed on every paint when the
+    // popover is open).
+    let reveal_path = Rc::new(reveal_path);
+    let copy_path = Rc::new(copy_path);
+
+    Popover::new("note-toolbar-more")
+        // Inherit the toolbar's native chrome (no extra background /
+        // shadow on the trigger button) — the popover itself paints
+        // its own popover-style surface for the menu body.
+        .appearance(true)
+        .anchor(gpui::Anchor::TopRight)
+        .trigger(
+            Button::new("note-toolbar-more-trigger")
+                .icon(IconName::Ellipsis)
+                .ghost()
+                .small()
+                .tooltip("More actions"),
+        )
+        .content(move |_, window, cx| {
+            let reveal_path = reveal_path.clone();
+            let copy_path = copy_path.clone();
+            PopupMenu::build(window, cx, move |menu: PopupMenu, _, _| {
+                let reveal_path = reveal_path.clone();
+                let copy_path = copy_path.clone();
+                menu.item(
+                    PopupMenuItem::new("Reveal in Finder")
+                        .icon(IconName::FolderOpen)
+                        .on_click(move |_event, _window, _cx| reveal_in_finder(&reveal_path)),
+                )
+                .item(
+                    PopupMenuItem::new("Copy path")
+                        .icon(IconName::Copy)
+                        .on_click(move |_event, _window, cx: &mut App| {
+                            copy_path_to_clipboard(&copy_path, cx)
+                        }),
+                )
+                .separator()
+                .menu_with_icon(
+                    "Table of contents",
+                    IconName::Menu,
+                    Box::new(actions::ToggleTableOfContents),
+                )
+                .menu_with_icon(
+                    "Raw markdown",
+                    IconName::SquareTerminal,
+                    Box::new(actions::ToggleRawEditor),
+                )
+                .separator()
+                .menu_with_icon("Archive", IconName::Inbox, Box::new(actions::Archive))
+                .item(
+                    PopupMenuItem::new("Delete")
+                        .icon(IconName::Delete)
+                        .on_click(move |_event, window: &mut Window, cx: &mut App| {
+                            // TODO(9.2.7-followup): route through a
+                            // ConfirmDelete dialog before firing the
+                            // unlink.  React's reference uses an
+                            // `AlertDialog`; we'll wire the GPUI
+                            // equivalent once `dialog_stack` lands.
+                            window.dispatch_action(Box::new(actions::Delete), cx);
+                        }),
+                )
+            })
+            .into_any_element()
+        })
+        .into_any_element()
 }
 
 /// Reveal-in-Finder handler for the `note-toolbar-reveal` cell
@@ -1036,5 +1135,20 @@ mod tests {
         // `toolbar_cell_inner` constructs cleanly.  Regression guard
         // against a future refactor that drops the disc child
         // accidentally — the call must still produce an element.
+    }
+
+    /// Worklist 9.2.7 — the More-overflow popover cell helper must
+    /// construct cleanly with a real note path.  The full menu body
+    /// (Popover trigger + PopupMenu content + per-item handlers) only
+    /// renders inside a live `Window` so we can't drive the click
+    /// chain headlessly; this test pins the builder shape so a future
+    /// refactor that breaks the closure capture chain (e.g. moves the
+    /// `Rc<PathBuf>` clones around) surfaces as a compile-time or
+    /// constructor-panic regression instead of a runtime-only one.
+    #[test]
+    fn more_overflow_cell_builds_with_real_path() {
+        let path = std::path::PathBuf::from("/tmp/foo/procedure-bar.md");
+        let _cell = more_overflow_cell(path);
+        // No panic — the Popover + PopupMenu chain constructs.
     }
 }

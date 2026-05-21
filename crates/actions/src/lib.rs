@@ -95,6 +95,35 @@ gpui::actions!(
         /// note-toolbar `note-toolbar-neighborhood` cell; no default
         /// keybinding (React parity — the React handler is mouse-only).
         EnterNeighborhood,
+        /// Archive the active note (Phase 9 worklist 9.2.7).  Writes
+        /// `_archived: true` to the note's YAML frontmatter via the
+        /// shared `Vault::set_frontmatter_bool` write path.  Mirrors
+        /// React's `BreadcrumbOverflowMenu` "Archive" entry
+        /// (`BreadcrumbBar.tsx:892-993`).
+        ///
+        /// Parameter-less: the handler in `tolaria/src/main.rs`
+        /// resolves the active [`NoteItem`] via the shared
+        /// `ActiveNoteItemSlot` (same lookup `EnterNeighborhood`
+        /// uses) and dispatches `vault.archive_note(id)`.  No default
+        /// keybinding (React parity — the menu entry is mouse-only).
+        ///
+        /// Filesystem move is deferred to Phase 10+ `vault_lifecycle`;
+        /// this action only mutates frontmatter.
+        Archive,
+        /// Delete the active note (Phase 9 worklist 9.2.7).
+        /// Removes the note's file from disk and rescans the vault.
+        /// Mirrors React's `BreadcrumbOverflowMenu` "Delete" entry
+        /// (`BreadcrumbBar.tsx:892-993`).
+        ///
+        /// Parameter-less: the handler in `tolaria/src/main.rs`
+        /// resolves the active [`NoteItem`] via the shared
+        /// `ActiveNoteItemSlot` (same lookup `EnterNeighborhood`
+        /// uses) and dispatches `vault.delete_note(id)`.  No default
+        /// keybinding (React parity — the menu entry is mouse-only).
+        ///
+        /// TODO(9.2.7-followup): wrap in a ConfirmDelete modal before
+        /// firing.  For MVP the click is destructive without prompt.
+        Delete,
         CloseTab,
         /// Phase 8.13 — dismiss the active modal in `TolariaWorkspace`'s
         /// `ModalLayer`.  Bound to `escape` in the modal-active context

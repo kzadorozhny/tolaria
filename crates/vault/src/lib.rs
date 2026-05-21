@@ -596,6 +596,78 @@ impl Vault {
         }
     }
 
+    /// Mark the note as archived by writing `_archived: true` into its
+    /// YAML frontmatter (Phase 9 worklist 9.2.7).  Mirrors the React
+    /// `BreadcrumbOverflowMenu` "Archive" entry, which writes the same
+    /// boolean via the shared frontmatter write path.
+    ///
+    /// Returns the same `Task<Result<(), VaultError>>` shape as
+    /// [`set_frontmatter_bool`] so call sites (e.g. the toolbar's More
+    /// menu in `note_item::note_toolbar`) can `.detach()` and observe
+    /// the result through the watch channel on the next frame.
+    ///
+    /// Filesystem move (relocating the file into an `archive/`
+    /// subdirectory the way some vault tools do) is intentionally out
+    /// of scope here — Phase 10+ `vault_lifecycle` is the proper home
+    /// for path-shape mutations.  This commit only flips the
+    /// frontmatter boolean.
+    pub fn archive_note(&mut self, id: NoteId) -> Task<Result<(), VaultError>> {
+        self.set_frontmatter_bool(id, "_archived", true)
+    }
+
+    /// Delete the note's file from disk and rescan the vault so the
+    /// in-memory index drops the entry (Phase 9 worklist 9.2.7).
+    /// Mirrors the React `BreadcrumbOverflowMenu` "Delete" entry,
+    /// which removes the file outright.
+    ///
+    /// Returns a `Task<Result<(), VaultError>>` mirroring
+    /// [`set_frontmatter_bool`] / [`save`] so chrome call sites share
+    /// a single shape.  Emits a synchronous `VaultChanged` event on
+    /// the watch channel so subscribers (note-list pane, sidebar
+    /// counts) invalidate their cached projections without waiting
+    /// for the fs-watcher debounce.
+    ///
+    /// MVP behaviour: a straight [`std::fs::remove_file`] — no
+    /// `.trash/` quarantine, no Finder-style undo.  Filesystem trash
+    /// is deferred to a follow-up (the `9.2.7-followup` block in
+    /// `docs/plans/native-gpui-chrome/phases/phase-9/worklist.md`).
+    ///
+    /// # Errors
+    ///
+    /// - `NotFound(id)` when the id is unknown.
+    /// - `Io { path, source }` when the unlink fails (permission
+    ///   denied, parent directory read-only, …) or when the
+    ///   post-delete rescan fails.
+    pub fn delete_note(&mut self, id: NoteId) -> Task<Result<(), VaultError>> {
+        let Some(note) = self.notes.get(&id) else {
+            return Task::ready(Err(VaultError::NotFound(id)));
+        };
+        let path = note.path.clone();
+        if let Err(source) = std::fs::remove_file(&path) {
+            return Task::ready(Err(VaultError::Io {
+                path: path.clone(),
+                source,
+            }));
+        }
+        // Drop the entry from the in-memory index synchronously so
+        // the next render of `iter_notes` / `note_sync(id)` observes
+        // the deletion without waiting for an fs-watcher tick.  The
+        // full `rescan` below is a belt-and-braces refresh that also
+        // catches any sibling renames that landed in the meantime.
+        self.notes.remove(&id);
+        if let Err(err) = self.rescan_internal() {
+            // Disk side already succeeded — surface the rescan failure
+            // through `VaultError::Rescan` so the caller can decide
+            // whether to retry, but keep the in-memory deletion in
+            // place (it's the source of truth for what the user just
+            // saw vanish).
+            self.emit_frontmatter_changed(&path);
+            return Task::ready(Err(VaultError::Rescan(err)));
+        }
+        self.emit_frontmatter_changed(&path);
+        Task::ready(Ok(()))
+    }
+
     /// Create a new markdown note in the vault root with an empty body.
     ///
     /// Picks a unique filename derived from `stem`: starts with
@@ -2041,5 +2113,117 @@ mod tests {
         write(dir.path(), "A.md", "body");
         let v = Vault::open_at(dir.path()).unwrap();
         assert!(v.outbound_links(NoteId(9_999)).is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // archive_note / delete_note — worklist 9.2.7
+    // -----------------------------------------------------------------
+
+    /// Archive writes `_archived: true` through the same frontmatter
+    /// write path as star/organized — pin the key so a typo in
+    /// `archive_note` can't slip past `set_frontmatter_bool`'s coverage.
+    #[gpui::test]
+    async fn archive_note_writes_archived_true_to_frontmatter(cx: &mut gpui::TestAppContext) {
+        let dir = tempdir().unwrap();
+        let path = write(dir.path(), "n.md", "---\ntype: Note\n---\nbody\n");
+        let mut v = Vault::open_at(dir.path()).unwrap();
+        let id = v.note_ids_sync()[0];
+        cx.update(|cx| v.set_executor(cx.background_executor().clone()));
+        v.archive_note(id)
+            .await
+            .expect("archive_note must succeed for a known id");
+        assert!(
+            v.note_sync(id).unwrap().frontmatter.archived(),
+            "in-memory frontmatter must mirror the archive flag",
+        );
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert!(
+            on_disk.contains("_archived: true"),
+            "archive_note must write the `_archived` key; got: {on_disk:?}",
+        );
+    }
+
+    /// Archive of an unknown id must surface `NotFound` (same shape as
+    /// `set_frontmatter_bool` returns) rather than panic.
+    #[gpui::test]
+    async fn archive_note_unknown_id_returns_not_found(cx: &mut gpui::TestAppContext) {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "n.md", "body");
+        let mut v = Vault::open_at(dir.path()).unwrap();
+        cx.update(|cx| v.set_executor(cx.background_executor().clone()));
+        let err = v
+            .archive_note(NoteId(9_999))
+            .await
+            .expect_err("unknown id must error");
+        assert!(matches!(err, VaultError::NotFound(_)));
+    }
+
+    /// Worklist 9.2.7 — `delete_note` removes the file from disk and
+    /// drops the entry from the in-memory index.  The load-bearing
+    /// invariant is that the deleted id no longer surfaces through
+    /// `iter_notes` after the task resolves; the rescan path is what
+    /// catches any lingering `notes` map entry.
+    #[gpui::test]
+    async fn delete_note_removes_file_and_drops_in_memory_entry(cx: &mut gpui::TestAppContext) {
+        let dir = tempdir().unwrap();
+        let path = write(dir.path(), "n.md", "---\ntype: Note\n---\nbody\n");
+        let mut v = Vault::open_at(dir.path()).unwrap();
+        let id = v.note_ids_sync()[0];
+        cx.update(|cx| v.set_executor(cx.background_executor().clone()));
+        assert!(path.exists(), "fixture must exist before delete");
+        v.delete_note(id)
+            .await
+            .expect("delete_note must succeed for a known id");
+        assert!(!path.exists(), "delete_note must unlink the file from disk");
+        assert!(
+            v.iter_notes().all(|n| n.id != id),
+            "delete_note must drop the entry from the in-memory index",
+        );
+        assert!(
+            v.note_sync(id).is_none(),
+            "note_sync must return None after delete",
+        );
+    }
+
+    /// Delete of an unknown id must surface `NotFound` rather than
+    /// panic — same defensive shape as `set_frontmatter_bool` /
+    /// `archive_note`.
+    #[gpui::test]
+    async fn delete_note_unknown_id_returns_not_found(cx: &mut gpui::TestAppContext) {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "n.md", "body");
+        let mut v = Vault::open_at(dir.path()).unwrap();
+        cx.update(|cx| v.set_executor(cx.background_executor().clone()));
+        let err = v
+            .delete_note(NoteId(9_999))
+            .await
+            .expect_err("unknown id must error");
+        assert!(matches!(err, VaultError::NotFound(_)));
+    }
+
+    /// `delete_note` must emit a `VaultChanged` on the watch channel so
+    /// chrome subscribers (notes list, sidebar counts) invalidate their
+    /// cached projection without waiting for the OS-level fs-watcher
+    /// debounce.  Mirrors the equivalent invariant pinned for
+    /// `set_frontmatter_bool` in `set_frontmatter_bool_emits_watch_event_on_write`.
+    #[test]
+    fn delete_note_emits_watch_event() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "n.md", "---\ntype: Note\n---\nbody\n");
+        let mut v = Vault::open_at(dir.path()).unwrap();
+        let rx = v.watch_events();
+        let id = v.note_ids_sync()[0];
+        let canonical = v.notes.get(&id).unwrap().path.clone();
+        // Sync path (no executor installed) resolves the task inline;
+        // dropping the returned task is enough to fire the watch event.
+        drop(v.delete_note(id));
+        let event = rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .expect("delete_note must emit a synchronous VaultChanged event");
+        assert!(
+            event.paths.iter().any(|p| p == &canonical),
+            "emitted VaultChanged must include the deleted note's canonical path; got {:?}",
+            event.paths,
+        );
     }
 }

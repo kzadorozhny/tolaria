@@ -1091,6 +1091,90 @@ pub(crate) mod macos {
                             pane.set_header_title(header, cx);
                         });
                     });
+
+                    // Worklist 9.2.7 — `Archive` writes `_archived: true`
+                    // to the active note's frontmatter through the same
+                    // `set_frontmatter_bool` write path the star /
+                    // organized cells use.  Mirrors React's
+                    // `BreadcrumbOverflowMenu` "Archive" entry; same slot
+                    // lookup as `EnterNeighborhood` so all toolbar
+                    // actions agree on "which note is on screen".  No
+                    // ConfirmArchive modal — React's reference doesn't
+                    // prompt either; the flag is reversible.
+                    let archive_slot = active_note_item.clone();
+                    cx.on_action(move |_: &actions::Archive, cx| {
+                        let Some(item) = archive_slot.borrow().as_ref().cloned() else {
+                            log::warn!(
+                                target: "tolaria::archive",
+                                "Archive: no active NoteItem — toolbar click reached the \
+                                 handler before preload_blank_webview populated the slot"
+                            );
+                            return;
+                        };
+                        let id = item.read(cx).id();
+                        if !cx.has_global::<vault::Vault>() {
+                            log::warn!(
+                                target: "tolaria::archive",
+                                "Archive: no Vault global installed (id={id:?})"
+                            );
+                            return;
+                        }
+                        log::info!(
+                            target: "tolaria::archive",
+                            "Archive: dispatched for id={id:?}",
+                        );
+                        cx.global_mut::<vault::Vault>().archive_note(id).detach();
+                        cx.refresh_windows();
+                    });
+
+                    // Worklist 9.2.7 — `Delete` removes the active
+                    // note's file from disk and rescans the vault.
+                    // Mirrors React's `BreadcrumbOverflowMenu` "Delete"
+                    // entry.  No confirmation modal yet — the menu
+                    // entry is destructive; a ConfirmDelete modal is
+                    // tracked as a Phase 9.2.7-followup once the
+                    // `dialog_stack` primitive lands.
+                    //
+                    // TODO(9.2.7-followup): route through a
+                    // ConfirmDelete dialog before firing the unlink.
+                    // The React reference uses an `AlertDialog` here;
+                    // GPUI parity will follow once `dialog_stack`
+                    // exposes the primitive.
+                    let delete_slot = active_note_item.clone();
+                    cx.on_action(move |_: &actions::Delete, cx| {
+                        let Some(item) = delete_slot.borrow().as_ref().cloned() else {
+                            log::warn!(
+                                target: "tolaria::delete",
+                                "Delete: no active NoteItem — toolbar click reached the \
+                                 handler before preload_blank_webview populated the slot"
+                            );
+                            return;
+                        };
+                        let id = item.read(cx).id();
+                        if !cx.has_global::<vault::Vault>() {
+                            log::warn!(
+                                target: "tolaria::delete",
+                                "Delete: no Vault global installed (id={id:?})"
+                            );
+                            return;
+                        }
+                        log::info!(
+                            target: "tolaria::delete",
+                            "Delete: dispatched for id={id:?}",
+                        );
+                        cx.global_mut::<vault::Vault>().delete_note(id).detach();
+                        // TODO(9.2.7-followup): after the deleted
+                        // note's file is unlinked, the active editor
+                        // still holds the old `NoteItem`.  Phase 10
+                        // `vault_lifecycle` will route a
+                        // `next_note_after_delete` selection through
+                        // the workspace; for MVP `refresh_windows()`
+                        // re-renders the toolbar so its `note_sync`
+                        // returns `None` and the cells gracefully fall
+                        // back to the "no note" branch.
+                        cx.refresh_windows();
+                    });
+
                     // Slot holding the currently mounted `NoteItem` so
                     // successive `OpenNoteEvent`s reuse the same entity
                     // (and underlying WKWebView) instead of constructing a
@@ -1608,6 +1692,170 @@ mod tests {
         assert!(
             is_raw,
             "toggle_raw_mode must have flipped raw_mode to true after one click"
+        );
+    }
+
+    /// Worklist 9.2.7 — `Archive` resolves the active note through the
+    /// shared `ActiveNoteItemSlot` (same lookup as `ToggleRawEditor` /
+    /// `EnterNeighborhood`) and dispatches into the installed
+    /// [`vault::Vault`] global.  This pins the slot-empty early-return
+    /// branch + the populated-slot dispatch end-to-end so a future
+    /// refactor of the handler shape (e.g. moving the slot lookup,
+    /// renaming the action) surfaces as a failing assertion here.
+    ///
+    /// The test runs against a real on-disk vault tempdir so the
+    /// archive write hits the same `set_frontmatter_bool` write path
+    /// the React reference does — `_archived: true` ends up in the
+    /// note's frontmatter both in memory and on disk.
+    #[gpui::test]
+    fn archive_action_resolves_via_active_note_item_slot(cx: &mut TestAppContext) {
+        use gpui::{AppContext as _, Entity};
+        use note_item::NoteItem;
+        use tempfile::tempdir;
+        use vault::{Note, NoteKind, Vault};
+
+        cx.update(gpui_component::init);
+
+        let dir = tempdir().expect("tempdir");
+        let note_path = dir.path().join("n.md");
+        std::fs::write(&note_path, "---\ntype: Note\n---\nbody\n").unwrap();
+        let vault = Vault::open_at(dir.path()).expect("open vault");
+        let vault_id = cx.update(|cx| cx.foreground_executor().block_on(vault.notes())[0]);
+        cx.update(|cx| cx.set_global(vault));
+
+        let slot: crate::open_note::ActiveNoteItemSlot =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let handler_slot = slot.clone();
+
+        cx.update(|cx| {
+            // Mirror the production registration in `macos::run` —
+            // resolve the active NoteItem from the slot, read its id,
+            // dispatch to `Vault::archive_note`.
+            cx.on_action(move |_: &actions::Archive, cx| {
+                let Some(item) = handler_slot.borrow().as_ref().cloned() else {
+                    return;
+                };
+                let id = item.read(cx).id();
+                cx.global_mut::<Vault>().archive_note(id).detach();
+            });
+        });
+
+        // Slot-empty: dispatching must NOT touch the vault.  The
+        // fixture starts unarchived; the assertion guards against a
+        // future regression that drops the slot-empty early-return.
+        cx.update(|cx| {
+            cx.dispatch_action(&actions::Archive);
+        });
+        cx.run_until_parked();
+        assert!(
+            !cx.update(|cx| cx
+                .global::<Vault>()
+                .note_sync(vault_id)
+                .unwrap()
+                .frontmatter
+                .archived()),
+            "with the slot empty Archive must early-return without touching the vault"
+        );
+
+        // Populate the slot and dispatch — the vault write goes
+        // through the same path the toolbar's More menu uses.
+        let note = Note {
+            id: vault_id,
+            title: "Live Note".into(),
+            path: note_path.clone(),
+            kind: NoteKind::Markdown,
+            modified: chrono::Utc::now(),
+            byte_size: 0,
+            frontmatter: vault::Frontmatter::default(),
+        };
+        let item: Entity<NoteItem> = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        *slot.borrow_mut() = Some(item);
+
+        cx.update(|cx| {
+            cx.dispatch_action(&actions::Archive);
+        });
+        cx.run_until_parked();
+
+        assert!(
+            cx.update(|cx| cx
+                .global::<Vault>()
+                .note_sync(vault_id)
+                .unwrap()
+                .frontmatter
+                .archived()),
+            "Archive must mark the note's `_archived` flag true"
+        );
+        let on_disk = std::fs::read_to_string(&note_path).unwrap();
+        assert!(
+            on_disk.contains("_archived: true"),
+            "Archive must write `_archived: true` to disk; got: {on_disk:?}"
+        );
+    }
+
+    /// Worklist 9.2.7 — `Delete` mirrors the Archive flow but unlinks
+    /// the note's file from disk.  Slot-empty early-return guard + the
+    /// populated-slot delete path are both pinned.
+    #[gpui::test]
+    fn delete_action_resolves_via_active_note_item_slot(cx: &mut TestAppContext) {
+        use gpui::{AppContext as _, Entity};
+        use note_item::NoteItem;
+        use tempfile::tempdir;
+        use vault::{Note, NoteKind, Vault};
+
+        cx.update(gpui_component::init);
+
+        let dir = tempdir().expect("tempdir");
+        let note_path = dir.path().join("n.md");
+        std::fs::write(&note_path, "---\ntype: Note\n---\nbody\n").unwrap();
+        let vault = Vault::open_at(dir.path()).expect("open vault");
+        let vault_id = cx.update(|cx| cx.foreground_executor().block_on(vault.notes())[0]);
+        cx.update(|cx| cx.set_global(vault));
+
+        let slot: crate::open_note::ActiveNoteItemSlot =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let handler_slot = slot.clone();
+
+        cx.update(|cx| {
+            cx.on_action(move |_: &actions::Delete, cx| {
+                let Some(item) = handler_slot.borrow().as_ref().cloned() else {
+                    return;
+                };
+                let id = item.read(cx).id();
+                cx.global_mut::<Vault>().delete_note(id).detach();
+            });
+        });
+
+        // Slot empty — dispatch must not unlink anything.
+        cx.update(|cx| {
+            cx.dispatch_action(&actions::Delete);
+        });
+        cx.run_until_parked();
+        assert!(
+            note_path.exists(),
+            "with the slot empty Delete must early-return without touching the disk"
+        );
+
+        let note = Note {
+            id: vault_id,
+            title: "Live Note".into(),
+            path: note_path.clone(),
+            kind: NoteKind::Markdown,
+            modified: chrono::Utc::now(),
+            byte_size: 0,
+            frontmatter: vault::Frontmatter::default(),
+        };
+        let item: Entity<NoteItem> = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        *slot.borrow_mut() = Some(item);
+
+        cx.update(|cx| {
+            cx.dispatch_action(&actions::Delete);
+        });
+        cx.run_until_parked();
+
+        assert!(!note_path.exists(), "Delete must unlink the file from disk");
+        assert!(
+            cx.update(|cx| cx.global::<Vault>().note_sync(vault_id).is_none()),
+            "Delete must drop the note from the in-memory vault index"
         );
     }
 

@@ -8160,6 +8160,7 @@ dependencies = [
  "paths",
  "settings_store",
  "sidebar_panel",
+ "tempfile",
  "theme",
  "toc_panel",
  "ui",

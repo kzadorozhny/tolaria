@@ -120,6 +120,20 @@ impl Frontmatter {
         matches!(self.get("_organized"), Some(FrontmatterValue::Bool(true)))
     }
 
+    /// True iff the note's `_archived` flag is set to a literal `true`
+    /// in its YAML frontmatter.  Absent or non-boolean values read as
+    /// `false`.
+    ///
+    /// Wired to the note-toolbar More-overflow menu's "Archive" entry
+    /// (worklist 9.2.7) via [`crate::Vault::archive_note`].  The flag
+    /// is informational at the vault layer — scope filtering (hiding
+    /// archived notes from the standard lists) is left to chrome-side
+    /// projections in a follow-up.
+    #[must_use]
+    pub fn archived(&self) -> bool {
+        matches!(self.get("_archived"), Some(FrontmatterValue::Bool(true)))
+    }
+
     /// Insert or replace a boolean key in the in-memory map.
     ///
     /// `crate`-visible because it is paired exclusively with
