@@ -697,6 +697,37 @@ layers) depending on ordering.  Out of `9.2.8`'s scope; tracked
 here because the user-shared reference makes the parity target
 explicit.
 
+**Closure of sub-scope 9.2.13a (commit `<this-commit>`).**
+First read-only display pass: the `Properties` body now reads the
+active note's frontmatter via `vault::Note::frontmatter()` and
+renders one row per `(key, FrontmatterValue)` pair in sorted
+order (internal keys `_favorite`, `_organized`, `_favorite_index`
+filtered out).  Each value renders per-variant: `Text` /
+`Date` / `Number` / `Bool` as plain text, `List` as a comma-
+separated text run.  The `Relationships` body now parses six
+relationship-shaped frontmatter keys (`aliases`, `belongs-to` /
+`belongs to`, `owner`, `related-to` / `related to`, `has`,
+`parent`, `child`), collects the embedded `[[wikilink]]` targets,
+and renders one collapsible-style group per relationship key
+with the targets as pills.  Inverse relationships ship as a
+single combined `Referenced From` group, sourced by walking
+`vault.backlinks(active_id)` and keeping every backlinker whose
+frontmatter declares a relationship key that targets the active
+note's title.  A new `Info` section (sitting between
+`Relationships` and `GitHistory`) renders read-only `Modified`
+and `Size` rows from `Note.modified` + `Note.byte_size`, with
+`humanize_bytes` formatting the byte count as `B` / `KB` / `MB`.
+**Still open on 9.2.13:** Properties editing (typed editors for
+date / status / URL / icon / wikilink — `9.2.13b`); `+ Add
+property` + per-section `Add` slot + `+ Add relationship`
+footer button (`9.2.13c`); `Created` + `Words` rows in `Info`
+(depends on either an `fs::metadata().created()` plumbing or a
+body cache on `Note` — `9.2.13a-followup`); `Git History`
+rendering (`9.2.13d`, blocked on Phase 11 `git_provider`); per-
+inverse-relation split of `Referenced From` into one group per
+inverse key (`9.2.13e`); header dock-toggle + close `X` chrome
+buttons (polish, `9.2.13f`).
+
 ### Cross-row notes
 
 - **Shared infrastructure.** Rows `9.2.3` (neighbourhood) and `9.2.8`

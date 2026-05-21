@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 //! Inspector panel for the Tolaria right dock (ADR-0115 Phase 9 worklist 9.2.8).
 //!
-//! Shows contextual metadata for the active note in seven collapsible
+//! Shows contextual metadata for the active note in eight collapsible
 //! accordion sections: Properties, Outline, Backlinks, Instances,
-//! References, Relationships, and GitHistory.
+//! References, Relationships, Info, and GitHistory.  Worklist 9.2.13a
+//! added the read-only Info section between Relationships and
+//! GitHistory.
 //!
 //! # Resolver strategy (Phase 9 worklist 9.2.8)
 //!
@@ -54,6 +56,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use chrono::{DateTime, Utc};
 use editor_bridge::Heading;
 use gpui::{
     div, px, AnyElement, App, Context, EventEmitter, InteractiveElement, IntoElement,
@@ -61,7 +64,7 @@ use gpui::{
 };
 use gpui_component::{ActiveTheme, StyledExt as _};
 use mock_fixtures::{MockCommit, MockGit, MockNote, MockVault};
-use vault::{NoteId, Vault};
+use vault::{FrontmatterValue, NoteId, Vault};
 use workspace::panel::{DockPosition, Panel};
 
 // ---------------------------------------------------------------------------
@@ -110,6 +113,12 @@ pub enum InspectorSection {
     /// expansion state; the user-facing label is `"References"`).
     ReferencedBy,
     Relationships,
+    /// Read-only file metadata for the active note (worklist 9.2.13a).
+    /// Sits between Relationships and GitHistory to mirror the
+    /// user-shared React reference: `Modified` / `Created` / `Words` /
+    /// `Size`.  The first pass ships `Modified` + `Size` only — the
+    /// other two depend on plumbing not yet on `vault::Note`.
+    Info,
     GitHistory,
 }
 
@@ -122,6 +131,7 @@ impl InspectorSection {
         Self::Instances,
         Self::ReferencedBy,
         Self::Relationships,
+        Self::Info,
         Self::GitHistory,
     ];
 
@@ -137,6 +147,7 @@ impl InspectorSection {
             // stays for back-compat with any persisted expansion state.
             Self::ReferencedBy => "References",
             Self::Relationships => "Relationships",
+            Self::Info => "Info",
             Self::GitHistory => "Git History",
         }
     }
@@ -213,6 +224,30 @@ pub struct InspectorState {
     /// the section renders its empty state until a frontmatter-backed
     /// source lands.
     pub mock_outbound_links: Vec<String>,
+    /// Real-vault Properties (worklist 9.2.13a) — sorted, filtered
+    /// frontmatter pairs ready for read-only rendering.  Internal keys
+    /// (`_favorite`, `_organized`, `_favorite_index`) are filtered out
+    /// at resolve time so the render path stays a pure projection.
+    pub properties: Vec<(SharedString, FrontmatterValue)>,
+    /// Real-vault Relationships (worklist 9.2.13a) — one entry per
+    /// relationship key (`aliases`, `belongs-to`, `owner`,
+    /// `related-to`, `has`, `parent`, `child`) whose value parses to
+    /// at least one `[[wikilink]]` target.  Each entry carries the
+    /// raw key (lower-cased) and the ordered list of target stems.
+    pub relationships: Vec<(SharedString, Vec<SharedString>)>,
+    /// Inverse relationships (worklist 9.2.13a) — every note in
+    /// `vault.backlinks(active_id)` whose frontmatter declares a
+    /// relationship key targeting the active note.  Sub-scope 9.2.13a
+    /// ships a single combined group; per-key inverse splitting is
+    /// deferred to 9.2.13e.
+    pub inverse_relationships: Vec<NoteRow>,
+    /// Real-vault `Modified` timestamp for the Info section.  `None`
+    /// when no note is active or when the panel is reading from the
+    /// mock-only path.
+    pub modified: Option<DateTime<Utc>>,
+    /// Real-vault `byte_size` for the Info section.  `None` when no
+    /// note is active.
+    pub byte_size: Option<u64>,
 }
 
 impl InspectorState {
@@ -224,17 +259,21 @@ impl InspectorState {
     /// Build resolved state for `active_id` from the real [`Vault`].
     ///
     /// Resolves Backlinks / Instances / References via the vault's
-    /// query APIs.  Properties and Relationships are deferred to a
-    /// follow-up row (no real-vault source for the rendered shape yet),
-    /// so the corresponding mock fields stay empty.
+    /// query APIs, plus Properties / Relationships / Info from the
+    /// active note's frontmatter + metadata (worklist 9.2.13a).
     pub fn resolve_from_vault(active_id: NoteId, vault: &Vault) -> Self {
         let Some(active) = vault.note_sync(active_id) else {
             return Self::empty();
         };
 
-        let backlinks = note_rows_from_ids(vault, vault.backlinks(active_id));
+        let backlink_ids = vault.backlinks(active_id);
+        let backlinks = note_rows_from_ids(vault, backlink_ids.clone());
         let references = note_rows_from_ids(vault, vault.outbound_links(active_id));
         let instances = resolve_type_instances(vault, active);
+
+        let properties = collect_properties(active);
+        let relationships = collect_relationships(active);
+        let inverse_relationships = collect_inverse_relationships(vault, active, &backlink_ids);
 
         Self {
             note: None,
@@ -242,6 +281,11 @@ impl InspectorState {
             instances,
             references,
             mock_outbound_links: Vec::new(),
+            properties,
+            relationships,
+            inverse_relationships,
+            modified: Some(active.modified),
+            byte_size: Some(active.byte_size),
         }
     }
 
@@ -320,12 +364,28 @@ impl InspectorState {
             }
         }
 
+        let modified = Some(active.modified);
+        // `usize → u64` is lossless on every Tolaria target (no
+        // 128-bit pointer hardware in scope); `try_from` keeps the
+        // conversion clippy-clean under `-D warnings` without a
+        // bespoke `#[allow(clippy::cast_possible_truncation)]`.
+        let byte_size = u64::try_from(active.content.len()).ok();
+
         Self {
             note: Some(active.clone()),
             backlinks,
             instances,
             references,
             mock_outbound_links,
+            // Mock path stays empty for the real-vault sections — the
+            // existing fixture-driven render still falls back to the
+            // legacy `note.properties` rendering for Properties /
+            // Relationships, kept as regression cover.
+            properties: Vec::new(),
+            relationships: Vec::new(),
+            inverse_relationships: Vec::new(),
+            modified,
+            byte_size,
         }
     }
 
@@ -414,6 +474,241 @@ fn mock_note_type(note: &MockNote) -> Option<&str> {
     note.properties.get("type")?.as_str()
 }
 
+// ---------------------------------------------------------------------------
+// Properties / Relationships resolvers (worklist 9.2.13a)
+// ---------------------------------------------------------------------------
+
+/// Internal frontmatter keys that drive chrome state (favorite, organized)
+/// rather than user-visible properties.  Filtered out of the Properties
+/// list so they don't appear as rows.  Keep this list in sync with the
+/// `Frontmatter::favorite` / `Frontmatter::organized` accessors and the
+/// `_favorite_index` sort key added by worklist 9.2.1.
+fn is_internal_key(key: &str) -> bool {
+    matches!(key, "_favorite" | "_organized" | "_favorite_index")
+}
+
+/// Frontmatter keys whose value is interpreted as a list of `[[wikilink]]`
+/// targets and surfaced under the Relationships section instead of
+/// Properties.  Mirrors the React inspector's relationship-key set; both
+/// the dash and space spellings (`belongs-to` vs `belongs to`) are
+/// accepted because real vaults use both.
+fn is_relationship_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "aliases"
+            | "belongs-to"
+            | "belongs to"
+            | "owner"
+            | "related-to"
+            | "related to"
+            | "has"
+            | "parent"
+            | "child"
+    )
+}
+
+/// Collect the Properties rows for the active note.  Filters out
+/// internal keys (`_favorite`, `_organized`, `_favorite_index`) and
+/// relationship keys (so they don't double up between sections).
+/// Iteration is already sorted by [`Frontmatter::iter`] (BTreeMap).
+fn collect_properties(active: &vault::Note) -> Vec<(SharedString, FrontmatterValue)> {
+    active
+        .frontmatter()
+        .iter()
+        .filter(|(key, _)| !is_internal_key(key) && !is_relationship_key(key))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
+/// Collect the Relationships rows for the active note.  For each
+/// relationship-shaped frontmatter key, parse `[[wikilink]]` targets out
+/// of the value (handling both `Text` and `List` shapes) and emit one
+/// `(key, targets)` entry.  Keys with no parseable targets are dropped
+/// so the render path doesn't show an empty group header.
+fn collect_relationships(active: &vault::Note) -> Vec<(SharedString, Vec<SharedString>)> {
+    active
+        .frontmatter()
+        .iter()
+        .filter(|(key, _)| is_relationship_key(key))
+        .filter_map(|(key, value)| {
+            let targets = parse_relationship_targets(value);
+            if targets.is_empty() {
+                None
+            } else {
+                Some((key.clone(), targets))
+            }
+        })
+        .collect()
+}
+
+/// Pull `[[wikilink]]` targets out of a relationship-shaped frontmatter
+/// value.  Accepts either a single `Text` scalar containing one or
+/// more wikilinks, or a `List` of `Text` scalars each containing one.
+/// Returns the de-duplicated, order-preserving list of targets.
+fn parse_relationship_targets(value: &FrontmatterValue) -> Vec<SharedString> {
+    fn push_from_text(out: &mut Vec<SharedString>, text: &str) {
+        for stem in scan_wikilinks(text) {
+            let shared = SharedString::from(stem);
+            if !out.contains(&shared) {
+                out.push(shared);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    match value {
+        FrontmatterValue::Text(s) => push_from_text(&mut out, s.as_ref()),
+        FrontmatterValue::List(items) => {
+            for item in items {
+                if let FrontmatterValue::Text(s) = item {
+                    push_from_text(&mut out, s.as_ref());
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Build the combined `Referenced From` row list (worklist 9.2.13a).
+///
+/// Walks every note returned by `vault.backlinks(active_id)` and keeps
+/// the ones whose frontmatter has a relationship key pointing at the
+/// active note's title.  This narrows the body-text backlink set down
+/// to genuine frontmatter inverse relations (e.g. `parent: [[A]]`
+/// backed by note B surfaces on A's inspector).
+///
+/// Sub-scope 9.2.13a ships one combined group; per-key inverse
+/// splitting (e.g. `← Has`) is deferred to 9.2.13e.
+fn collect_inverse_relationships(
+    vault: &Vault,
+    active: &vault::Note,
+    backlink_ids: &[NoteId],
+) -> Vec<NoteRow> {
+    let active_title = active.title.as_ref();
+    let mut hits = Vec::new();
+    for &id in backlink_ids {
+        let Some(other) = vault.note_sync(id) else {
+            continue;
+        };
+        if note_relationships_target(other, active_title) {
+            hits.push(NoteRow {
+                id,
+                title: other.title.clone(),
+            });
+        }
+    }
+    hits
+}
+
+/// True iff `note`'s frontmatter declares any relationship-shaped key
+/// whose parsed `[[wikilink]]` targets include `target_title`.  Used
+/// to filter `vault.backlinks` down to frontmatter inverse relations.
+fn note_relationships_target(note: &vault::Note, target_title: &str) -> bool {
+    note.frontmatter()
+        .iter()
+        .filter(|(key, _)| is_relationship_key(key))
+        .any(|(_, value)| {
+            parse_relationship_targets(value)
+                .iter()
+                .any(|t| t.as_ref() == target_title)
+        })
+}
+
+/// Format the lowercased, leading-underscore-stripped key the way the
+/// user-shared reference shows it (e.g. `_favorite` → `favorite`,
+/// `belongs-to` → `belongs-to`).  Used only by the render path; the
+/// stored key keeps its raw shape.
+fn display_property_key(key: &str) -> String {
+    key.trim_start_matches('_').to_ascii_lowercase()
+}
+
+/// Format a relationship-key header the way the user-shared reference
+/// shows it: dashes become spaces and the first character is title-
+/// cased.  Example: `belongs-to` → `Belongs to`.
+fn display_relationship_label(key: &str) -> String {
+    let with_spaces = key.replace('-', " ");
+    let mut out = String::with_capacity(with_spaces.len());
+    let mut chars = with_spaces.chars();
+    if let Some(first) = chars.next() {
+        out.extend(first.to_uppercase());
+        out.push_str(chars.as_str());
+    }
+    out
+}
+
+/// Render a single [`FrontmatterValue`] as a one-line string for the
+/// read-only Properties section.  `Text` / `Date` map to the inner
+/// `SharedString`; `Number` formats as an integer when it has no
+/// fractional part; `Bool` maps to literal `true` / `false`; `List`
+/// joins the rendered items with `, ` so a `tags: [a, b]` shape reads
+/// as `a, b`.
+fn render_value_string(value: &FrontmatterValue) -> SharedString {
+    match value {
+        FrontmatterValue::Text(s) | FrontmatterValue::Date(s) => s.clone(),
+        FrontmatterValue::Number(n) => {
+            if n.fract() == 0.0 && n.abs() < 1e16 {
+                SharedString::from(format!("{n:.0}"))
+            } else {
+                SharedString::from(n.to_string())
+            }
+        }
+        FrontmatterValue::Bool(b) => SharedString::from(if *b { "true" } else { "false" }),
+        FrontmatterValue::List(items) => {
+            // Build the comma-separated repr in one allocation rather
+            // than materialising a `Vec<String>` first.  `Frontmatter`
+            // flattens nested lists at parse time so the recursion
+            // depth is at most one in practice.
+            let mut out = String::new();
+            for (ix, item) in items.iter().enumerate() {
+                if ix > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(render_value_string(item).as_ref());
+            }
+            SharedString::from(out)
+        }
+    }
+}
+
+/// Format a byte count as `N B`, `N KB`, or `N MB` so the Info section's
+/// Size row reads the way the user-shared reference shows it (e.g.
+/// `443 B`).  KB / MB use base-1024 since that's what every filesystem
+/// reports (this is metadata, not network throughput).
+fn humanize_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+    if bytes < KB {
+        format!("{bytes} B")
+    } else if bytes < MB {
+        format!("{} KB", bytes / KB)
+    } else if bytes < GB {
+        format!("{} MB", bytes / MB)
+    } else {
+        format!("{} GB", bytes / GB)
+    }
+}
+
+/// Format a `DateTime<Utc>` the way the user-shared reference shows it:
+/// `Mon D, YYYY` (e.g. `May 20, 2026`).  Used by the Info section's
+/// `Modified` row.  `%-d` would drop the leading zero on Unix but is
+/// non-portable; we strip it manually after the format call.
+fn format_inspector_date(dt: &DateTime<Utc>) -> String {
+    let raw = dt.format("%b %d, %Y").to_string();
+    // Strip the leading zero on the day-of-month: `May 02, 2026` →
+    // `May 2, 2026`.  Done after format() so the formatter stays
+    // platform-portable.
+    if let Some(month_end) = raw.find(' ') {
+        let (month, rest) = raw.split_at(month_end);
+        let rest = rest.trim_start();
+        if let Some(stripped) = rest.strip_prefix('0') {
+            return format!("{month} {stripped}");
+        }
+    }
+    raw
+}
+
 /// Drain every note out of the [`MockVault`] global, if one is installed.
 ///
 /// Returns `None` when no `MockVault` global is present so callers can
@@ -448,7 +743,7 @@ fn extract_outline(body: &str) -> Vec<String> {
 // InspectorPanel
 // ---------------------------------------------------------------------------
 
-/// Right-dock panel showing note metadata in seven collapsible accordion sections.
+/// Right-dock panel showing note metadata in eight collapsible accordion sections.
 ///
 /// Construct via [`InspectorPanel::new`] for an empty state,
 /// [`InspectorPanel::from_or_empty`] for a vault-first resolve, or
@@ -652,11 +947,30 @@ impl InspectorPanel {
 
     fn render_properties_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
+
+        // Worklist 9.2.13a — real-vault path.  When the resolver
+        // populated `properties` from `vault::Note::frontmatter()`,
+        // render those rows.  Internal + relationship-shaped keys are
+        // already filtered out at collect time.  TODO(9.2.13b): wire
+        // type-aware inline editors (date, status, URL, icon, wikilink)
+        // and a `+ Add property` link (`9.2.13c`).
+        if self.note_id.is_some() && !self.state.properties.is_empty() {
+            return render_property_rows(&self.state.properties, muted);
+        }
+
+        // Mock-vault fallback path (regression cover for existing
+        // fixture-driven tests).  Skips the same internal keys so a
+        // mock that sets `_favorite: true` doesn't leak it into the
+        // user-visible list.
         let Some(note) = &self.state.note else {
             return empty_body("No note selected.", muted);
         };
 
-        let mut pairs: Vec<_> = note.properties.iter().collect();
+        let mut pairs: Vec<_> = note
+            .properties
+            .iter()
+            .filter(|(k, _)| !is_internal_key(k))
+            .collect();
         pairs.sort_by_key(|(k, _)| k.as_str());
 
         if pairs.is_empty() {
@@ -681,7 +995,7 @@ impl InspectorPanel {
                     .child(
                         div()
                             .text_color(muted)
-                            .child(SharedString::from(format!("{key}:"))),
+                            .child(SharedString::from(display_property_key(key))),
                     )
                     .child(value_str)
                     .into_any_element()
@@ -756,36 +1070,119 @@ impl InspectorPanel {
     }
 
     fn render_relationships_body(&self, cx: &mut Context<Self>) -> AnyElement {
-        // Relationships is out of scope for worklist 9.2.8 — it still
-        // reads from the legacy [`MockNote`]-driven outbound stems.
-        // The real-vault path leaves `mock_outbound_links` empty so the
-        // section renders its empty state, mirroring what the user
-        // sees today before a dedicated frontmatter-references source
-        // lands.
         let muted = cx.theme().muted_foreground;
 
-        if self.state.note.is_none() {
+        if self.note_id.is_none() && self.state.note.is_none() {
             return empty_body("No note selected.", muted);
         }
 
-        if self.state.mock_outbound_links.is_empty() {
-            return empty_body("No outbound links.", muted);
+        // Worklist 9.2.13a — real-vault path.  Renders one group per
+        // relationship key parsed from the active note's frontmatter,
+        // plus a single combined "Referenced From" group for the
+        // inverse-relationship set.  TODO(9.2.13c): per-section `Add`
+        // slot + `+ Add relationship` footer button.  TODO(9.2.13e):
+        // split `Referenced From` into one group per inverse key
+        // (e.g. `← Has`).
+        let has_relationships =
+            !self.state.relationships.is_empty() || !self.state.inverse_relationships.is_empty();
+        if has_relationships {
+            let mut children: Vec<AnyElement> =
+                Vec::with_capacity(self.state.relationships.len() + 1);
+
+            for (key, targets) in &self.state.relationships {
+                children.push(render_relationship_group(
+                    display_relationship_label(key),
+                    targets,
+                    muted,
+                ));
+            }
+
+            if !self.state.inverse_relationships.is_empty() {
+                children.push(render_inverse_relationship_group(
+                    &self.state.inverse_relationships,
+                    muted,
+                ));
+            }
+
+            return div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .children(children)
+                .into_any_element();
+        }
+
+        // Mock fallback (regression cover): legacy outbound-stems
+        // rendering.  Kept so the seven-section mock test path still
+        // produces something to render.
+        if !self.state.mock_outbound_links.is_empty() {
+            return div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .children(self.state.mock_outbound_links.iter().map(|stem| {
+                    div()
+                        .text_sm()
+                        .child(SharedString::from(stem.clone()))
+                        .into_any_element()
+                }))
+                .into_any_element();
+        }
+
+        empty_body("No relationships.", muted)
+    }
+
+    fn render_info_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+
+        if self.note_id.is_none() && self.state.note.is_none() {
+            return empty_body("No note selected.", muted);
+        }
+
+        let mut rows: Vec<AnyElement> = Vec::with_capacity(2);
+
+        if let Some(modified) = self.state.modified {
+            rows.push(render_info_row(
+                "Modified",
+                SharedString::from(format_inspector_date(&modified)),
+                muted,
+            ));
+        }
+
+        // TODO(9.2.13a-created): wire `Created` once `vault::Note`
+        // carries a `created` timestamp (or once we plumb
+        // `fs::metadata().created()` through the rescan path).
+        // TODO(9.2.13a-words): wire `Words` once `vault::Note` carries
+        // a cached body length or once the editor pumps a word-count
+        // bridge envelope.
+
+        if let Some(byte_size) = self.state.byte_size {
+            rows.push(render_info_row(
+                "Size",
+                SharedString::from(humanize_bytes(byte_size)),
+                muted,
+            ));
+        }
+
+        if rows.is_empty() {
+            return empty_body("No info.", muted);
         }
 
         div()
             .flex()
             .flex_col()
             .gap_1()
-            .children(self.state.mock_outbound_links.iter().map(|stem| {
-                div()
-                    .text_sm()
-                    .child(SharedString::from(stem.clone()))
-                    .into_any_element()
-            }))
+            .children(rows)
             .into_any_element()
     }
 
     fn render_git_history_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        // TODO(9.2.13d-git-history): replace the [`MockCommit`] feed
+        // with a path-filtered query against `git_provider` (lands in
+        // Phase 11).  Today the section renders the `MockGit::seeded`
+        // commits when the mock global is installed and the empty
+        // state otherwise — that matches the React inspector's
+        // placeholder shape until the live provider lands.
         let muted = cx.theme().muted_foreground;
 
         if self.git_history.is_empty() {
@@ -857,7 +1254,7 @@ fn render_heading_row(index: usize, heading: &Heading, muted: gpui::Hsla) -> Any
 }
 
 /// Render the empty-state placeholder shown when a section has no
-/// content to display.  Pulled out so the seven section renderers all
+/// content to display.  Pulled out so the eight section renderers all
 /// produce visually-identical empty states (mirrors React's
 /// `EmptyState` component shape).
 fn empty_body(label: &'static str, muted: gpui::Hsla) -> AnyElement {
@@ -899,6 +1296,104 @@ fn render_note_row_list(
                 .child(title)
                 .into_any_element()
         }))
+        .into_any_element()
+}
+
+/// Render the Properties section's row list (worklist 9.2.13a) — one
+/// `key · value` row per `(SharedString, FrontmatterValue)` pair.  The
+/// key is lowercased and stripped of a leading underscore at the
+/// render site (via [`display_property_key`]) so the stored key shape
+/// stays untouched for downstream writers.
+fn render_property_rows(
+    pairs: &[(SharedString, FrontmatterValue)],
+    muted: gpui::Hsla,
+) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .children(pairs.iter().map(|(key, value)| {
+            let key_label = SharedString::from(display_property_key(key.as_ref()));
+            let value_label = render_value_string(value);
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .text_sm()
+                .child(div().text_color(muted).child(key_label))
+                .child(value_label)
+                .into_any_element()
+        }))
+        .into_any_element()
+}
+
+/// Render one relationship group (worklist 9.2.13a): a section header
+/// row carrying the human-readable label followed by a horizontally-
+/// flowing list of wikilink-target pills.  Targets stay as plain text
+/// for the read-only pass — click-to-open + per-target affordances
+/// are tracked alongside the React inspector's `Add` slot work in
+/// `9.2.13c`.
+fn render_relationship_group(
+    label: impl Into<SharedString>,
+    targets: &[SharedString],
+    muted: gpui::Hsla,
+) -> AnyElement {
+    let header = div().text_sm().text_color(muted).child(label.into());
+
+    // Each target is already a `SharedString`; cloning is a cheap
+    // reference bump, no String round-trip.
+    let pills = div().flex().flex_row().flex_wrap().gap_1().children(
+        targets
+            .iter()
+            .map(|t| div().text_sm().child(t.clone()).into_any_element()),
+    );
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(header)
+        .child(pills)
+        .into_any_element()
+}
+
+/// Render the combined `Referenced From` group (worklist 9.2.13a).
+/// Mirrors [`render_relationship_group`]'s shape but the pills are
+/// real [`NoteRow`]s so clicks emit [`InspectorOpenNoteEvent`].  The
+/// per-row click handler is intentionally NOT wired in 9.2.13a — the
+/// read-only pass keeps the surface inert.  Wired up in 9.2.13e when
+/// the per-key inverse split lands.
+fn render_inverse_relationship_group(rows: &[NoteRow], muted: gpui::Hsla) -> AnyElement {
+    let header = div()
+        .text_sm()
+        .text_color(muted)
+        .child(SharedString::from("Referenced From"));
+
+    let pills = div().flex().flex_row().flex_wrap().gap_1().children(
+        rows.iter()
+            .map(|row| div().text_sm().child(row.title.clone()).into_any_element()),
+    );
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(header)
+        .child(pills)
+        .into_any_element()
+}
+
+/// Render one row of the Info section (worklist 9.2.13a) — a muted
+/// label on the left and the value on the right.  Mirrors the
+/// Properties row shape so the two sections feel coherent.
+fn render_info_row(label: &'static str, value: SharedString, muted: gpui::Hsla) -> AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .gap_2()
+        .text_sm()
+        .child(div().text_color(muted).child(label))
+        .child(value)
         .into_any_element()
 }
 
@@ -1034,6 +1529,7 @@ impl Render for InspectorPanel {
                     InspectorSection::Instances => self.render_instances_body(cx),
                     InspectorSection::ReferencedBy => self.render_references_body(cx),
                     InspectorSection::Relationships => self.render_relationships_body(cx),
+                    InspectorSection::Info => self.render_info_body(cx),
                     InspectorSection::GitHistory => self.render_git_history_body(cx),
                 };
                 let body = div()
@@ -1070,18 +1566,23 @@ mod tests {
     use mock_fixtures::{MockGit, MockVault, NoteId};
 
     use super::{
-        extract_outline, scan_wikilinks, InspectorPanel, InspectorSection, InspectorState,
+        extract_outline, format_inspector_date, humanize_bytes, is_internal_key,
+        is_relationship_key, parse_relationship_targets, render_value_string, scan_wikilinks,
+        InspectorPanel, InspectorSection, InspectorState,
     };
+    use vault::FrontmatterValue;
     use workspace::panel::{DockPosition, Panel};
 
     fn install_theme(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
     }
 
-    /// `InspectorSection::ALL` must contain exactly 7 sections.
+    /// `InspectorSection::ALL` must contain exactly 8 sections after
+    /// worklist 9.2.13a added `Info` between Relationships and
+    /// GitHistory.
     #[gpui::test]
-    fn all_returns_7_sections(_cx: &mut TestAppContext) {
-        assert_eq!(InspectorSection::ALL.len(), 7);
+    fn all_returns_8_sections(_cx: &mut TestAppContext) {
+        assert_eq!(InspectorSection::ALL.len(), 8);
     }
 
     /// A freshly-constructed panel must report `DockPosition::Right`.
@@ -1548,5 +2049,315 @@ mod tests {
                 .collect();
             assert_eq!(titles, vec!["b".to_string()]);
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 9 worklist 9.2.13a — Properties / Relationships / Info
+    // -----------------------------------------------------------------------
+
+    /// Properties: 3-note vault, one note with `{type: Note, status: Done,
+    /// _favorite: true}` frontmatter — Properties resolves to exactly the
+    /// `type` and `status` rows (in sorted order) and filters
+    /// `_favorite` out as an internal key.
+    #[gpui::test]
+    fn real_vault_properties_lists_frontmatter_minus_internal_keys(cx: &mut TestAppContext) {
+        let body = "---\ntype: Note\nstatus: Done\n_favorite: true\n---\n\n# Hi\n";
+        let (vault, _dir) = open_temp_vault(&[("alpha.md", body), ("beta.md", "\n")]);
+        let alpha_id = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "alpha")
+            .expect("alpha note")
+            .id;
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let state = InspectorState::resolve(alpha_id, cx);
+
+            let keys: Vec<String> = state
+                .properties
+                .iter()
+                .map(|(k, _)| k.to_string())
+                .collect();
+            assert_eq!(
+                keys,
+                vec!["status".to_string(), "type".to_string()],
+                "Properties must list status + type in sorted order and filter _favorite"
+            );
+
+            let values: Vec<String> = state
+                .properties
+                .iter()
+                .map(|(_, v)| render_value_string(v).to_string())
+                .collect();
+            assert_eq!(values, vec!["Done".to_string(), "Note".to_string()]);
+        });
+    }
+
+    /// Relationship-shaped keys (e.g. `belongs-to`) must be filtered
+    /// out of the Properties row list so they don't double up between
+    /// the Properties and Relationships sections.
+    #[gpui::test]
+    fn properties_filter_excludes_relationship_keys(cx: &mut TestAppContext) {
+        let body = "---\ntype: Note\nbelongs-to: \"[[Q4 2024]]\"\n---\n\nbody\n";
+        let (vault, _dir) = open_temp_vault(&[("alpha.md", body)]);
+        let alpha_id = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "alpha")
+            .expect("alpha")
+            .id;
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let state = InspectorState::resolve(alpha_id, cx);
+
+            let keys: Vec<String> = state
+                .properties
+                .iter()
+                .map(|(k, _)| k.to_string())
+                .collect();
+            assert_eq!(
+                keys,
+                vec!["type".to_string()],
+                "belongs-to must land in Relationships, not Properties"
+            );
+        });
+    }
+
+    /// Relationships: a note with `belongs-to: "[[Q4 2024]]"` and
+    /// `owner: "[[Luca Rossi]]"` produces two relationship groups
+    /// (`belongs-to` and `owner`), each with one parsed target.
+    #[gpui::test]
+    fn real_vault_relationships_parses_wikilink_targets(cx: &mut TestAppContext) {
+        let body = "---\nbelongs-to: \"[[Q4 2024]]\"\nowner: \"[[Luca Rossi]]\"\n---\n\nbody\n";
+        let (vault, _dir) = open_temp_vault(&[("project.md", body)]);
+        let project_id = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "project")
+            .expect("project")
+            .id;
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let state = InspectorState::resolve(project_id, cx);
+
+            let mut groups: Vec<(String, Vec<String>)> = state
+                .relationships
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.iter().map(|s| s.to_string()).collect()))
+                .collect();
+            groups.sort_by(|a, b| a.0.cmp(&b.0));
+            assert_eq!(
+                groups,
+                vec![
+                    ("belongs-to".to_string(), vec!["Q4 2024".to_string()]),
+                    ("owner".to_string(), vec!["Luca Rossi".to_string()]),
+                ],
+                "relationships must surface both groups with their wikilink targets"
+            );
+        });
+    }
+
+    /// A list-shaped `aliases: [[a]], [[b]]` value must parse both
+    /// wikilink targets out of the YAML sequence.
+    #[gpui::test]
+    fn relationships_parse_list_of_wikilinks(_cx: &mut TestAppContext) {
+        // List of strings, each containing one [[wikilink]].
+        let value = FrontmatterValue::List(vec![
+            FrontmatterValue::Text("[[Alpha]]".into()),
+            FrontmatterValue::Text("[[Beta]]".into()),
+        ]);
+        let targets: Vec<String> = parse_relationship_targets(&value)
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(targets, vec!["Alpha".to_string(), "Beta".to_string()]);
+    }
+
+    /// Inverse relationships: a 2-note vault where note `child.md`
+    /// has `parent: "[[parent]]"` — opening `parent.md` in the
+    /// inspector must surface `child` under `inverse_relationships`.
+    #[gpui::test]
+    fn real_vault_inverse_relationships_lists_frontmatter_backlinks(cx: &mut TestAppContext) {
+        let (vault, _dir) = open_temp_vault(&[
+            ("parent.md", "---\ntype: Note\n---\n\n"),
+            ("child.md", "---\nparent: \"[[parent]]\"\n---\n\n"),
+        ]);
+        let parent_id = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "parent")
+            .expect("parent")
+            .id;
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let state = InspectorState::resolve(parent_id, cx);
+
+            let titles: Vec<String> = state
+                .inverse_relationships
+                .iter()
+                .map(|r| r.title.to_string())
+                .collect();
+            assert_eq!(
+                titles,
+                vec!["child".to_string()],
+                "inverse_relationships must surface notes whose frontmatter parent: targets us"
+            );
+        });
+    }
+
+    /// Inverse relationships drop body-text-only backlinks: a note that
+    /// links to the active one via `[[wikilink]]` in the body but does
+    /// NOT declare a relationship-shaped frontmatter key must NOT
+    /// appear in `inverse_relationships` (it stays in `backlinks`).
+    #[gpui::test]
+    fn inverse_relationships_drop_body_only_backlinks(cx: &mut TestAppContext) {
+        let (vault, _dir) = open_temp_vault(&[
+            ("parent.md", "---\ntype: Note\n---\n\nbody\n"),
+            ("loose.md", "I link to [[parent]] from the body.\n"),
+        ]);
+        let parent_id = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "parent")
+            .expect("parent")
+            .id;
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let state = InspectorState::resolve(parent_id, cx);
+
+            assert!(
+                state.inverse_relationships.is_empty(),
+                "body-text-only backlinks must NOT surface as inverse relationships"
+            );
+            // The body backlink itself still lands in `backlinks` —
+            // that's the cover for the regular Backlinks section.
+            let backlink_titles: Vec<String> = state
+                .backlinks
+                .iter()
+                .map(|r| r.title.to_string())
+                .collect();
+            assert_eq!(backlink_titles, vec!["loose".to_string()]);
+        });
+    }
+
+    /// Info section: a note with known frontmatter + body must drive
+    /// `state.modified` and `state.byte_size` so the Info row formatter
+    /// renders deterministic strings.  Modified shape: `May 20, 2026`.
+    /// Size shape: under-1024 bytes render as `N B`.
+    #[gpui::test]
+    fn real_vault_info_state_carries_modified_and_byte_size(cx: &mut TestAppContext) {
+        let body = "---\ntype: Note\n---\n\nhello\n";
+        let (vault, _dir) = open_temp_vault(&[("alpha.md", body)]);
+        let alpha = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "alpha")
+            .expect("alpha")
+            .clone();
+        let expected_size = alpha.byte_size;
+        let alpha_id = alpha.id;
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let state = InspectorState::resolve(alpha_id, cx);
+
+            assert!(state.modified.is_some(), "Info must carry a modified time");
+            assert_eq!(
+                state.byte_size,
+                Some(expected_size),
+                "Info must carry the on-disk byte size"
+            );
+        });
+    }
+
+    /// `humanize_bytes` matches the user-shared reference's `443 B` /
+    /// `2 KB` / `5 MB` shape.  Base-1024 (the unit reported by every
+    /// filesystem).
+    #[gpui::test]
+    fn humanize_bytes_renders_b_kb_mb(_cx: &mut TestAppContext) {
+        assert_eq!(humanize_bytes(0), "0 B");
+        assert_eq!(humanize_bytes(443), "443 B");
+        assert_eq!(humanize_bytes(1023), "1023 B");
+        assert_eq!(humanize_bytes(1024), "1 KB");
+        assert_eq!(humanize_bytes(2048), "2 KB");
+        assert_eq!(humanize_bytes(1024 * 1024), "1 MB");
+        assert_eq!(humanize_bytes(5 * 1024 * 1024), "5 MB");
+        assert_eq!(humanize_bytes(1024 * 1024 * 1024), "1 GB");
+    }
+
+    /// `format_inspector_date` produces the `May 2, 2026` shape — no
+    /// leading zero on the day-of-month, matching the user-shared
+    /// reference.
+    #[gpui::test]
+    fn format_inspector_date_strips_day_leading_zero(_cx: &mut TestAppContext) {
+        use chrono::TimeZone as _;
+        let dt = chrono::Utc.with_ymd_and_hms(2026, 5, 2, 12, 0, 0).unwrap();
+        assert_eq!(format_inspector_date(&dt), "May 2, 2026");
+        let dt = chrono::Utc.with_ymd_and_hms(2026, 5, 20, 12, 0, 0).unwrap();
+        assert_eq!(format_inspector_date(&dt), "May 20, 2026");
+    }
+
+    /// `is_internal_key` covers the three flags that drive chrome
+    /// state (favorite, organized, favorite_index sort key) and rejects
+    /// everything else.
+    #[gpui::test]
+    fn is_internal_key_recognises_chrome_flags(_cx: &mut TestAppContext) {
+        assert!(is_internal_key("_favorite"));
+        assert!(is_internal_key("_organized"));
+        assert!(is_internal_key("_favorite_index"));
+        assert!(!is_internal_key("type"));
+        assert!(!is_internal_key("status"));
+        assert!(!is_internal_key("_unknown"));
+    }
+
+    /// `is_relationship_key` recognises both the dash and space
+    /// spellings (`belongs-to` vs `belongs to`) and stays case-
+    /// insensitive.
+    #[gpui::test]
+    fn is_relationship_key_accepts_dash_and_space_spellings(_cx: &mut TestAppContext) {
+        assert!(is_relationship_key("aliases"));
+        assert!(is_relationship_key("belongs-to"));
+        assert!(is_relationship_key("belongs to"));
+        assert!(is_relationship_key("Belongs-To"));
+        assert!(is_relationship_key("owner"));
+        assert!(is_relationship_key("related-to"));
+        assert!(is_relationship_key("related to"));
+        assert!(is_relationship_key("has"));
+        assert!(is_relationship_key("parent"));
+        assert!(is_relationship_key("child"));
+        assert!(!is_relationship_key("type"));
+        assert!(!is_relationship_key("status"));
+    }
+
+    /// `render_value_string` walks every variant — `Text` / `Date` /
+    /// `Bool` / `Number` (integer + float) / `List` — and matches the
+    /// shape the Properties section uses.
+    #[gpui::test]
+    fn render_value_string_handles_every_variant(_cx: &mut TestAppContext) {
+        assert_eq!(
+            render_value_string(&FrontmatterValue::Text("hi".into())).as_ref(),
+            "hi"
+        );
+        assert_eq!(
+            render_value_string(&FrontmatterValue::Date("2026-05-21".into())).as_ref(),
+            "2026-05-21"
+        );
+        assert_eq!(
+            render_value_string(&FrontmatterValue::Bool(true)).as_ref(),
+            "true"
+        );
+        assert_eq!(
+            render_value_string(&FrontmatterValue::Bool(false)).as_ref(),
+            "false"
+        );
+        assert_eq!(
+            render_value_string(&FrontmatterValue::Number(42.0)).as_ref(),
+            "42"
+        );
+        assert_eq!(
+            render_value_string(&FrontmatterValue::Number(1.5)).as_ref(),
+            "1.5"
+        );
+        assert_eq!(
+            render_value_string(&FrontmatterValue::List(vec![
+                FrontmatterValue::Text("a".into()),
+                FrontmatterValue::Text("b".into()),
+            ]))
+            .as_ref(),
+            "a, b"
+        );
     }
 }

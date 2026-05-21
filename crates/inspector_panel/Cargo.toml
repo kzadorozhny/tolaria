@@ -9,6 +9,7 @@ description = "Inspector panel for the Tolaria right dock (ADR-0115 Phase 2d)."
 
 [dependencies]
 actions = { path = "../actions" }
+chrono.workspace = true
 editor_bridge = { path = "../editor_bridge" }
 gpui.workspace = true
 gpui-component.workspace = true
@@ -18,7 +19,6 @@ vault = { path = "../vault" }
 workspace = { path = "../workspace" }
 
 [dev-dependencies]
-chrono.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 
