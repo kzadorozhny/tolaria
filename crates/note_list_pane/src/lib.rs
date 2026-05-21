@@ -51,7 +51,7 @@ use gpui_component::{
 };
 use mock_fixtures::{MockVault, NoteId, NoteKind};
 use ui::tree_dump::DumpAsExt as _;
-use vault::Vault;
+use vault::{Vault, VaultChanged};
 use workspace::panel::{DockPosition, Panel};
 
 // ---------------------------------------------------------------------------
@@ -1002,6 +1002,46 @@ impl NoteListPane {
         } else {
             Self::new()
         }
+    }
+
+    /// Spawn a background task that drains `vault.watch_events()` and
+    /// invalidates the pane's cached `entries` whenever the vault
+    /// signals a change.  Mirrors `note_item::install_dispatch_task`'s
+    /// shape — `WeakEntity` upgrade + `entity.update(|this, cx| …)`,
+    /// loop terminates when the entity drops or the channel closes.
+    ///
+    /// Worklist 9.2.12 (reopened) — without this subscription the
+    /// `NoteEntry::is_organized` field captured at
+    /// [`collect_vault_entries`] build time stays stale after a
+    /// chrome-initiated `Vault::set_frontmatter_bool` toggle.  The
+    /// vault now emits a synchronous `VaultChanged` on every
+    /// frontmatter mutation, and this task hooks that signal into the
+    /// pane's [`refresh_from_vault`] so the Inbox filter rebuilds in
+    /// the very next frame.
+    ///
+    /// Subscribers should call this once during workspace open after
+    /// the `Vault` global is installed.  Calling it more than once is
+    /// supported but wastes a background task per call — every clone
+    /// of the receiver competes for the same queue (flume's
+    /// work-stealing semantics), so two subscribers would alternate
+    /// rather than both seeing every event.
+    pub fn install_vault_watch_task(
+        entity: gpui::WeakEntity<Self>,
+        rx: flume::Receiver<VaultChanged>,
+        cx: &mut App,
+    ) {
+        cx.spawn(async move |cx| {
+            while let Ok(_change) = rx.recv_async().await {
+                let Some(this) = entity.upgrade() else {
+                    // Pane has been dropped — exit the loop so the
+                    // task doesn't hold the receiver alive past the
+                    // entity's lifetime.
+                    break;
+                };
+                this.update(cx, NoteListPane::refresh_from_vault);
+            }
+        })
+        .detach();
     }
 
     /// Update the substring filter and notify observers.
@@ -2664,6 +2704,87 @@ mod tests {
                 assert!(
                     !pane.filter_open(),
                     "close_filter on an already-closed pane stays closed",
+                );
+            })
+            .unwrap();
+    }
+
+    /// Worklist 9.2.12 (reopened) — the chrome-initiated frontmatter
+    /// path: a real on-disk vault, a `NoteListPane::from_vault` in the
+    /// default Inbox scope, and a `Vault::set_frontmatter_bool` call
+    /// that flips a visible note's `_organized` to true.  The pane
+    /// must observe the change and drop the note from its
+    /// `visible_entries` without an explicit refresh call — that's
+    /// the whole point of the new vault watch subscription.
+    ///
+    /// Drives the production path (not a direct `refresh_from_vault`)
+    /// so the event plumbing is part of the assertion: vault emits
+    /// `VaultChanged` → `install_vault_watch_task` wakes → pane
+    /// calls `refresh_from_vault` → next `visible_entries` query
+    /// returns the trimmed list.
+    #[gpui::test]
+    fn inbox_refreshes_after_chrome_initiated_organized_toggle(cx: &mut TestAppContext) {
+        use std::fs;
+        install_theme(cx);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Two fresh notes, both in the Inbox at startup.
+        fs::write(dir.path().join("a.md"), "---\ntype: Note\n---\nbody\n").unwrap();
+        fs::write(dir.path().join("b.md"), "---\ntype: Note\n---\nbody\n").unwrap();
+
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        cx.update(|cx| cx.set_global(vault));
+
+        // Build the pane inside a window so the entity outlives the
+        // subscription task.  Mirrors the workspace-open path that
+        // wires `install_vault_watch_task` immediately after the
+        // `cx.new(...)` call.
+        let window = cx.add_window(|_window, cx| NoteListPane::from_vault(cx));
+        let pane = window.root(cx).expect("root entity");
+        cx.update(|cx| {
+            let rx = cx.global::<vault::Vault>().watch_events();
+            NoteListPane::install_vault_watch_task(pane.downgrade(), rx, cx);
+        });
+
+        // Sanity: both notes show in the default Inbox scope.
+        window
+            .update(cx, |pane, _window, _cx| {
+                let titles: Vec<&str> = pane.visible_entries().map(|e| e.title.as_ref()).collect();
+                assert_eq!(
+                    titles.len(),
+                    2,
+                    "Inbox must surface both notes before the toggle",
+                );
+            })
+            .unwrap();
+
+        // Pick the first note's id, flip `_organized: true` through
+        // the vault, then drive the executor until the watch task
+        // processes the event and `refresh_from_vault` runs.
+        let target_id = cx.update(|cx| {
+            let ids = cx
+                .foreground_executor()
+                .block_on(cx.global::<vault::Vault>().notes());
+            ids.into_iter().next().expect("at least one note id")
+        });
+        cx.update(|cx| {
+            cx.global_mut::<vault::Vault>()
+                .set_frontmatter_bool(target_id, "_organized", true)
+                .detach();
+        });
+        cx.run_until_parked();
+
+        // Load-bearing assertion: the pane's `visible_entries` must
+        // now contain only the still-unorganized note.  Without the
+        // subscription this would still return both (`is_organized`
+        // captured at build time, never refreshed).
+        window
+            .update(cx, |pane, _window, _cx| {
+                let titles: Vec<&str> = pane.visible_entries().map(|e| e.title.as_ref()).collect();
+                assert_eq!(
+                    titles.len(),
+                    1,
+                    "Inbox must drop the freshly-organized note after the vault event",
                 );
             })
             .unwrap();

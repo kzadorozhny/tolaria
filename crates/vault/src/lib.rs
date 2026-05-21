@@ -285,15 +285,28 @@ impl Vault {
     /// Subscribe to vault filesystem change events.
     ///
     /// Returns a `flume::Receiver` cloned from the vault's internal
-    /// channel.  Multiple subscribers can each hold their own clone
-    /// and drain independently — flume's bus semantics broadcast to
-    /// every receiver clone.
+    /// channel.  **Note** — `flume::Receiver` clones share a single
+    /// queue (work-stealing semantics), so each `VaultChanged` is
+    /// delivered to exactly one cloned receiver.  At the present
+    /// scale we have a single subscriber (`note_list_pane`, worklist
+    /// 9.2.12) per vault; when a second subscriber lands we'll need
+    /// a fan-out adapter (e.g. spawn a dispatch task that owns the
+    /// receiver and forwards into a `broadcast::Sender`).
+    ///
+    /// Events arrive from two sources: (a) the OS-level fs watcher
+    /// (`watcher::VaultWatcher`, 200ms debounce) and (b) chrome-side
+    /// frontmatter mutators (e.g. [`set_frontmatter_bool`]) that emit
+    /// synchronously after touching the in-memory map.  Subscribers
+    /// don't need to distinguish — both shapes carry the touched
+    /// paths and the recommended response is the same (rebuild the
+    /// cached projection).
     ///
     /// When the OS watcher couldn't be installed (e.g. exotic
-    /// platform, inotify quota), the receiver stays open forever
-    /// without delivering events.  Subscribers should treat it as a
-    /// best-effort signal — Phase 9.6 `vault_lifecycle` wires this to
-    /// a workspace-level rescan trigger.
+    /// platform, inotify quota), only the chrome-side emissions
+    /// arrive; subscribers should still treat the channel as a
+    /// best-effort signal.
+    ///
+    /// [`set_frontmatter_bool`]: Self::set_frontmatter_bool
     #[must_use]
     pub fn watch_events(&self) -> flume::Receiver<VaultChanged> {
         self.watch_rx.clone()
@@ -494,6 +507,16 @@ impl Vault {
             if let Some(note) = self.notes.get_mut(&id) {
                 sync_in_memory_from_disk(note, &raw, &path);
             }
+            // Even the fast path emits a `VaultChanged` — subscribers
+            // (e.g. `note_list_pane` for the Inbox `_organized` filter,
+            // worklist 9.2.12) treat it as an invalidation hint and
+            // rebuild their cached projection.  Without this nudge a
+            // toggle that round-trips the same value disk already had
+            // would leave a stale subscriber view, exactly the bug the
+            // reopened 9.2.12 annotation describes for the chrome path
+            // when an external edit and a chrome click land in the
+            // same frame.
+            self.emit_frontmatter_changed(&path);
             return Task::ready(Ok(()));
         }
         // Update the in-memory frontmatter map BEFORE queueing the
@@ -511,6 +534,17 @@ impl Vault {
                 note.frontmatter.remove(key);
             }
         }
+        // Notify subscribers as soon as the in-memory state changes —
+        // they shouldn't have to wait for the background write to
+        // settle before refreshing.  Mirrors the "in-memory ahead of
+        // disk" optimistic-update shape: the chrome layer (e.g. the
+        // inbox filter) sees the new frontmatter on the very next
+        // render, not several debounced fs-events later.  Worklist
+        // 9.2.12 (reopened) — without this signal the
+        // `note_list_pane` cached `entries` slice stayed stale after
+        // `toggle_frontmatter_flag` → the Inbox kept showing the
+        // organized note until something else triggered a rebuild.
+        self.emit_frontmatter_changed(&path);
         match self.background_executor.as_ref() {
             Some(executor) => executor
                 .clone()
@@ -536,6 +570,29 @@ impl Vault {
                 }
                 Task::ready(result)
             }
+        }
+    }
+
+    /// Send a `VaultChanged { paths: [path] }` event on the watcher
+    /// channel so chrome subscribers can refresh.  Used by frontmatter
+    /// mutators that update the in-memory map directly — they need to
+    /// surface the change immediately without waiting for the OS-level
+    /// fs-watcher debounce to fire (which can lag 200ms+ behind the
+    /// click).  Reusing the existing `watch_tx` keeps a single channel
+    /// per vault instead of growing parallel event streams.
+    ///
+    /// Failure to send is logged at `debug` rather than `warn`: the
+    /// only failure mode is "no receivers attached" (every receiver
+    /// clone was dropped), which is the steady state in headless
+    /// tests that don't observe vault events.
+    fn emit_frontmatter_changed(&self, path: &Path) {
+        if let Err(err) = self.watch_tx.send(VaultChanged {
+            paths: vec![path.to_path_buf()],
+        }) {
+            log::debug!(
+                target: "vault::frontmatter",
+                "watch channel send dropped (no live receivers): {err}",
+            );
         }
     }
 
@@ -1746,6 +1803,73 @@ mod tests {
             vault.note_sync(id).unwrap().is_favorite(),
             want,
             "step 4: in-memory frontmatter must mirror disk after the second toggle",
+        );
+    }
+
+    /// Worklist 9.2.12 (reopened) — `set_frontmatter_bool` must emit a
+    /// `VaultChanged` event on the `watch_events` channel so chrome
+    /// subscribers (notably `note_list_pane` for the Inbox `_organized`
+    /// filter) can refresh their cached projections without waiting
+    /// for the OS-level fs-watcher debounce.  The exact shape of the
+    /// payload is "paths includes the touched file"; subscribers
+    /// rebuild from the vault on any signal rather than mapping
+    /// individual paths to ids.
+    #[test]
+    fn set_frontmatter_bool_emits_watch_event_on_write() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "n.md", "---\ntype: Note\n---\nbody\n");
+        let mut v = Vault::open_at(dir.path()).unwrap();
+        let rx = v.watch_events();
+        let id = v.note_ids_sync()[0];
+        // Vault canonicalises its root; the in-memory `Note.path` mirrors
+        // the canonical form, so the emitted event must match against the
+        // canonical path the vault stores.
+        let canonical = v.notes.get(&id).unwrap().path.clone();
+        // Drop the task immediately — the synchronous fallback runs
+        // the write inline before `Task::ready` wraps the result.
+        drop(v.set_frontmatter_bool(id, "_organized", true));
+        // The OS watcher itself may also fire (the file was just
+        // written), but the chrome-emitted event must arrive
+        // synchronously so the very next `recv_timeout` sees it.
+        let event = rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .expect("write path must emit a synchronous VaultChanged event");
+        assert!(
+            event.paths.iter().any(|p| p == &canonical),
+            "emitted VaultChanged must include the toggled note's canonical path; got {:?}",
+            event.paths,
+        );
+    }
+
+    /// Worklist 9.2.12 (reopened) — the fast path (disk already
+    /// matches the requested value) must also emit a `VaultChanged`
+    /// event, because the chrome's cached projection may still be
+    /// stale even when disk happens to match the click's target.
+    /// The 9.2.9 fix re-syncs in-memory from disk on this branch;
+    /// the chrome can't see that re-sync without an explicit signal
+    /// because the `Vault` is a GPUI `Global`, not an `Entity`.
+    #[test]
+    fn set_frontmatter_bool_emits_watch_event_on_fast_path() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "n.md",
+            "---\ntype: Note\n_organized: true\n---\nbody\n",
+        );
+        let mut v = Vault::open_at(dir.path()).unwrap();
+        let rx = v.watch_events();
+        let id = v.note_ids_sync()[0];
+        let canonical = v.notes.get(&id).unwrap().path.clone();
+        // Disk already says `_organized: true`, so this call takes
+        // the fast path (no write).
+        drop(v.set_frontmatter_bool(id, "_organized", true));
+        let event = rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .expect("fast path must emit a VaultChanged event so subscribers refresh");
+        assert!(
+            event.paths.iter().any(|p| p == &canonical),
+            "fast-path VaultChanged must include the touched canonical path; got {:?}",
+            event.paths,
         );
     }
 

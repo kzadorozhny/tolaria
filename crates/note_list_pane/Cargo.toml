@@ -10,6 +10,7 @@ description = "Note-list pane view for Tolaria (ADR-0115 Phase 2d)."
 [dependencies]
 actions = { path = "../actions" }
 chrono.workspace = true
+flume.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
 log.workspace = true

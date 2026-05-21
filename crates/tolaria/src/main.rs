@@ -815,6 +815,30 @@ mod macos {
                     let sidebar = cx.new(|cx| SidebarPanel::from_or_empty(cx));
                     let note_list = cx.new(|cx| NoteListPane::from_or_empty(cx));
 
+                    // Worklist 9.2.12 (reopened) — when a real `Vault`
+                    // is installed, hook the pane into the vault's
+                    // change channel so any chrome-initiated
+                    // frontmatter mutation
+                    // (`Vault::set_frontmatter_bool`) invalidates the
+                    // pane's cached entry list.  Without this the
+                    // Inbox `_organized` filter keeps showing notes
+                    // the user just moved out of triage until the
+                    // OS-level fs-watcher debounce eventually catches
+                    // up — visible as a "click did nothing" UX bug.
+                    //
+                    // The MockVault path doesn't have a watcher (its
+                    // `watch_events` is an inert receiver), so the
+                    // task installs but never fires — cheap enough to
+                    // skip the branch guard here.
+                    if let Some(vault) = cx.try_global::<vault::Vault>() {
+                        let rx = vault.watch_events();
+                        NoteListPane::install_vault_watch_task(
+                            note_list.downgrade(),
+                            rx,
+                            cx,
+                        );
+                    }
+
                     // Worklist 2.19 — Cmd+N (and any future palette /
                     // menu entry) routes through the same
                     // `CreateNoteRequested` event that the notes-list

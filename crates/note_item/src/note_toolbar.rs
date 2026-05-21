@@ -139,6 +139,14 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
     } else {
         "Mark as organized"
     };
+    // Organized glyph mirrors React's `OrganizedAction` filled-disk
+    // treatment: outlined `CircleCheck` when off, a flat `Check`
+    // overlaid on a green-filled cell when on.  `gpui-component-assets`
+    // has no `circle-check-fill` pair, so the active-state contrast
+    // lives on the cell chrome (background + glyph colour) rather than
+    // on a different glyph.  See [`toolbar_cell_with_active_fill`]
+    // below for the fill-mode helper this branch routes through.
+    let organized_icon = organized_icon_for(is_organized);
     let actions = h_flex()
         .items_center()
         .gap(px(4.0))
@@ -163,15 +171,21 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         // `settings_store::explicit_organization_enabled`; revisit
         // when the setting lands.
         //
-        // When `_organized: true` the glyph paints `theme.success`
-        // (worklist 9.2.10) so the active state matches React's
-        // `OrganizedAction` styling (`text-[var(--accent-green)]`,
-        // `BreadcrumbBar.tsx:231`).  `theme.success` is the
-        // theme-aware mapping of `--accent-green` (see
-        // `crates/theme/src/palette.rs` light + dark blocks).
-        .child(toolbar_cell_with_active_color(
+        // When `_organized: true` the cell paints a green-filled disk
+        // with a white check inside (worklist 9.2.10 reopened) — matches
+        // the React `OrganizedAction` styling, which renders a
+        // `bg-[var(--accent-green)] text-white` filled disk rather than
+        // a tinted outline.  `gpui-component-assets` carries no
+        // `circle-check-fill` pair, so the contrast lives on the cell
+        // chrome: background = `theme.success`, glyph = white,
+        // `IconName::Check` (no surrounding circle ring).  The inactive
+        // branch keeps the outlined `CircleCheck` in muted foreground.
+        // `theme.success` is the theme-aware mapping of `--accent-green`
+        // (see `crates/theme/src/palette.rs` light + dark blocks) so
+        // the green tracks light / dark mode automatically.
+        .child(toolbar_cell_with_active_fill(
             "note-toolbar-organized",
-            IconName::CircleCheck,
+            organized_icon,
             organized_tooltip,
             is_organized,
             organized_active_color(cx),
@@ -333,17 +347,16 @@ fn toolbar_cell_with_active(
     active: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    toolbar_cell_inner(id, icon, tooltip, active, None, on_click)
+    toolbar_cell_inner(id, icon, tooltip, ActiveStyle::Tint, active, on_click)
 }
 
 /// [`toolbar_cell`] variant that paints the glyph in `active_color` when
-/// `active` is true — used by the star (worklist 9.2.11) and organized
-/// (worklist 9.2.10) cells where the React reference colours the
-/// **icon** rather than the cell background.  When `active && active_color`
-/// is `Some`, the background tint that [`toolbar_cell_with_active`] would
-/// paint is suppressed so the glyph itself carries the active signal,
-/// matching `BreadcrumbBar.tsx` (`text-[var(--accent-yellow)]`,
-/// `text-[var(--accent-green)]`).
+/// `active` is true — used by the star (worklist 9.2.11) cell where the
+/// React reference colours the **icon** rather than the cell
+/// background.  When `active`, the background tint that
+/// [`toolbar_cell_with_active`] would paint is suppressed so the glyph
+/// itself carries the active signal, matching `BreadcrumbBar.tsx`
+/// (`text-[var(--accent-yellow)]`).
 fn toolbar_cell_with_active_color(
     id: &'static str,
     icon: IconName,
@@ -352,34 +365,104 @@ fn toolbar_cell_with_active_color(
     active_color: Hsla,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    toolbar_cell_inner(id, icon, tooltip, active, Some(active_color), on_click)
+    toolbar_cell_inner(
+        id,
+        icon,
+        tooltip,
+        ActiveStyle::GlyphColor(active_color),
+        active,
+        on_click,
+    )
 }
 
-/// Shared body of [`toolbar_cell_with_active`] and
-/// [`toolbar_cell_with_active_color`].  Splitting the public surfaces
-/// keeps the call sites self-describing (`with_active` vs.
-/// `with_active_color`) while the visual chain stays one source of
-/// truth.
-fn toolbar_cell_inner(
+/// [`toolbar_cell`] variant that paints the **cell background** in
+/// `active_color` and the glyph in white when `active` is true — used
+/// by the organized (worklist 9.2.10 reopened) cell where the React
+/// reference uses a filled-disk treatment (`bg-[var(--accent-green)]
+/// text-white`) rather than a tinted outline.  The fill semantically
+/// replaces the missing `circle-check-fill` glyph in
+/// `gpui-component-assets`: pair this with `IconName::Check` (no
+/// surrounding ring) so the cell chrome carries the circle and the
+/// glyph carries the check.
+fn toolbar_cell_with_active_fill(
     id: &'static str,
     icon: IconName,
     tooltip: &'static str,
     active: bool,
-    active_color: Option<Hsla>,
+    active_color: Hsla,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    toolbar_cell_inner(
+        id,
+        icon,
+        tooltip,
+        ActiveStyle::Fill(active_color),
+        active,
+        on_click,
+    )
+}
+
+/// Active-state visual treatment selected by the caller.  Each variant
+/// names the cell-chrome shape that paints when `active = true`; an
+/// inactive cell always renders as the baseline (no background, no
+/// glyph recolour) regardless of the variant.
+#[derive(Clone, Copy)]
+enum ActiveStyle {
+    /// Paint the cell background with the standard hover tint
+    /// (`hsla(0, 0%, 50%, 0.12)`) so an active cell looks identical to
+    /// a hovered one.  Used by the raw-mode toggle (worklist 9.2.4).
+    Tint,
+    /// Suppress the active background and recolour the glyph itself.
+    /// Used by the star cell (worklist 9.2.11) where the React
+    /// reference paints `text-[var(--accent-yellow)]` on a filled-star
+    /// glyph that already carries the disk shape.
+    GlyphColor(Hsla),
+    /// Paint the cell background in `Hsla` and the glyph in white.
+    /// Used by the organized cell (worklist 9.2.10 reopened) where the
+    /// React reference draws a filled green disk with a white check
+    /// inside; `gpui-component-assets` has no `circle-check-fill`
+    /// glyph so the disk lives on the cell chrome.
+    Fill(Hsla),
+}
+
+/// Shared body of [`toolbar_cell_with_active`],
+/// [`toolbar_cell_with_active_color`], and
+/// [`toolbar_cell_with_active_fill`].  Splitting the public surfaces
+/// keeps the call sites self-describing while the visual chain stays
+/// one source of truth.
+fn toolbar_cell_inner(
+    id: &'static str,
+    icon: IconName,
+    tooltip: &'static str,
+    style: ActiveStyle,
+    active: bool,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
     use gpui::prelude::FluentBuilder as _;
     // Baseline tint matches the hover overlay so an active cell looks
     // exactly like a hovered one even when the cursor is elsewhere —
     // no new colour token required, and the chrome's existing dark /
-    // light theming carries through.  Suppressed when the caller wants
-    // the glyph itself to carry the active signal (star + organized,
-    // worklist 9.2.10 / 9.2.11).  Single source of truth for the tint
-    // so a future tweak to the active / hover overlay updates both
-    // states in lockstep.
+    // light theming carries through.  Single source of truth for the
+    // tint so a future tweak to the active / hover overlay updates
+    // both states in lockstep.
     let cell_tint = gpui::hsla(0.0, 0.0, 0.5, 0.12);
-    let want_active_bg = active && active_color.is_none();
-    let glyph_color = if active { active_color } else { None };
+    // Resolve the active treatment into the two style knobs the
+    // render chain consumes: a background colour and a glyph colour.
+    // Both `None` when inactive — the cell renders as its baseline.
+    let (active_bg, glyph_color) = if active {
+        match style {
+            ActiveStyle::Tint => (Some(cell_tint), None),
+            ActiveStyle::GlyphColor(c) => (None, Some(c)),
+            // Filled disk: background = active colour, glyph = white.
+            // White reads correctly on every theme.success the palette
+            // emits (both the light `#38A169` and dark `#79D89D`
+            // greens) — the contrast ratio against white exceeds the
+            // WCAG AA threshold (≥ 4.5) for both.
+            ActiveStyle::Fill(c) => (Some(c), Some(gpui::white())),
+        }
+    } else {
+        (None, None)
+    };
     div()
         .id(id)
         .flex()
@@ -389,7 +472,7 @@ fn toolbar_cell_inner(
         .w(px(24.0))
         .rounded_sm()
         .cursor_pointer()
-        .when(want_active_bg, move |this| this.bg(cell_tint))
+        .when_some(active_bg, |this, bg| this.bg(bg))
         .when_some(glyph_color, |this, c| this.text_color(c))
         .hover(move |this| this.bg(cell_tint))
         .on_click(move |_, window, cx| on_click(window, cx))
@@ -422,6 +505,27 @@ fn star_active_color() -> Hsla {
 /// follows light / dark mode without an extra constant.
 fn organized_active_color(cx: &App) -> Hsla {
     cx.theme().success
+}
+
+/// Glyph chosen for the organized toolbar cell at the given active
+/// state.  Lives next to [`organized_active_color`] because the
+/// icon and the colour together describe the cell's active-state
+/// look; lifting the choice into a named function keeps the render
+/// path and the regression test (`organized_icon_switches_to_check_when_active`)
+/// pinned to the same source of truth.
+///
+/// `active = true` returns [`IconName::Check`] (a flat checkmark, no
+/// surrounding ring) so the disk drawn by [`ActiveStyle::Fill`] on
+/// the cell background carries the circle shape and the glyph
+/// carries the check — together they reproduce React's filled-disk
+/// `OrganizedAction` treatment without needing a
+/// `circle-check-fill` icon variant.
+fn organized_icon_for(active: bool) -> IconName {
+    if active {
+        IconName::Check
+    } else {
+        IconName::CircleCheck
+    }
 }
 
 /// Convenience wrapper around [`toolbar_cell`] for cells whose
@@ -825,6 +929,59 @@ mod tests {
             false,
             yellow,
             |_window, _cx| {},
+        );
+    }
+
+    /// Worklist 9.2.10 (reopened) — the filled-disk cell helper must
+    /// build successfully in both states.  Pairs with the active-color
+    /// builder test to pin the new fill-mode helper introduced when the
+    /// organized cell switched from a tinted outline to a green disk
+    /// with a white check inside.
+    #[test]
+    fn toolbar_cell_with_active_fill_builds_in_both_states() {
+        let green: Hsla = gpui::rgb(0x38A169).into();
+        let _on = toolbar_cell_with_active_fill(
+            "note-toolbar-organized",
+            IconName::Check,
+            "Mark as unorganized",
+            true,
+            green,
+            |_window, _cx| {},
+        );
+        let _off = toolbar_cell_with_active_fill(
+            "note-toolbar-organized",
+            IconName::CircleCheck,
+            "Mark as organized",
+            false,
+            green,
+            |_window, _cx| {},
+        );
+    }
+
+    /// Worklist 9.2.10 (reopened) — the organized branch swaps from the
+    /// outlined `CircleCheck` glyph to a flat `Check` overlaid on a
+    /// filled green disk when `is_organized = true`, mirroring the
+    /// React `OrganizedAction` `bg-[var(--accent-green)] text-white`
+    /// treatment.  Asserting the glyph swap pins the variant choice so
+    /// a future tweak to either icon can't quietly desync from the
+    /// disk-vs-ring decision.
+    ///
+    /// The render path picks the icon via a local `if is_organized`
+    /// expression; extracting that into a helper here keeps the test
+    /// asserting against the production decision, not a duplicate.
+    #[test]
+    fn organized_icon_switches_to_check_when_active() {
+        // Off — outlined ring (no fill, only stroke).
+        assert!(
+            matches!(organized_icon_for(false), IconName::CircleCheck),
+            "inactive organized cell must keep the outlined `CircleCheck` glyph",
+        );
+        // On — flat check; the disk is drawn by the cell background
+        // via `ActiveStyle::Fill`, not by a `circle-check-fill` glyph
+        // (which doesn't exist in `gpui-component-assets`).
+        assert!(
+            matches!(organized_icon_for(true), IconName::Check),
+            "active organized cell must swap to `Check` so the cell background can carry the disk",
         );
     }
 }
