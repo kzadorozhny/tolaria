@@ -32,6 +32,15 @@ mod menus;
 #[cfg(target_os = "macos")]
 mod open_note;
 
+// Floating dev-tool panel rendered when `Cmd+Alt+I` toggles the gpui
+// inspector.  Gated on `debug_assertions` because gpui's inspector
+// (`Window::toggle_inspector`, `App::set_inspector_renderer`) is only
+// compiled in debug builds, and we don't enable the `inspector` feature
+// in release.  See `inspector_renderer.rs` for the rationale and the
+// worklist 3.1 follow-up commit that installs the renderer.
+#[cfg(all(target_os = "macos", debug_assertions))]
+mod inspector_renderer;
+
 #[cfg(target_os = "macos")]
 fn main() {
     macos::run();
@@ -483,6 +492,19 @@ mod macos {
                     "ReportIssue",
                     "Phase 9.x will open the GitHub issue tracker via open::that",
                 );
+                // Install the inspector renderer *before* wiring the
+                // `ToggleInspector` action.  Without this, gpui's
+                // `Inspector::render` returns `Empty` (see
+                // `~/.cargo/git/checkouts/.../crates/gpui/src/inspector.rs`),
+                // so the toggle flips internal state but no overlay
+                // appears.  Worklist 3.1 follow-up — keeps the
+                // renderer code path debug-only since `set_inspector_renderer`
+                // itself is gated on `cfg(any(feature = "inspector", debug_assertions))`.
+                #[cfg(debug_assertions)]
+                cx.set_inspector_renderer(Box::new(
+                    crate::inspector_renderer::render_tolaria_inspector,
+                ));
+
                 // `ToggleInspector` toggles GPUI's built-in
                 // element-picker inspector overlay on the active
                 // window — a floating dev-tool surface composited
