@@ -92,6 +92,19 @@ export interface EditorBridgeHandlers {
     getBodyLeadingWhitespace(): string;
     /** Read the stashed body trailing whitespace at save time. */
     getBodyTrailingWhitespace(): string;
+    /** Phase 9 worklist 9.2.4 — record the active note's on-disk path
+     *  on every `note_open` so a subsequent `set_raw_mode` envelope
+     *  knows whether the active note is markdown. */
+    setActivePath(path: string | null): void;
+    /** Phase 9 worklist 9.2.4 — read the active note's on-disk path so
+     *  the `set_raw_mode` dispatcher can call `shouldUseRawEditor` and
+     *  skip the flip for non-markdown notes that are already raw. */
+    getActivePath(): string | null;
+    /** Phase 9 worklist 9.2.4 — read the active raw-note state.  When
+     *  the dispatcher arrives in toggle-off, this returns the live
+     *  buffer the CodeMirror surface has flushed so the BlockNote
+     *  parse can land the latest bytes on the way out of raw mode. */
+    getRawNote(): RawNoteState | null;
 }
 
 /**
@@ -146,6 +159,9 @@ export function dispatchToHost(
             // the next change must be associated with the *new* id.
             handlers.cancelDirty();
             handlers.setActiveId(msg.v.id);
+            // Phase 9 worklist 9.2.4 — record the path so the
+            // `set_raw_mode` dispatcher can gate on markdown-ness.
+            handlers.setActivePath(msg.v.path);
             if (shouldUseRawEditor(msg.v.path)) {
                 // Park the raw note in React state; the editor body
                 // mounts `<RawEditorView />` against it.  Don't touch
@@ -230,6 +246,64 @@ export function dispatchToHost(
             handlers.setTheme(msg.v.mode);
             break;
         }
+        case "set_raw_mode": {
+            // Phase 9 worklist 9.2.4 — chrome-owned raw toggle.  Skip
+            // the flip when the active note isn't markdown: those
+            // notes are already raw via `shouldUseRawEditor(path)` on
+            // the previous NoteOpen, and forcing them through the
+            // toggle would either re-create the raw buffer (rich →
+            // raw, no-op) or destroy it (raw → rich, the BlockNote
+            // parse would mangle the YAML / JSON / shell body).
+            const id = handlers.getActiveId();
+            const path = handlers.getActivePath();
+            if (id === null || path === null) {
+                // No active note yet — chrome dispatched the toggle
+                // before the editor mounted a buffer.  Drop the
+                // envelope rather than synthesise a fake one.
+                break;
+            }
+            if (shouldUseRawEditor(path)) {
+                // Non-markdown notes are always raw; the toggle is a
+                // no-op (matches the React app: the raw button is
+                // hidden when the file is non-markdown).
+                break;
+            }
+            if (msg.v.enabled) {
+                // rich → raw: serialise the current BlockNote document
+                // to markdown (sandwich frontmatter + body whitespace,
+                // run through compactMarkdown — same funnel
+                // `save_request` uses so the on-screen buffer matches
+                // what would persist on a save).  Hand the result to
+                // the raw editor.
+                const body = buildMarkdownSaveBody(editor, handlers);
+                handlers.setRawNote({ id, path, body });
+            } else {
+                // raw → rich: flush the live CodeMirror buffer back
+                // through BlockNote.  Mirrors the markdown branch of
+                // `note_open` — peel YAML, capture leading/trailing
+                // whitespace, parse the trimmed body — so the rich
+                // surface lands byte-identical to a fresh re-open of
+                // the same buffer.
+                const rawNote = handlers.getRawNote();
+                const buffer = handlers.getRawBuffer() ?? rawNote?.body ?? "";
+                handlers.setRawNote(null);
+                const [frontmatter, rawBody] = splitFrontmatter(buffer);
+                handlers.setFrontmatter(frontmatter);
+                const leadingMatch = rawBody.match(/^(\n+)/);
+                const leadingBlanks = leadingMatch?.[1] ?? "";
+                const trailingMatch = rawBody.match(/(\n*)$/);
+                const trailingNewlines =
+                    leadingBlanks.length >= rawBody.length ? "" : trailingMatch?.[1] ?? "";
+                handlers.setBodyWhitespace(leadingBlanks, trailingNewlines);
+                const trimmed = rawBody.slice(
+                    leadingBlanks.length,
+                    rawBody.length - trailingNewlines.length,
+                );
+                const parsed = markdownToBlocks(editor, trimmed);
+                replaceDocument(editor, parsed);
+            }
+            break;
+        }
     }
 }
 
@@ -271,7 +345,22 @@ export function EditorApp() {
     const editor = useMemo(() => createEditor(), []);
     const [theme, setTheme] = useState<ThemeMode>("light");
     const [rawNote, setRawNote] = useState<RawNoteState | null>(null);
+    // Phase 9 worklist 9.2.4 — mirror `rawNote` into a ref so the
+    // `getRawNote` handler reads the current value even when called
+    // from inside a memoised closure (the `handlers` useMemo only
+    // depends on `tabSwap` so it doesn't re-create on raw-note state
+    // changes).  Without the ref, a `set_raw_mode` dispatch right
+    // after a `note_open` would close over a stale `null` and lose
+    // the live raw buffer on the raw → rich flip.
+    const rawNoteRef = useRef<RawNoteState | null>(null);
     const activeIdRef = useRef<number | null>(null);
+    // Phase 9 worklist 9.2.4 — keep the current note's on-disk path
+    // alongside the id so the `set_raw_mode` dispatcher can decide
+    // whether to honour the toggle (markdown only) or no-op
+    // (non-markdown notes are already raw).  A ref instead of state
+    // because the path is only read on bridge envelopes, never
+    // rendered.
+    const activePathRef = useRef<string | null>(null);
     const dirtyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const dirtyAnnouncedForIdRef = useRef<number | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -400,6 +489,7 @@ export function EditorApp() {
                 // previous raw buffer.
                 rawBufferRef.current = note?.body ?? null;
                 previousRawModeRef.current = note !== null;
+                rawNoteRef.current = note;
                 setRawNote(note);
             },
             getRawBuffer() {
@@ -420,6 +510,15 @@ export function EditorApp() {
             },
             getBodyTrailingWhitespace() {
                 return bodyTrailingRef.current;
+            },
+            setActivePath(path) {
+                activePathRef.current = path;
+            },
+            getActivePath() {
+                return activePathRef.current;
+            },
+            getRawNote() {
+                return rawNoteRef.current;
             },
         }),
         [tabSwap],

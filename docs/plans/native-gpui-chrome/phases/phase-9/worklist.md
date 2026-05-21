@@ -24,7 +24,7 @@
 9.2.1. ✅ Star toggle → favourite frontmatter + sidebar favourites section
 9.2.2. ✅ Organised toggle → inbox-advance frontmatter
 9.2.3. Neighbourhood action → backlink filter in note-list
-9.2.4. ⏳ Raw-mode toggle → editor-host raw bridge
+9.2.4. ✅ Raw-mode toggle → editor-host raw bridge
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
 9.2.6. ToC action → new `toc_panel` crate + headings bridge
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
@@ -141,6 +141,41 @@ has no current mode-switch envelope; (3) chrome side of
 `crates/raw_editor` (already scaffolded) wired to display the mode
 chip + find bar; (4) `note_item` tracks `raw_mode: bool` per tab.
 **Size:** medium.
+
+**Closure (commit `<this-commit>`).**  Shipped the chrome-owned raw
+toggle.  Seam: `editor_bridge::ToHost::SetRawMode(SetRawMode {
+enabled })` (native → editor; the annotation above mis-labels it
+`FromHost::*` — the editor is the receiver, not the sender).  Chrome
+state: `NoteItem::raw_mode` (per-tab, defaults `false`, reset on
+`open_in_webview` so each swap-in lands rich).  `NoteItem::toggle_raw_mode`
+is the single mutator — flips the field, calls `cx.notify()`, then
+pushes the matching `SetRawMode` envelope through the existing
+`send_to_host` pipeline.  Action: `actions::ToggleRawEditor` (no
+default keybinding, mirroring the React mouse-only affordance);
+handler lives in `tolaria/src/main.rs` next to the theme observer so
+it borrows the same `ActiveNoteItemSlot`.  Toolbar: the
+`note-toolbar-raw` cell is now a `toolbar_cell_with_active` —
+visual contrast lives in the cell background (filled when raw)
+because `gpui-component-assets` has no fill/outline pair for
+`SquareTerminal`; a `TODO(visual-parity)` carries the upgrade.
+Editor host: `editor_bridge::ToHost` gains a `set_raw_mode` arm in
+`bridge.ts`, `dispatchToHost` handles it (markdown → flip surface
+via `setRawNote`; non-markdown → no-op; pre-`note_open` → drop),
+and `EditorBridgeHandlers` gains `setActivePath` / `getActivePath`
+/ `getRawNote` so the toggle gate can read the active note's path
+without re-entering React state.  Tests: `editor_bridge` round-trips
+the new envelope (`to_host_set_raw_mode_*roundtrip`), `note_item`
+asserts the default + flip (`toggle_raw_mode_flips_the_flag`,
+`raw_mode_defaults_to_false`), `bridge.test.ts` covers the four
+dispatcher branches (flip-on, flip-off, non-markdown no-op,
+pre-open drop), and `EditorApp.routing.test.tsx` drives the React
+mount through chrome-style bridge envelopes.  **Deferred to a
+`9.2.4-followup`:** the `crates/raw_editor` mode-chip + find-bar
+polish.  The current ship swaps the body between BlockNote and the
+existing CodeMirror raw editor and updates the toolbar glyph
+treatment, which the brief's minimum-viable acceptance criteria
+require.  The mode chip + find bar are net-new UI work on top of
+the existing raw editor, not a regression of an existing surface.
 
 #### 9.2.5
 

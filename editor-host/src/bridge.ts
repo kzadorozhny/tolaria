@@ -17,7 +17,8 @@ export type ToHost =
     | { k: "note_open"; v: { id: number; path: string; body: string } }
     | { k: "focus_editor" }
     | { k: "save_request" }
-    | { k: "theme_set"; v: { mode: ThemeMode } };
+    | { k: "theme_set"; v: { mode: ThemeMode } }
+    | { k: "set_raw_mode"; v: { enabled: boolean } };
 
 // ---------------------------------------------------------------------------
 // Editor → Native

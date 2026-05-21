@@ -655,6 +655,24 @@ mod macos {
                 })
                 .detach();
 
+                // Worklist 9.2.4 — `ToggleRawEditor` flips the chrome-owned
+                // `raw_mode` on the active `NoteItem` and pushes
+                // `ToHost::SetRawMode` over the bridge.  Reuses the same
+                // `active_note_item` slot the theme observer reads above so
+                // there's exactly one source of "which item is on screen".
+                // The note-toolbar's raw cell dispatches this; menus and
+                // user-bound keybindings get the same code path for free.
+                let raw_slot = active_note_item.clone();
+                cx.on_action(move |_: &actions::ToggleRawEditor, cx| {
+                    let Some(item) = raw_slot.borrow().as_ref().cloned() else {
+                        log::debug!("ToggleRawEditor: no active NoteItem");
+                        return;
+                    };
+                    if let Err(e) = item.update(cx, |item, cx| item.toggle_raw_mode(cx)) {
+                        log::warn!("ToggleRawEditor: toggle_raw_mode failed: {e:#}");
+                    }
+                });
+
                 // 10. Open root window.  Copy f32 size values out before passing cx
                 //    to Bounds::centered so the borrow of SettingsStore is released.
                 //    CLI `--width` / `--height` override the persisted settings —

@@ -48,6 +48,17 @@ pub enum ToHost {
 
     /// Theme tracking; the editor restyles its chrome to match.
     ThemeSet(ThemeSet),
+
+    /// Flip the embedded editor between BlockNote (rich) and the
+    /// CodeMirror raw-text view (Phase 9 worklist 9.2.4).
+    ///
+    /// Chrome side owns the toggle state on a per-`NoteItem` basis; the
+    /// editor reacts to this envelope by forcing the corresponding
+    /// surface to mount.  Markdown notes are the only ones that can
+    /// flip — non-markdown paths already route through the raw editor
+    /// unconditionally via `shouldUseRawEditor(path)` and treat this
+    /// envelope as a no-op.
+    SetRawMode(SetRawMode),
 }
 
 /// Payload for [`ToHost::NoteOpen`].  `path` is included for
@@ -79,6 +90,19 @@ pub enum ThemeMode {
 pub struct ThemeSet {
     /// Active theme mode.
     pub mode: ThemeMode,
+}
+
+/// Payload for [`ToHost::SetRawMode`].
+///
+/// `enabled = true` forces the CodeMirror raw editor to mount over the
+/// currently-active markdown note; `enabled = false` reverts to the
+/// BlockNote rich editor.  Non-markdown notes (the host's
+/// `shouldUseRawEditor(path)` returns `true`) ignore the toggle —
+/// they're already raw by construction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetRawMode {
+    /// `true` mounts the raw editor; `false` mounts BlockNote.
+    pub enabled: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +317,29 @@ mod tests {
     }
 
     #[test]
+    fn to_host_set_raw_mode_roundtrip() {
+        // Worklist 9.2.4 — the chrome owns raw-mode state and pushes
+        // the toggle down through this envelope.  Lock the wire shape
+        // (`{"k":"set_raw_mode","v":{"enabled":true}}`) so a future
+        // rename can't silently break the TypeScript dispatcher.
+        let msg = ToHost::SetRawMode(SetRawMode { enabled: true });
+        let json = encode_to_host(&msg).unwrap();
+        assert_eq!(json, r#"{"k":"set_raw_mode","v":{"enabled":true}}"#);
+        assert_eq!(decode_to_host(&json).unwrap(), msg);
+    }
+
+    #[test]
+    fn to_host_set_raw_mode_disabled_roundtrip() {
+        // Same shape, opposite boolean — the field must not be elided
+        // when `false`, so the editor side can always read `v.enabled`
+        // without an `?? false` fallback.
+        let msg = ToHost::SetRawMode(SetRawMode { enabled: false });
+        let json = encode_to_host(&msg).unwrap();
+        assert_eq!(json, r#"{"k":"set_raw_mode","v":{"enabled":false}}"#);
+        assert_eq!(decode_to_host(&json).unwrap(), msg);
+    }
+
+    #[test]
     fn from_host_ready_decodes() {
         assert_eq!(
             decode_from_host(r#"{"k":"ready"}"#).unwrap(),
@@ -434,6 +481,10 @@ mod tests {
                     mode: ThemeMode::Light,
                 }),
                 "theme_set",
+            ),
+            (
+                ToHost::SetRawMode(SetRawMode { enabled: false }),
+                "set_raw_mode",
             ),
         ];
         for (msg, want) in cases {

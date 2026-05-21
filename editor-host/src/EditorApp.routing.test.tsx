@@ -95,4 +95,55 @@ describe("EditorApp routing", () => {
         expect(getMode(container)).toBe("rich");
         expect(screen.queryByTestId("raw-editor-codemirror")).not.toBeInTheDocument();
     });
+
+    // ------------------------------------------------------------------
+    // Phase 9 worklist 9.2.4 — chrome-owned raw toggle.  The native
+    // shell pushes `set_raw_mode` over the bridge and the editor flips
+    // surfaces in response.  Markdown notes honour the toggle; non-
+    // markdown notes are already raw and ignore it.
+    // ------------------------------------------------------------------
+
+    it("set_raw_mode flips a markdown note from rich to raw and back", () => {
+        const { container } = render(<EditorApp />);
+
+        act(() => {
+            deliver({
+                k: "note_open",
+                v: { id: 1, path: "/vault/note.md", body: "# heading\n" },
+            });
+        });
+        expect(getMode(container)).toBe("rich");
+
+        act(() => {
+            deliver({ k: "set_raw_mode", v: { enabled: true } });
+        });
+        expect(getMode(container)).toBe("raw");
+        expect(screen.getByTestId("raw-editor-codemirror")).toBeInTheDocument();
+
+        act(() => {
+            deliver({ k: "set_raw_mode", v: { enabled: false } });
+        });
+        expect(getMode(container)).toBe("rich");
+        expect(screen.queryByTestId("raw-editor-codemirror")).not.toBeInTheDocument();
+    });
+
+    it("set_raw_mode is a no-op on non-markdown notes (already raw)", () => {
+        const { container } = render(<EditorApp />);
+
+        act(() => {
+            deliver({
+                k: "note_open",
+                v: { id: 1, path: "/vault/config.yaml", body: "a: 1\n" },
+            });
+        });
+        expect(getMode(container)).toBe("raw");
+
+        // The toggle from chrome must not flip the surface — yaml is
+        // already raw via `shouldUseRawEditor("/vault/config.yaml")`.
+        act(() => {
+            deliver({ k: "set_raw_mode", v: { enabled: false } });
+        });
+        expect(getMode(container)).toBe("raw");
+        expect(screen.getByTestId("raw-editor-codemirror")).toBeInTheDocument();
+    });
 });

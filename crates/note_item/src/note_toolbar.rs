@@ -43,13 +43,15 @@ pub const NOTE_TOOLBAR_HEIGHT_PT: f32 = 52.0;
 /// `id` is the vault id of the note (used by the star + organized
 /// cells to dispatch the frontmatter toggle).  `path` is the on-disk
 /// path; the breadcrumb extracts the type label from its filename
-/// prefix and uses the file stem as the trailing segment.
+/// prefix and uses the file stem as the trailing segment.  `raw_mode`
+/// is the active item's chrome-owned raw-mode flag — drives the
+/// active-state treatment on the raw cell (worklist 9.2.4).
 ///
 /// The cell-state read (`favorite` / `organized`) goes through the
 /// installed [`Vault`] global; absent vault (mock-mode + chrome tests
 /// without a real vault) renders the cells in their "off" state and
 /// the click handlers become log-only.
-pub(crate) fn render(id: NoteId, path: &Path, cx: &App) -> AnyElement {
+pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let bg = theme.background;
     let border = theme.border;
@@ -165,10 +167,31 @@ pub(crate) fn render(id: NoteId, path: &Path, cx: &App) -> AnyElement {
             IconName::Map,
             "Show neighborhood graph",
         ))
-        .child(stub_cell(
+        // Worklist 9.2.4 — clicking dispatches `ToggleRawEditor`; the
+        // chrome-side handler resolves the active `NoteItem` and flips
+        // `raw_mode`, which pushes `ToHost::SetRawMode` down to the
+        // embedded editor.  Active-state treatment paints the cell
+        // background filled when raw is on — `gpui-component-assets`
+        // has no fill/outline pair for `SquareTerminal`, so the
+        // contrast lives in the cell chrome rather than the glyph.
+        // TODO(visual-parity): adopt a true fill/outline pair when the
+        // upstream icon set gains one (or commission a `square-terminal-fill`).
+        .child(toolbar_cell_with_active(
             "note-toolbar-raw",
             IconName::SquareTerminal,
-            "Toggle raw markdown",
+            if raw_mode {
+                "Show rich editor"
+            } else {
+                "Show raw markdown"
+            },
+            raw_mode,
+            |_window, cx| {
+                cx.dispatch_action(&actions::ToggleRawEditor);
+                log::info!(
+                    target: "note_item::toolbar",
+                    "raw: dispatched ToggleRawEditor"
+                );
+            },
         ))
         .child(stub_cell(
             "note-toolbar-width",
@@ -237,13 +260,36 @@ pub(crate) fn render(id: NoteId, path: &Path, cx: &App) -> AnyElement {
 ///
 /// Single source of truth for the cell's visual chain (size, hover
 /// background, `dump_as`, `tooltip`) — see [`stub_cell`] for the
-/// log-only default used by the seven still-unwired cells.
+/// log-only default used by the seven still-unwired cells.  Wraps
+/// [`toolbar_cell_with_active`] in the `active = false` case so the
+/// active-state treatment is opt-in.
 fn toolbar_cell(
     id: &'static str,
     icon: IconName,
     tooltip: &'static str,
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
+    toolbar_cell_with_active(id, icon, tooltip, false, on_click)
+}
+
+/// [`toolbar_cell`] with an explicit `active` flag — when `true`, the
+/// cell paints a baseline tinted background so the user sees the
+/// toggle's state without having to hover.  Used by the raw-mode
+/// toggle (worklist 9.2.4) where the chrome-side `raw_mode` flag
+/// drives the visual.
+fn toolbar_cell_with_active(
+    id: &'static str,
+    icon: IconName,
+    tooltip: &'static str,
+    active: bool,
+    on_click: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    use gpui::prelude::FluentBuilder as _;
+    // Baseline tint matches the hover overlay so an active cell looks
+    // exactly like a hovered one even when the cursor is elsewhere —
+    // no new colour token required, and the chrome's existing dark /
+    // light theming carries through.
+    let active_bg = gpui::hsla(0.0, 0.0, 0.5, 0.12);
     div()
         .id(id)
         .flex()
@@ -253,6 +299,7 @@ fn toolbar_cell(
         .w(px(24.0))
         .rounded_sm()
         .cursor_pointer()
+        .when(active, move |this| this.bg(active_bg))
         .hover(|this| this.bg(gpui::hsla(0.0, 0.0, 0.5, 0.12)))
         .on_click(move |_, window, cx| on_click(window, cx))
         .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))

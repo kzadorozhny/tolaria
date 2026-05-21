@@ -44,6 +44,19 @@ gpui::actions!(
         /// (worklist 2.18) and from `View → Toggle Inspector`
         /// (`menus.rs`).
         ToggleInspector,
+        /// Flip the active `NoteItem` between BlockNote (rich) and
+        /// CodeMirror raw markdown (Phase 9 worklist 9.2.4).
+        ///
+        /// Chrome owns the toggle state per `NoteItem`; the action
+        /// handler in `tolaria/src/main.rs` resolves the active item
+        /// and calls `NoteItem::toggle_raw_mode`, which flips the
+        /// field and pushes `editor_bridge::ToHost::SetRawMode` down
+        /// to the embedded editor.  Dispatched from the note-toolbar
+        /// raw cell (worklist 9.2.4) and `View → Toggle Raw Editor`
+        /// once that menu entry lands.  No default keybinding —
+        /// React parity (the React `BreadcrumbBar.tsx` `RawToggleButton`
+        /// is mouse-only); users can map one via the user keymap.
+        ToggleRawEditor,
         CloseTab,
         /// Phase 8.13 — dismiss the active modal in `TolariaWorkspace`'s
         /// `ModalLayer`.  Bound to `escape` in the modal-active context

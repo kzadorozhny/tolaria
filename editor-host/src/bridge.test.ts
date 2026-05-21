@@ -20,8 +20,10 @@ import type { ToHost } from "./bridge.ts";
 
 function makeHandlers(initial?: {
     activeId?: number | null;
+    activePath?: string | null;
     theme?: (mode: "light" | "dark") => void;
     rawBuffer?: string | null;
+    rawNote?: { id: number; path: string; body: string } | null;
 }): EditorBridgeHandlers & {
     cancelCalls: number;
     setActiveIdCalls: Array<number | null>;
@@ -29,11 +31,14 @@ function makeHandlers(initial?: {
     frontmatterCalls: string[];
 } {
     let activeId: number | null = initial?.activeId ?? null;
+    let activePath: string | null = initial?.activePath ?? null;
     const setActiveIdCalls: Array<number | null> = [];
     const rawNoteCalls: Array<{ id: number; path: string; body: string } | null> = [];
     const frontmatterCalls: string[] = [];
     let frontmatter = "";
     let rawBuffer: string | null = initial?.rawBuffer ?? null;
+    let rawNoteState: { id: number; path: string; body: string } | null =
+        initial?.rawNote ?? null;
     let cancelCalls = 0;
     let bodyLeading = "";
     let bodyTrailing = "";
@@ -52,6 +57,7 @@ function makeHandlers(initial?: {
         setRawNote(note) {
             rawNoteCalls.push(note);
             rawBuffer = note?.body ?? null;
+            rawNoteState = note;
         },
         getRawBuffer() {
             return rawBuffer;
@@ -72,6 +78,15 @@ function makeHandlers(initial?: {
         },
         getBodyTrailingWhitespace() {
             return bodyTrailing;
+        },
+        setActivePath(path) {
+            activePath = path;
+        },
+        getActivePath() {
+            return activePath;
+        },
+        getRawNote() {
+            return rawNoteState;
         },
         get cancelCalls() {
             return cancelCalls;
@@ -495,5 +510,137 @@ describe("dirty debounce contract", () => {
         } finally {
             w.ipc = prev;
         }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 worklist 9.2.4 — `set_raw_mode` toggles the active note's
+// editor surface.  The dispatcher reads the active path to decide
+// whether the toggle is meaningful (markdown only); raw notes are
+// already raw via `shouldUseRawEditor(path)` and treat the envelope
+// as a no-op.
+// ---------------------------------------------------------------------------
+
+describe("dispatchToHost set_raw_mode", () => {
+    let editor: BlockNoteEditor;
+    beforeEach(() => {
+        editor = BlockNoteEditor.create();
+    });
+
+    it("flips a markdown note into raw and parks the buffer", () => {
+        const handlers = makeHandlers();
+        dispatchToHost(
+            editor,
+            {
+                k: "note_open",
+                v: { id: 7, path: "/v/note.md", body: "# heading\n\nbody\n" },
+            },
+            handlers,
+        );
+        // Sanity — `note_open` records the path so the toggle gate can
+        // read it back.
+        expect(handlers.getActivePath()).toBe("/v/note.md");
+        // The markdown branch parked `null` (rich mode) in raw state.
+        expect(handlers.rawNoteCalls).toEqual([null]);
+
+        dispatchToHost(
+            editor,
+            { k: "set_raw_mode", v: { enabled: true } },
+            handlers,
+        );
+
+        // The toggle mounted the raw editor against the active note id
+        // and path — the body comes from the live BlockNote serialiser
+        // so we only assert the id + path + non-empty body here.
+        expect(handlers.rawNoteCalls).toHaveLength(2);
+        const raw = handlers.rawNoteCalls[1];
+        expect(raw).toBeTruthy();
+        expect(raw?.id).toBe(7);
+        expect(raw?.path).toBe("/v/note.md");
+        expect(raw?.body.length).toBeGreaterThan(0);
+    });
+
+    it("disabled flips raw back to rich with the live buffer", () => {
+        const handlers = makeHandlers();
+        // Open a markdown note, flip into raw, simulate an edit in
+        // the raw buffer, then flip back.
+        dispatchToHost(
+            editor,
+            {
+                k: "note_open",
+                v: { id: 9, path: "/v/note.md", body: "# heading\n\noriginal\n" },
+            },
+            handlers,
+        );
+        dispatchToHost(
+            editor,
+            { k: "set_raw_mode", v: { enabled: true } },
+            handlers,
+        );
+        // makeHandlers' setRawNote updates the live raw buffer, so
+        // any subsequent `getRawBuffer()` reads the live state.  Stamp
+        // a deliberate-different value to prove the rich-mode parse
+        // consumes the live buffer (not the stale on-open body).
+        handlers.setRawNote({ id: 9, path: "/v/note.md", body: "# heading\n\nedited\n" });
+
+        dispatchToHost(
+            editor,
+            { k: "set_raw_mode", v: { enabled: false } },
+            handlers,
+        );
+
+        // The final `setRawNote(null)` call signals rich mode.
+        const lastCall = handlers.rawNoteCalls.at(-1);
+        expect(lastCall).toBeNull();
+        // The BlockNote document must now contain the edited body, not
+        // the original.  Serialise and check.
+        const finalMarkdown = blocksToMarkdown(editor);
+        expect(finalMarkdown).toContain("edited");
+        expect(finalMarkdown).not.toContain("original");
+    });
+
+    it("no-ops on non-markdown notes (already raw)", () => {
+        const handlers = makeHandlers();
+        // Open a YAML note — `shouldUseRawEditor(".yaml") === true` so
+        // the open mounted the raw editor.
+        dispatchToHost(
+            editor,
+            {
+                k: "note_open",
+                v: { id: 3, path: "/v/config.yaml", body: "key: 1\n" },
+            },
+            handlers,
+        );
+        expect(handlers.rawNoteCalls).toHaveLength(1);
+
+        // A subsequent toggle from the chrome must not generate a
+        // second `setRawNote` call — the raw editor is already mounted
+        // and forcing it through the rich-mode parse would mangle the
+        // YAML.
+        dispatchToHost(
+            editor,
+            { k: "set_raw_mode", v: { enabled: true } },
+            handlers,
+        );
+        dispatchToHost(
+            editor,
+            { k: "set_raw_mode", v: { enabled: false } },
+            handlers,
+        );
+        expect(handlers.rawNoteCalls).toHaveLength(1);
+    });
+
+    it("is a no-op before any note_open lands", () => {
+        const handlers = makeHandlers();
+        // Bridge envelopes can arrive before the first `note_open`
+        // (e.g. user clicks the toolbar cell on the empty editor) —
+        // the dispatcher must drop the toggle rather than synthesise
+        // a fake one.
+        dispatchToHost(
+            editor,
+            { k: "set_raw_mode", v: { enabled: true } },
+            handlers,
+        );
+        expect(handlers.rawNoteCalls).toEqual([]);
     });
 });

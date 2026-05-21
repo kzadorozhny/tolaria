@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
 pub use editor_bridge::ThemeMode;
-use editor_bridge::{encode_to_host, FromHost, Mods, NoteOpen, ToHost};
+use editor_bridge::{encode_to_host, FromHost, Mods, NoteOpen, SetRawMode, ToHost};
 use gpui::{
     div, App, Context, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled,
     Task, Window,
@@ -305,6 +305,17 @@ pub struct NoteItem {
     /// Ready.  Drained by the dispatch task on receipt of
     /// [`FromHost::Ready`].
     pending_open: Option<NoteOpen>,
+    /// Per-item raw-mode flag (Phase 9 worklist 9.2.4).
+    ///
+    /// Chrome owns the toggle so the editor doesn't need to track its
+    /// own state across `NoteOpen` swaps — when a note is re-mounted
+    /// the next paint hands the editor a fresh [`ToHost::SetRawMode`]
+    /// matching the current value.  Defaults to `false` (rich
+    /// BlockNote) on construction, and on `open_in_webview` is reset
+    /// to `false` so each tab starts in rich mode regardless of the
+    /// previous note's state (mirrors React, which holds raw-mode in
+    /// component-local state that resets on a note change).
+    raw_mode: bool,
     #[cfg(target_os = "macos")]
     macos: MacosState,
 }
@@ -327,6 +338,7 @@ impl NoteItem {
             dirty: false,
             editor_ready: false,
             pending_open: None,
+            raw_mode: false,
             #[cfg(target_os = "macos")]
             macos: MacosState::default(),
         }
@@ -442,6 +454,12 @@ impl NoteItem {
         self.title = note.title;
         self.path = note.path;
         self.dirty = false;
+        // Each tab opens fresh in rich mode (Phase 9 worklist 9.2.4) —
+        // raw-mode is component-local state in React, and a swap-in
+        // there starts fresh too.  Skipping this reset would carry
+        // the previous note's raw-mode flag across, surprising users
+        // who picked raw on a different file.
+        self.raw_mode = false;
 
         let payload = NoteOpen {
             id: self.id,
@@ -492,6 +510,45 @@ impl NoteItem {
                 .context("wry::WebView::evaluate_script(ThemeSet) failed")?;
         }
         Ok(())
+    }
+
+    /// Current raw-mode flag (Phase 9 worklist 9.2.4).  `true` when
+    /// the embedded editor is rendering the CodeMirror raw-text view;
+    /// `false` for the default BlockNote rich surface.  The toolbar
+    /// reads this on every render to drive the cell's active-state
+    /// glyph treatment.
+    #[must_use]
+    pub fn raw_mode(&self) -> bool {
+        self.raw_mode
+    }
+
+    /// Flip [`Self::raw_mode`] and push the corresponding
+    /// [`ToHost::SetRawMode`] envelope into the embedded editor.
+    /// Worklist 9.2.4 — the chrome is the single source of truth, so
+    /// this method is the only path that mutates the flag at runtime.
+    ///
+    /// `cx.notify()` runs unconditionally so the toolbar re-renders
+    /// with the new cell-active treatment even when the bridge send
+    /// is a no-op (non-macOS tests, no WebView mounted).
+    ///
+    /// # Errors
+    ///
+    /// Propagates the same encode / `evaluate_script` failures as
+    /// [`Self::send_to_host`].  The state mutation lands regardless of
+    /// the bridge result so a transient JS evaluation hiccup cannot
+    /// desync the chrome's idea of the toggle from the editor's
+    /// surface — when the user clicks again the chrome's view of
+    /// the world drives a fresh `SetRawMode` and the editor catches up.
+    pub fn toggle_raw_mode(&mut self, cx: &mut Context<Self>) -> Result<()> {
+        self.raw_mode = !self.raw_mode;
+        cx.notify();
+        self.send_to_host(
+            &ToHost::SetRawMode(SetRawMode {
+                enabled: self.raw_mode,
+            }),
+            "SetRawMode",
+            cx,
+        )
     }
 
     /// Serialise `msg` and inject it into the embedded WKWebView via
@@ -672,7 +729,7 @@ impl Render for NoteItem {
         // entity with `path = PathBuf::new()`, and neither cluster has
         // meaningful state to render until a note swaps in.
         let toolbar = (!self.path.as_os_str().is_empty())
-            .then(|| note_toolbar::render(self.id, &self.path, cx));
+            .then(|| note_toolbar::render(self.id, &self.path, self.raw_mode, cx));
 
         // Block-level flex column instead of `gpui_component::v_flex()`:
         // the helper bundles `align-items: center`, which we don't want
@@ -734,6 +791,7 @@ impl NoteItem {
             dirty: false,
             editor_ready: false,
             pending_open: None,
+            raw_mode: false,
             macos: MacosState {
                 webview: Some(webview),
             },
@@ -782,6 +840,7 @@ impl NoteItem {
             dirty: false,
             editor_ready: false,
             pending_open: Some(pending_open),
+            raw_mode: false,
             macos: MacosState {
                 webview: Some(webview),
             },
@@ -1597,6 +1656,54 @@ mod tests {
             toolbar.height,
             note_toolbar::NOTE_TOOLBAR_HEIGHT_PT,
         );
+    }
+
+    /// Phase 9 worklist 9.2.4 — `NoteItem` defaults to `raw_mode =
+    /// false` and `toggle_raw_mode` flips the flag.  The bridge send
+    /// is a no-op when no WebView is mounted (the macOS branch
+    /// short-circuits on `webview.as_ref()` returning `None`, and the
+    /// non-macOS branch is `#[cfg]`-gated out), so the test drives the
+    /// state mutation alone and pins the chrome-owned invariant the
+    /// toolbar reads on every render.
+    #[gpui::test]
+    fn toggle_raw_mode_flips_the_flag(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        let item = cx.update(|cx| {
+            cx.new(|_cx: &mut Context<NoteItem>| NoteItem::new_for_tests(fresh_note(1)))
+        });
+
+        cx.update(|cx| {
+            item.update(cx, |item: &mut NoteItem, _| {
+                assert!(!item.raw_mode(), "default raw_mode is false");
+            });
+            // `new_for_tests` constructs without a WebView; `send_to_host`
+            // sees an absent `MacosState::webview` (or the `#[cfg]`-gated
+            // non-macOS branch) and returns `Ok(())` without dispatching
+            // any JS — so the expect cannot fail in either configuration.
+            item.update(cx, |item: &mut NoteItem, cx| {
+                item.toggle_raw_mode(cx)
+                    .expect("toggle_raw_mode returns Ok when no WebView is mounted");
+                assert!(item.raw_mode(), "toggle flips false -> true");
+            });
+            item.update(cx, |item: &mut NoteItem, cx| {
+                item.toggle_raw_mode(cx)
+                    .expect("toggle_raw_mode returns Ok when no WebView is mounted");
+                assert!(!item.raw_mode(), "toggle flips true -> false");
+            });
+        });
+    }
+
+    /// Phase 9 worklist 9.2.4 — `open_in_webview` resets `raw_mode`
+    /// to `false` so a swap into a different tab always lands the
+    /// user in rich mode (mirrors React, where raw is component-local
+    /// state that resets per note).  The webview branch is macOS-only,
+    /// but the state-reset path runs unconditionally so a plain
+    /// fresh-note instance with manual flag flip is enough to lock the
+    /// invariant.
+    #[test]
+    fn raw_mode_defaults_to_false() {
+        let item = NoteItem::new_for_tests(fresh_note(1));
+        assert!(!item.raw_mode());
     }
 
     /// Phase 8 worklist 1.2 (third attempt): the macOS `render` path

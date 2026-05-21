@@ -33,10 +33,12 @@ const VAULT_ROOT = resolve(__dirname, "../../demo-vault-v2");
 
 function makeHandlers(): EditorBridgeHandlers {
     let activeId: number | null = null;
+    let activePath: string | null = null;
     let frontmatter = "";
     let rawBuffer: string | null = null;
     let bodyLeading = "";
     let bodyTrailing = "";
+    let rawNote: { id: number; path: string; body: string } | null = null;
     return {
         setActiveId(id) {
             activeId = id;
@@ -48,6 +50,7 @@ function makeHandlers(): EditorBridgeHandlers {
         cancelDirty() {},
         setRawNote(note) {
             rawBuffer = note?.body ?? null;
+            rawNote = note;
         },
         getRawBuffer() {
             return rawBuffer;
@@ -67,6 +70,15 @@ function makeHandlers(): EditorBridgeHandlers {
         },
         getBodyTrailingWhitespace() {
             return bodyTrailing;
+        },
+        setActivePath(path) {
+            activePath = path;
+        },
+        getActivePath() {
+            return activePath;
+        },
+        getRawNote() {
+            return rawNote;
         },
     };
 }
