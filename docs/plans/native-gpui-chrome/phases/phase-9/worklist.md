@@ -30,9 +30,10 @@
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. ✅ Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
-9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
+9.2.10. ⏳ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
-9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
+9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
+9.2.13. Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 
 ## 3. Low Priority
 
@@ -361,7 +362,7 @@ the workspace's `active_item()`).  **Size:** large — depends on
 9.2.3 and 9.2.6 for shared infrastructure but its UI shape is
 independent; can land in parallel once those primitives exist.
 
-**Closure (commit `<this-commit>`).**  Wired four sections in
+**Closure (commit `8897ab93`).**  Wired four sections in
 `crates/inspector_panel/src/lib.rs` to live data sources:
 
 - **Backlinks** — `vault::Vault::backlinks(id)` resolves inbound
@@ -555,6 +556,19 @@ through `theme.success`, which maps to `--accent-green` in both light
 pins the choice of token so a future palette refactor that retargets
 the green can't silently desync the toolbar.
 
+**Reopened (2026-05-21)** ⏳ — user reports the treatment isn't a
+filled-disk look.  The React reference (user-attached screenshot)
+shows a **green-filled circle with a white check inside**, not an
+outlined `CircleCheck` tinted green.  Current implementation tints
+`IconName::CircleCheck` (outline) in `theme.success` — the icon's
+strokes are green but the centre stays empty, which reads as "ring"
+not "filled disk".  Fix: either swap to a filled-circle icon
+variant (e.g. `IconName::CircleCheckBig` if it exists in
+`gpui-component`) OR render a green-filled `div` with a white
+check icon overlaid.  The Star branch's `StarFill` icon already
+gives the desired filled-glyph effect — match that pattern for
+parity.  Original broken-closure commit sha remains `e1d61a32`.
+
 #### 9.2.11
 
 **Source:** user-reported visual regression on 9.2.1 (star toggle),
@@ -609,6 +623,57 @@ still see organized notes — moving a note out of the inbox does not
 remove it from the vault.  A `#[gpui::test]`
 (`inbox_scope_excludes_organized_notes`) opens a real on-disk vault
 with one organized + one fresh note and asserts both invariants.
+
+**Reopened (2026-05-21)** ⏳ — user reports the Inbox still shows
+organized notes after a toggle.  Root cause analysis pending; most
+likely culprit is the `NoteEntry::is_organized` field being
+captured at `collect_vault_entries` build time and never refreshed
+after a chrome-initiated frontmatter toggle.  `refresh_from_vault`
+exists at `note_list_pane/src/lib.rs:986` but is only invoked from
+`tolaria/src/open_note.rs:186` (on note-open).  `cx.refresh_windows()`
+in `toggle_frontmatter_flag` triggers a re-render but the render
+reads the stale `entries` slice.  Fix: emit a vault-side signal
+(extension of `VaultChanged` or a new event) when
+`set_frontmatter_bool` lands, and subscribe `note_list_pane` to it.
+Original commit sha for the broken closure remains `8ee5fa33`.
+
+#### 9.2.13
+
+**Source:** user-shared React reference screenshot (2026-05-21)
+showing the full Tauri-era Inspector Panel layout — `Properties`
+header with section dock-toggle + close affordances, frontmatter
+property rows (`Type`, `Status`, `Date`, `URL`, `Icon`) with inline
+editors, a `+ Add property` link, multiple **relationship sections**
+(`Aliases`, `Belongs to`, `Owner`, `Related to`, `Has`) each
+rendering wikilink pills with inline `Add` slots and a footer
+`+ Add relationship` button, an `Info` section (`Modified`,
+`Created`, `Words`, `Size`), and a `History` section listing recent
+git commits touching the note.
+
+**Scope:** broadens the inspector parity beyond row `9.2.8`'s four
+data sections to cover the **chrome / editing surfaces** the React
+inspector exposes.  Each named section is its own sub-feature:
+- **Properties** — render + edit frontmatter values per property
+  type (string, status enum, date, URL, icon).
+- **Add property** — frontmatter key creation flow.
+- **Relationship sections** — `Aliases`, `Belongs to`, `Owner`,
+  `Related to`, `Has`: wikilink-pill list + `Add` field per
+  section.  Inverse-relationship resolution for `Has` (notes that
+  declare `parent: <this>` show up here).
+- **Info** — read-only `Modified` / `Created` / `Words` / `Size`
+  from `Note.modified`, `Note.byte_size`, plus a word count derived
+  from the body.
+- **History** — git log filtered to this note's path.  Depends on
+  Phase 11 `git_provider` (renumbered; was Phase 10) — stub list
+  until provider lands.
+
+**Deps:** (1) frontmatter write paths for arbitrary keys (`set_frontmatter_string` / `set_frontmatter_date` / etc — generalising `set_frontmatter_bool`); (2) a relationship parser on top of `vault::Frontmatter` that understands list-of-wikilinks values; (3) inverse-relationship index in `vault::Vault`; (4) `git_provider` for the History section; (5) `frontmatter_panel` crate (shipped in Phase 8 `8.15`) likely overlaps with the property-edit surfaces — coordinate to avoid duplicating editors.
+
+**Size:** large — splits naturally into multiple sub-rows when
+picked up.  Likely lands across Phase 9 + Phase 10 (behavioral
+layers) depending on ordering.  Out of `9.2.8`'s scope; tracked
+here because the user-shared reference makes the parity target
+explicit.
 
 ### Cross-row notes
 
