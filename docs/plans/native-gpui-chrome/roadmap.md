@@ -74,13 +74,27 @@ path — schedule its removal under Phase 7 close-out.
 
 ## Closed
 
-**Phase 8 — closed 2026-05-21 (`1a96c20a`).**  Behavioral fidelity pass.  29/29 in-scope rows resolved; 6 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9 as net-new product work.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the post-mortem and [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md) for the row-level ledger.
+**Phase 8 — closed 2026-05-21 (`1a96c20a`).**  Behavioral fidelity pass.  29/29 in-scope rows resolved; 7 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9 as net-new product work.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the post-mortem and [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md) for the row-level ledger.
 
 ## Active
 
-### Phase 9 — note-toolbar product features + new regression sweep
+### Phase 9 — note-toolbar product features
 
-Phase 9 inherits the six toolbar slots deferred from Phase 8 (`note-toolbar-star`, `-organized`, `-neighborhood`, `-raw`, `-ai`, `-toc`, `-more`) and accumulates any new regression rows reported during dogfood.  Worklist lives at [`phases/phase-9/worklist.md`](phases/phase-9/worklist.md); copy the deferred Phase 8 rows in as Phase 9 entries (carrying their `➡️` markers across) when scoping begins.
+Phase 9 wires the seven note-toolbar slots that Phase 8 close-out
+deferred (`note-toolbar-star`, `-organized`, `-neighborhood`, `-raw`,
+`-ai`, `-toc`, `-more`) and accumulates any new regression rows
+reported during dogfood.  Each is net-new product work — not a
+regression — so it carries the full feature shape from the React
+`BreadcrumbBar`: new frontmatter fields, new panels, new actions,
+new bridge variants where needed.  Worklist lives at
+[`phases/phase-9/worklist.md`](phases/phase-9/worklist.md); the
+seven rows landed as `9.2.1`–`9.2.7` with per-row scope notes.
+
+Behavioral-layer crate extraction (`command_registry`, `nav_history`,
+`multi_select`, `dialog_stack`, `auto_git`, `vault_lifecycle`,
+`telemetry_pipeline`) moves to **Phase 10** below — renumbered from
+the original "Phase 9 — Behavioral layers" when this user-visible
+product phase took over the Phase 9 slot.
 
 ### Phase 8 — Behavioral fidelity pass (CLOSED)
 
@@ -123,12 +137,14 @@ Three strands run in parallel:
 
 Lands as commit-per-row.  Strand A, Strand B, and Strand C can
 interleave — they share no merge dependencies.  Several Strand A
-rows depend on crates from **Phase 9** (the behavioral-layer
-extraction): e.g. `actions` (8.13) consumes Phase 9.1
-`command_registry`; `note_list_pane` (8.2) and `folder_tree` (8.17)
-both consume Phase 9.3 `multi_select`.  For those rows, stub the
-Phase 9 dependency locally in Phase 8 and back-fill in Phase 9 —
-or land the Phase 9 row first.
+rows depend on crates from **Phase 10** (the behavioral-layer
+extraction — renumbered from the original Phase 9 when Phase 8
+close-out promoted the deferred note-toolbar work to Phase 9):
+e.g. `actions` (8.13) consumes Phase 10.1 `command_registry`;
+`note_list_pane` (8.2) and `folder_tree` (8.17) both consume
+Phase 10.3 `multi_select`.  For those rows, stub the Phase 10
+dependency locally in Phase 8 and back-fill in Phase 10 — or land
+the Phase 10 row first.
 
 #### Strand A — stub completion (existing crates → wired)
 
@@ -141,7 +157,7 @@ or land the Phase 9 row first.
 | 8.5 | `search_panel` | Query input field + live dispatch; result click → open note; relevance ranking | `SearchPanel.tsx`, `NoteSearchList.tsx` |
 | 8.6 | `status_bar` | Vault chevron menu, service health probes (git / MCP / Claude), `Contribute` / `Docs` / `Settings` click handlers | `StatusBar.tsx`, `status-bar/*` |
 | 8.7 | `breadcrumb_bar` | Click → navigation history; missing icons rendered | `BreadcrumbBar.tsx` |
-| 8.8 | `actions` | Phase 2+ handlers — `NewNote`, `Save`, `QuickOpen`, `CommandPalette`, `ToggleSidebar`, `ToggleInspector`, `CloseTab` (consumes Phase 9.1 `command_registry`) | `appCommandCatalog.ts`, `appCommandDispatcher.ts` |
+| 8.8 | `actions` | Phase 2+ handlers — `NewNote`, `Save`, `QuickOpen`, `CommandPalette`, `ToggleSidebar`, `ToggleInspector`, `CloseTab` (consumes Phase 10.1 `command_registry`) | `appCommandCatalog.ts`, `appCommandDispatcher.ts` |
 | 8.9 | `banners` | Action handlers — archive, accept rename, install update, restore trash, dismiss | `ArchivedNoteBanner.tsx` + 5 others |
 | 8.10 | `toasts` | Auto-dismiss timer; `ToastLayer` integration; click → action | `Toast.tsx` |
 | 8.11 | `vault` | Background executor (async reads); fs-watcher; frontmatter parser; folders / assets surfaced | `useVaultLoader`, `useVaultWatcher` |
@@ -160,7 +176,7 @@ or land the Phase 9 row first.
 | 8.19 | `workspace_switcher` — vault picker + multi-vault management | `WorkspaceSelector.tsx`, `WorkspaceMoveButtons.tsx`, `WorkspaceInitialsBadge.tsx`, `status-bar/VaultMenu.tsx`, `WorkspaceSettingsRows.tsx` |
 | 8.20 | `note_retargeting` — rename ripple to all wikilinks | `note-retargeting/RetargetNoteDialog.tsx`, `NoteRetargetingDialogs.tsx` |
 | 8.21 | `rendering_primitives` — non-editor rendering surfaces | `MarkdownContent.tsx`, `SafeMarkup.tsx`, `MermaidDiagram.tsx`, `TldrawWhiteboard.tsx`, `FilePreview.tsx` |
-| 8.22 | `onboarding_prompts` — in-app prompts (distinct from Phase 11.7 `startup` first-run screens) | `AiAgentsOnboardingPrompt.tsx`, `ClaudeCodeOnboardingPrompt.tsx`, `OnboardingShell.tsx`, `TelemetryConsentDialog.tsx` |
+| 8.22 | `onboarding_prompts` — in-app prompts (distinct from Phase 12.7 `startup` first-run screens) | `AiAgentsOnboardingPrompt.tsx`, `ClaudeCodeOnboardingPrompt.tsx`, `OnboardingShell.tsx`, `TelemetryConsentDialog.tsx` |
 | 8.23 | `ai_panel` | Mutable input buffer + send dispatch; thread mutation; tool-call rendering | `AiPanel.tsx`, `AiMessage.tsx` |
 
 #### Strand C — editor-host body parity (BlockNote + CodeMirror carry-over)
@@ -253,66 +269,74 @@ Mark completed items as ✅ with a link to the commit.
 ## Planned
 
 
-### Phase 9 — Behavioral layers
+### Phase 10 — Behavioral layers
+
+> **Note.**  This phase was numbered "Phase 9" in earlier revisions.
+> When Phase 8 close-out promoted the deferred note-toolbar product
+> features into a real Phase 9, the original behavioral-layer phase
+> shifted to Phase 10 and every downstream §Planned phase shifted
+> by one.  Cross-references that named the old Phase 9–12 have been
+> rewritten to Phase 10–13 throughout the planning docs.
 
 The React/Tauri-era app has ~131 hooks under `src/hooks/` that
 together form an unstated state-machine library: global command
 dispatch, navigation history, multi-select, dialog stack, vault
 lifecycle, autogit policy, telemetry pipeline.  Phase 8 leans on
 ad-hoc closures and `cx.observe()` calls to wire the visible chrome;
-Phase 9 formalises this cross-cutting glue into named GPUI crates
-so Phase 10 service expansion and Phase 11 modal chrome both
+Phase 10 formalises this cross-cutting glue into named GPUI crates
+so Phase 11 service expansion and Phase 12 modal chrome both
 consume a stable layer instead of re-deriving slices of it.
 
 Lands as commit-per-crate; each crate is `mock_fixtures`-compatible.
 
 | # | Crate | Mirrors |
 |---|-------|---------|
-| 9.1 | `command_registry` — global command dispatch + shortcut table (consumed by `actions` and Phase 11.1 `command_palette`) | `appCommandCatalog.ts`, `appCommandDispatcher.ts`, `useCommandRegistry`, `useAppKeyboard` |
-| 9.2 | `nav_history` — back / forward / neighborhood drill-down (consumed by title-bar triplet, breadcrumb) | `useNavigationHistory`, `useNeighborhoodSelection`, `useNavigationGestures`, `useTabManagement` |
-| 9.3 | `multi_select` — shared multi-row selection model (consumed by `note_list_pane`, `folder_tree`, search results) | `useMultiSelect`, `useBulkActions`, `useDeleteActions` |
-| 9.4 | `dialog_stack` — modal queue, focus return, Escape handling (foundation for Phase 11 modal chrome) | `useDialogs` |
-| 9.5 | `auto_git` — checkpoint policy, commit-message format, debounce (wraps Phase 10.1 `git_provider`; consumed by Phase 12.2 autogit flow) | `useAutoGit`, `useAutoGitWork`, `useCommitFlow`, `useConflictFlow` |
-| 9.6 | `vault_lifecycle` — open / switch / rename-detection state machine (wraps `vault` crate's data API; consumed by Phase 8.19 `workspace_switcher`) | `useVaultLoader`, `useVaultWatcher`, `useVaultRenameDetection`, `useVaultSwitcher`, `useVaultBridge` |
-| 9.7 | `telemetry_pipeline` — event sink, redaction, sampling (wraps Phase 10.6 `telemetry` service) | `useTelemetry`, `productAnalytics`, `sensitiveTextRedaction`, `telemetryConfig`, `feedbackDiagnostics` |
+| 10.1 | `command_registry` — global command dispatch + shortcut table (consumed by `actions` and Phase 12.1 `command_palette`) | `appCommandCatalog.ts`, `appCommandDispatcher.ts`, `useCommandRegistry`, `useAppKeyboard` |
+| 10.2 | `nav_history` — back / forward / neighborhood drill-down (consumed by title-bar triplet, breadcrumb) | `useNavigationHistory`, `useNeighborhoodSelection`, `useNavigationGestures`, `useTabManagement` |
+| 10.3 | `multi_select` — shared multi-row selection model (consumed by `note_list_pane`, `folder_tree`, search results) | `useMultiSelect`, `useBulkActions`, `useDeleteActions` |
+| 10.4 | `dialog_stack` — modal queue, focus return, Escape handling (foundation for Phase 12 modal chrome) | `useDialogs` |
+| 10.5 | `auto_git` — checkpoint policy, commit-message format, debounce (wraps Phase 11.1 `git_provider`; consumed by Phase 13.2 autogit flow) | `useAutoGit`, `useAutoGitWork`, `useCommitFlow`, `useConflictFlow` |
+| 10.6 | `vault_lifecycle` — open / switch / rename-detection state machine (wraps `vault` crate's data API; consumed by Phase 8.19 `workspace_switcher`) | `useVaultLoader`, `useVaultWatcher`, `useVaultRenameDetection`, `useVaultSwitcher`, `useVaultBridge` |
+| 10.7 | `telemetry_pipeline` — event sink, redaction, sampling (wraps Phase 11.6 `telemetry` service) | `useTelemetry`, `productAnalytics`, `sensitiveTextRedaction`, `telemetryConfig`, `feedbackDiagnostics` |
 
-**Why between Phase 8 and Phase 10:** Phase 8 builds the visible
+**Why between Phase 9 and Phase 11:** Phase 8 builds the visible
 behavior using whatever local closures + `cx.observe()` calls each
-crate needs — fastest path to a usable chrome.  Phase 9 then
-extracts the cross-cutting patterns that emerge into named crates
-so Phase 10 service expansion and Phase 11 modal chrome don't each
-re-derive a shortcut table / dialog stack / autogit policy.
-Refactoring Phase 8's local closures to call Phase 9's crates is
-in-scope for each Phase 9 row.
+crate needs — fastest path to a usable chrome.  Phase 9 lands the
+deferred note-toolbar product features (the user-visible follow-up
+to Phase 8 close-out).  Phase 10 then extracts the cross-cutting
+patterns that emerge into named crates so Phase 11 service expansion
+and Phase 12 modal chrome don't each re-derive a shortcut table /
+dialog stack / autogit policy.  Refactoring Phase 8's local closures
+to call Phase 10's crates is in-scope for each Phase 10 row.
 
-### Phase 10 — Service expansion
+### Phase 11 — Service expansion
 
 Each service is its own crate landing as its own commit.  Real
 services replace mock fixtures shape-for-shape via the
 `mock_fixtures` → `Global` swap pattern Phase 3 established.  This
 phase is the GPUI port of the Tauri backend under `src-tauri/src/`
 (35 Rust files); each row names the React/Tauri surface it
-replaces.  Lands before Phase 11 modal chrome because most modals
+replaces.  Lands before Phase 12 modal chrome because most modals
 consume one of these services (CommitDialog → `git_provider`;
 CloneVaultModal → `git_provider`; ConfirmDelete → `vault`;
 ConflictResolverModal → `auto_git` + `git_provider`).
 
 | # | Service | Replaces |
 |---|---------|----------|
-| 10.1 | `git_provider` — git status / commit / push / pull / history | `MockGit`, `src-tauri/src/lib.rs` git IPC commands |
-| 10.2 | `vault_search` — full-text + tag search index | `MockSearch`, `src-tauri/src/search.rs` |
-| 10.3 | `vault_watcher` (advanced — fs-notify, debounced refresh) | basic rescan in `vault`, `src-tauri/src/vault_watcher.rs` |
-| 10.4 | `cli_agents` — 6 backends × `_cli` + `_config` + `_discovery` + `_events` (~22 files: Claude, Codex, Gemini, Kiro, OpenCode, Pi) | `MockAi`, `src-tauri/src/{claude,codex,gemini,kiro,opencode,pi}_*.rs` |
-| 10.5 | `mcp_bridge` — MCP server discovery + RPC | `src-tauri/src/mcp.rs` |
-| 10.6 | `telemetry` — PostHog event sink | `src-tauri/src/telemetry.rs` |
-| 10.7 | `app_updater` — Sparkle-style updater | `src-tauri/src/app_updater.rs` |
-| 10.8 | `localization` — `lara` translation pipeline (17 locale files; en → 16 targets) | `src/locales/*.json`, `lara.yaml`, `lara.lock` |
-| 10.9 | `vault_registry` — multi-vault list, recent vaults, last-opened (consumed by Phase 8.19 `workspace_switcher`) | `src-tauri/src/vault_list.rs` |
-| 10.10 | `window_state` — window position / size restoration across launches | `src-tauri/src/window_state.rs` |
-| 10.11 | `native_text_assistance` — OS spell-check, accent input, smart quotes (macOS NSTextInputClient bridge) | `src/lib/nativeTextAssistance.ts` |
-| 10.12 | `settings_panel` persistence wiring | mock settings → real `settings_store`, `src-tauri/src/settings.rs` |
+| 11.1 | `git_provider` — git status / commit / push / pull / history | `MockGit`, `src-tauri/src/lib.rs` git IPC commands |
+| 11.2 | `vault_search` — full-text + tag search index | `MockSearch`, `src-tauri/src/search.rs` |
+| 11.3 | `vault_watcher` (advanced — fs-notify, debounced refresh) | basic rescan in `vault`, `src-tauri/src/vault_watcher.rs` |
+| 11.4 | `cli_agents` — 6 backends × `_cli` + `_config` + `_discovery` + `_events` (~22 files: Claude, Codex, Gemini, Kiro, OpenCode, Pi) | `MockAi`, `src-tauri/src/{claude,codex,gemini,kiro,opencode,pi}_*.rs` |
+| 11.5 | `mcp_bridge` — MCP server discovery + RPC | `src-tauri/src/mcp.rs` |
+| 11.6 | `telemetry` — PostHog event sink | `src-tauri/src/telemetry.rs` |
+| 11.7 | `app_updater` — Sparkle-style updater | `src-tauri/src/app_updater.rs` |
+| 11.8 | `localization` — `lara` translation pipeline (17 locale files; en → 16 targets) | `src/locales/*.json`, `lara.yaml`, `lara.lock` |
+| 11.9 | `vault_registry` — multi-vault list, recent vaults, last-opened (consumed by Phase 8.19 `workspace_switcher`) | `src-tauri/src/vault_list.rs` |
+| 11.10 | `window_state` — window position / size restoration across launches | `src-tauri/src/window_state.rs` |
+| 11.11 | `native_text_assistance` — OS spell-check, accent input, smart quotes (macOS NSTextInputClient bridge) | `src/lib/nativeTextAssistance.ts` |
+| 11.12 | `settings_panel` persistence wiring | mock settings → real `settings_store`, `src-tauri/src/settings.rs` |
 
-### Phase 11 — Modal chrome surfaces
+### Phase 12 — Modal chrome surfaces
 
 One crate per task; each lands as its own commit.  Phase 2 inventory
 carried over; behavioural reference in
@@ -320,36 +344,36 @@ carried over; behavioural reference in
 
 | # | Crate | React source under `src/components/` |
 |---|-------|---------------------------------------|
-| 11.1 | `command_palette` (`Picker<CommandPaletteDelegate>` modal; uses `ui::Picker`) | `CommandPalette.tsx`, `CommandPaletteAiMode.tsx` |
-| 11.2 | `quick_open` (`Picker<QuickOpenDelegate>` modal) | `QuickOpenPalette.tsx` |
-| 11.3 | `dialogs` — Commit, ConfirmDelete, CreateNote, CreateType, CreateView, Feedback, McpSetup, TelemetryConsent, GitRequiredModal, ConflictResolverModal, AddRemoteModal, CloneVaultModal, OnboardingShell (Note: `NoteRetargetingDialogs`, `RetargetNoteDialog` live in Phase 8.20 `note_retargeting`) | every `*Dialog.tsx` / `*Modal.tsx` |
-| 11.4 | `wikilink_inputs` — Picker-based wikilink combobox | `Wikilink{Chat,Suggestion,Inline}.tsx` |
-| 11.5 | `image_lightbox` — full-screen image viewer | `ImageLightbox.tsx` |
-| 11.6 | `emoji_picker` — popover grid | `EmojiPicker.tsx`, `TagsDropdown.tsx` |
-| 11.7 | `startup` — Welcome + Startup screens | `WelcomeScreen.tsx`, `StartupScreen.tsx` |
+| 12.1 | `command_palette` (`Picker<CommandPaletteDelegate>` modal; uses `ui::Picker`) | `CommandPalette.tsx`, `CommandPaletteAiMode.tsx` |
+| 12.2 | `quick_open` (`Picker<QuickOpenDelegate>` modal) | `QuickOpenPalette.tsx` |
+| 12.3 | `dialogs` — Commit, ConfirmDelete, CreateNote, CreateType, CreateView, Feedback, McpSetup, TelemetryConsent, GitRequiredModal, ConflictResolverModal, AddRemoteModal, CloneVaultModal, OnboardingShell (Note: `NoteRetargetingDialogs`, `RetargetNoteDialog` live in Phase 8.20 `note_retargeting`) | every `*Dialog.tsx` / `*Modal.tsx` |
+| 12.4 | `wikilink_inputs` — Picker-based wikilink combobox | `Wikilink{Chat,Suggestion,Inline}.tsx` |
+| 12.5 | `image_lightbox` — full-screen image viewer | `ImageLightbox.tsx` |
+| 12.6 | `emoji_picker` — popover grid | `EmojiPicker.tsx`, `TagsDropdown.tsx` |
+| 12.7 | `startup` — Welcome + Startup screens | `WelcomeScreen.tsx`, `StartupScreen.tsx` |
 
-### Phase 12 — Parity hardening  ⚠️ needs clarification
+### Phase 13 — Parity hardening  ⚠️ needs clarification
 
 **Status: specification incomplete.**  Each row below names a task
 but no doc spells out the acceptance contract, scope boundary, or
-required upstream dependency.  Before Phase 12 can start, each row
+required upstream dependency.  Before Phase 13 can start, each row
 needs a 1-page spec answering the open questions called out below.
 
 | # | Task | Open questions before this can be picked up |
 |---|------|---------------------------------------------|
-| 12.1 | Multi-tab `Pane` UX (close hotkey, drag-reorder, persistence) | What is a "tab" — note items only, or also search / settings / inspector targets?  Persistence key — per-vault or per-app?  Where do reopened tabs land on next launch (focus, scroll position)?  Drag-reorder: same pane only, or across panes?  Close hotkey conflicts with `actions::CloseWindow` — need to disambiguate. |
-| 12.2 | Autogit checkpoints + conflict resolver flow | Depends on Phase 10.1 (`git_provider`) shape being locked first.  Checkpoint cadence (per save? on quit? interval?).  Commit-message format (React side uses `useAutoGit`; need to port the *policy*, not just the trigger).  Workflow policy lives in Phase 9.5 (`auto_git`); resolver UI in Phase 11.3 (`dialogs::ConflictResolverModal`) — but the resolution *logic* (3-way merge? side-by-side picker?) is unscoped. |
-| 12.3 | Onboarding flow (vault picker, first-run experience) | Overlaps with Phase 11.7 (`startup` = `WelcomeScreen` + `StartupScreen`) and Phase 8.23 (`onboarding_prompts`) — what's the boundary?  First-run = absence of `settings.json`, or a separate flag?  Permission prompts (Screen Recording / Accessibility for periscope; FS access) — in scope? |
-| 12.4 | Measurement gate — memory, startup time, frame budgets; CI assertion | Budgets are unspecified — memory ceiling at what vault size?  Startup time on what hardware?  Frame budget under which scene (idle?  scrolling note list?  typing in editor body)?  CI runner — periscope needs Screen Recording + Accessibility grants, doesn't run on hosted GitHub runners.  Where does the harness live (self-hosted Mac mini? local-only gate?)? |
+| 13.1 | Multi-tab `Pane` UX (close hotkey, drag-reorder, persistence) | What is a "tab" — note items only, or also search / settings / inspector targets?  Persistence key — per-vault or per-app?  Where do reopened tabs land on next launch (focus, scroll position)?  Drag-reorder: same pane only, or across panes?  Close hotkey conflicts with `actions::CloseWindow` — need to disambiguate. |
+| 13.2 | Autogit checkpoints + conflict resolver flow | Depends on Phase 11.1 (`git_provider`) shape being locked first.  Checkpoint cadence (per save? on quit? interval?).  Commit-message format (React side uses `useAutoGit`; need to port the *policy*, not just the trigger).  Workflow policy lives in Phase 10.5 (`auto_git`); resolver UI in Phase 12.3 (`dialogs::ConflictResolverModal`) — but the resolution *logic* (3-way merge? side-by-side picker?) is unscoped. |
+| 13.3 | Onboarding flow (vault picker, first-run experience) | Overlaps with Phase 12.7 (`startup` = `WelcomeScreen` + `StartupScreen`) and Phase 8.23 (`onboarding_prompts`) — what's the boundary?  First-run = absence of `settings.json`, or a separate flag?  Permission prompts (Screen Recording / Accessibility for periscope; FS access) — in scope? |
+| 13.4 | Measurement gate — memory, startup time, frame budgets; CI assertion | Budgets are unspecified — memory ceiling at what vault size?  Startup time on what hardware?  Frame budget under which scene (idle?  scrolling note list?  typing in editor body)?  CI runner — periscope needs Screen Recording + Accessibility grants, doesn't run on hosted GitHub runners.  Where does the harness live (self-hosted Mac mini? local-only gate?)? |
 
 **Resolution path:** write `phase-12-spec.md` (or per-row sub-specs)
 and re-evaluate dependency order against Phases 8 / 9 / 10 / 11.
 Until then this phase stays **planned but blocked** — do not pick
-up a Phase 12 row without first landing its spec.
+up a Phase 13 row without first landing its spec.
 
-## Where MockVault still lives after Phase 10
+## Where MockVault still lives after Phase 11
 
-Even after Phase 10 swaps real services in, `mock_fixtures::MockVault`
+Even after Phase 11 swaps real services in, `mock_fixtures::MockVault`
 stays around for:
 
 - Test harnesses (every panel crate's `from_or_empty` + tests).

@@ -6,7 +6,7 @@
 |--------|------:|--------|
 | 1. Blockers | 2 / 2 | ✅ |
 | 2. High Priority — bugs | 25 / 25 | ✅ |
-| 2. High Priority — new product features | 0 / 6 | ➡️ Phase 9 (8.2.9, 8.2.10, 8.2.11, 8.2.12, 8.2.13, 8.2.14, 8.2.17) |
+| 2. High Priority — new product features | 0 / 7 | ➡️ Phase 9 (8.2.9, 8.2.10, 8.2.11, 8.2.12, 8.2.13, 8.2.14, 8.2.17) |
 | 3. Low Priority — chrome polish | 2 / 2 | ✅ |
 | Total in-scope rows | **29 / 29** | ✅ |
 
@@ -17,7 +17,7 @@
 3. **Byte-identical YAML frontmatter round-trip** (worklist 8.2.26) — `editor-host` captures the body's leading + trailing whitespace into per-note handler-ref slots, sandwiches the BlockNote-serialised body between them on every save (both `save_request` and auto-save), strips the WebView origin from absolutised link/image URLs, and routes the body through a verbatim React port of `compactMarkdown`.  31/31 demo-vault files round-trip byte-for-byte.
 4. **Dynamic native menu labels** (worklist 8.3.2) — `MenuState { sidebar_open, inspector_picking }` drives "Show Sidebar" ↔ "Hide Sidebar" and "Show Inspector" ↔ "Hide Inspector".  Menu rebuilds happen inside `dispatch_to_workspace`'s deferred closure so post-toggle state is observed.
 
-**Deferred to Phase 9.** All six remaining open rows are net-new product features rather than chrome regressions:
+**Deferred to Phase 9.** All seven remaining open rows are net-new product features rather than chrome regressions:
 
 | Row | Toolbar slot | Notes |
 |-----|--------------|-------|

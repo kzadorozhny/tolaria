@@ -19,7 +19,9 @@ Per-iteration verification, worklist mechanics, user verification, and close-out
 - A reopened row's ✅ comes off; the row's status reverts to ⏳; the next iteration starts.
 
 ```
-user reports [high] foo           →  append row N.<sev>.<n>. ⏳ foo
+user reports [high] foo           →  append row N.<sev>.<n>. foo   (no emoji yet)
+       ▼
+orchestrator picks up the row     →  row flips to ⏳
        ▼
 orchestrator dispatches subagent
        ▼
@@ -36,6 +38,8 @@ USER VERIFIES LIVE  ← load-bearing inner step
        └─ reports [N.<sev>.<n>] note → row flips back to ⏳; original commit sha
                                        already in annotation; dispatch next iteration
 ```
+
+The "append row" and "pick up the row" steps collapse into one when a user reports an issue mid-sweep — the orchestrator appends the row and immediately starts working on it, so the row's emoji visibly steps "(none) → ⏳" in a single edit pass.  When a phase is being **scoped** ahead of time (e.g. the close-out of one phase populating the next phase's worklist with deferred rows, or any pre-loaded planning row), the appended row stays at *(no emoji)* until the orchestrator later commits to driving it.  Never write ⏳ on a row that hasn't been picked up.
 
 ## Per-iteration verification loop
 
@@ -79,10 +83,11 @@ When appending a new row to section 2 of Phase 9, the next available ID is `9.2.
 
 ### Status markers (the only mutable surface on a row)
 
-- `⏳` in progress
-- `✅` resolved (user has verified live)
-- `➡️` deferred to next phase — only applied at close-out
-- `❌` won't fix — reason goes to the row's `#### N.<sev>.<n>` annotation, never to the row line
+- *(no emoji)* — **pending**.  Row exists but work hasn't started.  Every new row enters in this state, whether it was appended inline during a sweep or pre-loaded during phase scoping.
+- `⏳` — **in progress**.  Applied when the orchestrator commits to driving the row (dispatches the first subagent, opens the file, claims the task).  For inline user-reports during an active sweep this happens in the same step as appending the row; for phase scoping it happens later when the row is picked up.
+- `✅` — **resolved**.  User has verified live in the running app.
+- `➡️` — **deferred to next phase**.  Only applied at close-out.
+- `❌` — **won't fix**.  Reason goes to the row's `#### N.<sev>.<n>` annotation, never to the row line.
 
 The leading status emoji is the **only** in-place edit ever applied to an existing row.  Everything else stays frozen.
 
@@ -104,7 +109,7 @@ The user proposes new rows via `[<severity>] <description>`, e.g. `[high] menu i
 
 1. Strip the bracketed severity (the section already encodes it).
 2. Pick the matching section by severity.
-3. Append at the next available `<phase>.<severity>.<number>`.
+3. Append at the next available `<phase>.<severity>.<number>` — **write the row with no leading emoji**.  The row is now pending.  The orchestrator adds ⏳ later, when it picks up the row to dispatch a subagent (often the same step as appending it for inline user-reports, but distinct when the row is added during phase scoping).
 4. Keep the title short and scannable.  Explanations go to a new `#### N.<sev>.<n>` annotation under `### Annotations and details`.
 
 If multiple subagents may touch the same area, instruct each to bail out fast and report back the names of files changing unexpectedly so the orchestrator can serialise.

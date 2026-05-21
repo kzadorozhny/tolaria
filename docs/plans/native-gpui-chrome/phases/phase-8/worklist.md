@@ -1,6 +1,6 @@
 # User reported issues from Phase 8 implmentaion
 
-> **Phase 8 status: CLOSED (2026-05-21).**  All Blockers, all section-2 bug rows, and both section-3 chrome rows resolved on `feat/native-gpui-chrome`.  Six note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9 — they are not regressions but new feature work, scoped separately from chrome stabilisation.  See **Close-out** section at end of file for the full ledger.
+> **Phase 8 status: CLOSED (2026-05-21).**  All Blockers, all section-2 bug rows, and both section-3 chrome rows resolved on `feat/native-gpui-chrome`.  Seven note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9 — they are not regressions but new feature work, scoped separately from chrome stabilisation.  See **Close-out** section at end of file for the full ledger.
 
 ## 1. Blockers
 
@@ -153,9 +153,9 @@ shape stays locked in by the Phase 4 `editor_bridge` tests.
      defaultWikilinkItemsProvider` returns `[]`.  Suggestion menu
      UI is fully wired; only the data source is stubbed.
    - **Source:** Phase 8.26 commit `0d871de4`.
-   - **Target row:** Phase 10 (`vault_search`) — vault-wide title
+   - **Target row:** Phase 11 (`vault_search`) — vault-wide title
      search lands the data side; the bridge variants ride along.
-     Could also land earlier as a focused Phase 9 follow-up if a
+     Could also land earlier as a focused Phase 10 follow-up if a
      consumer needs it sooner.
 
 2. **Rename-ripple bridge variants.**
@@ -171,8 +171,8 @@ shape stays locked in by the Phase 4 `editor_bridge` tests.
      `editor-host/src/useEditorSaveWithLinks.ts`.  The `onLinksChanged`
      callback fires correctly; it just doesn't propagate yet.
    - **Source:** Phase 8.30 commit `1e1f77ac`.
-   - **Target row:** Phase 10.1 (`git_provider` rename pipeline) —
+   - **Target row:** Phase 11.1 (`git_provider` rename pipeline) —
      the rename ripple needs a transactional rewrite-and-commit
      boundary that the git provider already owns.  Could also land
-     under Phase 9.6 (`vault_lifecycle`) if the rename pipeline
+     under Phase 10.6 (`vault_lifecycle`) if the rename pipeline
      ships there first.

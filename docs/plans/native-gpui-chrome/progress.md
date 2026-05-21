@@ -36,15 +36,16 @@ spec lives in [`components.md`](components.md).
 | 7.9 — WKWebView editor-body dark-mode CSS | ✅ done | `897091bf` | (222) | `editor-host/style.css` gains `--fg-muted`, `caret-color`, italic placeholder, `color-mix(...)` selection; `NoteItem::set_theme` propagates via `document.documentElement.dataset.theme` (no `tolariaBridge` Ready dependency); `tolaria/main.rs` observes `gpui_component::theme::Theme` and broadcasts. |
 | 7.10 — Visual-issue QA wave | ✅ done | `6b92a6ba` → `3c70b6b9` | (~234) | Periscope-driven interactive QA loop catalogued and closed visual deltas #001–#021 in their own per-issue commits.  Final per-issue rundown in the [Phase 7 follow-up](#phase-7-follow-up--visual-issue-qa-wave) table below; full diagnostic notes in [`phases/phase-7/worklist.md`](phases/phase-7/worklist.md). |
 | **✅ Phase 7 complete** | shipped at `3c70b6b9` | ~234 | Visual fidelity baseline (`897091bf`) plus 21 closed visual issues.  The `embed_poc` spike is no longer load-bearing — schedule removal under Phase 7 close-out. |
-| 8.x — Behavioral fidelity pass (Strand A — stub completion) | ✅ done (14 of 14) | `fa3267b4` (8.1), `2271f925` (8.2), `ce3af214` (8.3), `b830c42d` (8.4), `62b3beae` (8.5), `0fbe3568` (8.6), `3dad69ce` (8.7), `88afa9f7` (8.8), `c876ce8b` (8.9), `333bbc92` (8.10), `07c7ec7f` / `dbf8c00f` / `c65ac9de` / `aad8dbbb` (8.11.1–8.11.4), `97487dce` (8.12), `95b1ee4b` + `6470e304` (8.13), `66014021` (8.14 scaffold), `a98cdfcd` (8.23) | (folded into 271+) | Wired interactions land per crate.  8.11 vault gains frontmatter parser, folder/asset surfacing, background executor, and notify-based fs-watcher (4 sub-rows).  8.13 completes with pane resize observer + tab close/reorder events.  8.14 ships the structured per-tab scaffold; real editable controls remain Phase 9-blocked.  Action `Save` / `NewNote` / `OpenSettings` / `QuickOpen` / `CommandPalette` stay `log_stub` placeholders — wired by Phase 9.1 `command_registry` + Phase 8.14 follow-ups + Phase 11.x. |
+| 8.x — Behavioral fidelity pass (Strand A — stub completion) | ✅ done (14 of 14) | `fa3267b4` (8.1), `2271f925` (8.2), `ce3af214` (8.3), `b830c42d` (8.4), `62b3beae` (8.5), `0fbe3568` (8.6), `3dad69ce` (8.7), `88afa9f7` (8.8), `c876ce8b` (8.9), `333bbc92` (8.10), `07c7ec7f` / `dbf8c00f` / `c65ac9de` / `aad8dbbb` (8.11.1–8.11.4), `97487dce` (8.12), `95b1ee4b` + `6470e304` (8.13), `66014021` (8.14 scaffold), `a98cdfcd` (8.23) | (folded into 271+) | Wired interactions land per crate.  8.11 vault gains frontmatter parser, folder/asset surfacing, background executor, and notify-based fs-watcher (4 sub-rows).  8.13 completes with pane resize observer + tab close/reorder events.  8.14 ships the structured per-tab scaffold; real editable controls remain Phase 10-blocked.  Action `Save` / `NewNote` / `OpenSettings` / `QuickOpen` / `CommandPalette` stay `log_stub` placeholders — wired by Phase 10.1 `command_registry` + Phase 8.14 follow-ups + Phase 12.x. |
 | 8.x — Behavioral fidelity pass (Strand B — missing surfaces) | ✅ done (8 of 8 crates) | `13421226` (8.17), `ef520117` (8.15), `65d6ec71` (8.16), `481c89ab` (8.18), `af7d3e14` (8.19), `3111ed89` (8.20), `cfdfc5e4` (8.21), `6190d076` (8.22) | (folded into 271+) | New crates shipped: `folder_tree`, `frontmatter_panel`, `raw_editor`, `filter_builder`, `workspace_switcher`, `note_retargeting`, `rendering_primitives`, `onboarding_prompts`.  Each follows the `from_or_empty` + `from_mock` pattern set by `folder_tree`. |
-| 8.x — Behavioral fidelity pass (Strand C — editor-host body parity) | ✅ done (7 of 7) | `4c7998e7` (8.24), `fa1aae40` (8.25), `0d871de4` (8.26), `7afa7072` (8.27), `48cddd2b` (8.28), `63c79224` (8.29), `1e1f77ac` (8.30) | (folded into 271+; vitest 0 → 271) | BlockNote + CodeMirror carry-over from `src/components/blockNote*.ts` / `src/extensions/*` / `src/components/useEditor*.ts` into `editor-host/`, replacing the Phase-4b `<textarea>` MVP.  Bundle 3.95 kB → 2.26 MiB (~580× — see [Bundle-size record](#bundle-size-record-phase-8-close-out) below).  Two bridge gaps stubbed for Phase 9/10 follow-up — see [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps).  Zero new `ToHost` / `FromHost` variants this phase. |
-| **✅ Phase 8 complete** | shipped at `1e1f77ac` (Strand C tail) + `6190d076` (Strand B tail) + `aad8dbbb` (Strand A tail) | 271+ | All 30 rows landed across Strand A (14), Strand B (8), Strand C (7), plus Strand A 8.13 modal subset and 8.14 scaffold.  Editor-host vitest suite grew from 0 → 271 over Strand C; workspace + crate tests grew from ~261 → ~271+ over Strand A.  Two bridge-envelope gaps logged for Phase 9/10 follow-up.  Phase 8 visual issues catalogued in [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md). |
-| **✅ Phase 8 closed** | closed 2026-05-21 at `1a96c20a` | 402+ | Manual regression sweep: 29/29 in-scope rows resolved; 6 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9.  Architectural deltas: Angle-C2 transparent base layer + WKWebView z-order reversal, byte-identical YAML frontmatter round-trip, GPUI element-picker inspector renderer wired, dynamic native menu labels.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the full ledger. |
-| 9.x — Behavioral layers | ⏳ planned | — | — | `command_registry`, `nav_history`, `multi_select`, `dialog_stack`, `auto_git`, `vault_lifecycle`, `telemetry_pipeline` (9.1–9.7). |
-| 10.x — Service expansion | ⏳ planned | — | — | `git_provider`, `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`, `vault_registry`, `window_state`, `native_text_assistance`, `settings_panel` persistence. |
-| 11.x — Modal chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` (one task per crate). |
-| 12.x — Parity hardening | ⏳ planned | — | — | Multi-tab `Pane`; autogit + conflict resolver; onboarding; measurement gate. |
+| 8.x — Behavioral fidelity pass (Strand C — editor-host body parity) | ✅ done (7 of 7) | `4c7998e7` (8.24), `fa1aae40` (8.25), `0d871de4` (8.26), `7afa7072` (8.27), `48cddd2b` (8.28), `63c79224` (8.29), `1e1f77ac` (8.30) | (folded into 271+; vitest 0 → 271) | BlockNote + CodeMirror carry-over from `src/components/blockNote*.ts` / `src/extensions/*` / `src/components/useEditor*.ts` into `editor-host/`, replacing the Phase-4b `<textarea>` MVP.  Bundle 3.95 kB → 2.26 MiB (~580× — see [Bundle-size record](#bundle-size-record-phase-8-close-out) below).  Two bridge gaps stubbed for Phase 10/11 follow-up — see [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps).  Zero new `ToHost` / `FromHost` variants this phase. |
+| **✅ Phase 8 complete** | shipped at `1e1f77ac` (Strand C tail) + `6190d076` (Strand B tail) + `aad8dbbb` (Strand A tail) | 271+ | All 30 rows landed across Strand A (14), Strand B (8), Strand C (7), plus Strand A 8.13 modal subset and 8.14 scaffold.  Editor-host vitest suite grew from 0 → 271 over Strand C; workspace + crate tests grew from ~261 → ~271+ over Strand A.  Two bridge-envelope gaps logged for Phase 10/11 follow-up.  Phase 8 visual issues catalogued in [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md). |
+| **✅ Phase 8 closed** | closed 2026-05-21 at `1a96c20a` | 402+ | Manual regression sweep: 29/29 in-scope rows resolved; 7 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9.  Architectural deltas: Angle-C2 transparent base layer + WKWebView z-order reversal, byte-identical YAML frontmatter round-trip, GPUI element-picker inspector renderer wired, dynamic native menu labels.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the full ledger. |
+| 9.x — Note-toolbar product features | ⏳ scoped | — | — | Wires the seven Phase 8 deferrals (star, organized, neighborhood, raw, ai, toc, more) to real frontmatter / panels / actions.  Worklist at [`phases/phase-9/worklist.md`](phases/phase-9/worklist.md) — rows `9.2.1`–`9.2.7`. |
+| 10.x — Behavioral layers (renumbered) | ⏳ planned | — | — | `command_registry`, `nav_history`, `multi_select`, `dialog_stack`, `auto_git`, `vault_lifecycle`, `telemetry_pipeline` (10.1–10.7).  Originally numbered Phase 9 — see [`roadmap.md`](roadmap.md) Phase 10 §Note for the renumber rationale. |
+| 11.x — Service expansion | ⏳ planned | — | — | `git_provider`, `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`, `vault_registry`, `window_state`, `native_text_assistance`, `settings_panel` persistence. |
+| 12.x — Modal chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` (one task per crate). |
+| 13.x — Parity hardening | ⏳ planned | — | — | Multi-tab `Pane`; autogit + conflict resolver; onboarding; measurement gate. |
 
 ---
 
@@ -128,8 +129,8 @@ First service crate.  Public API mirrors `mock_fixtures::MockVault` so chrome pa
 - `NoteId(u64)` newtype: monotonically increasing within a single `Vault` instance, never reused after delete+rescan, not persisted (restart at 0 on reopen)
 - `VaultError::{NotFound(NoteId), Io { path, source }}` via `thiserror`
 - Methods: `notes() -> Task<Vec<NoteId>>`, `note(id) -> Task<Option<Note>>`, `note_content(id) -> Task<Result<String, VaultError>>`, `save(id, &str) -> Task<Result<(), VaultError>>`, `search_titles(query) -> Task<Vec<NoteId>>`, `rescan() -> Result<()>`
-- Recursive markdown walker, depth cap 32, skips hidden directories (`.git/`, `.obsidian/`), markdown-only (assets + folders deferred to Phase 10.3)
-- Synchronous IO inside `Task::ready(...)` for MVP; Phase 10.3 moves long ops to `cx.background_executor().spawn(...)` + adds the FS watcher
+- Recursive markdown walker, depth cap 32, skips hidden directories (`.git/`, `.obsidian/`), markdown-only (assets + folders deferred to Phase 11.3)
+- Synchronous IO inside `Task::ready(...)` for MVP; Phase 11.3 moves long ops to `cx.background_executor().spawn(...)` + adds the FS watcher
 - 9 tests cover the core contract.
 
 Review pass: 1 MUST + 4 SHOULD applied (metadata-refresh failure now `log::warn!` instead of silent swallow; `NoteId` docstring spells out monotonic-never-reused-not-persisted contract; `save_sync` test backdoor; `save` takes `&str`; `note_ids_vec()` dedups).
@@ -478,7 +479,7 @@ scaffold) are listed in the status table.  This-session ledger:
   mirroring `WorkspaceSelector.tsx` + `WorkspaceMoveButtons.tsx` +
   `WorkspaceInitialsBadge.tsx` + `status-bar/VaultMenu.tsx` +
   `WorkspaceSettingsRows.tsx`.  Vault list driven by mock fixtures
-  for now; real multi-vault state lands in Phase 10
+  for now; real multi-vault state lands in Phase 11
   `vault_registry`.  +8 tests (vault row click emits switch event,
   initials badge derivation, move-up / move-down preserve focus,
   empty list, single-vault hides reorder controls).
@@ -558,7 +559,7 @@ Two bridge gaps stubbed locally and logged in
     - `useEditorLinkActivation.test.tsx::it("opens relative
       attachment links through the active vault path")` — **dropped.**
       Editor host no longer resolves attachments locally; vault path
-      resolution moves to the native side (Phase 10).
+      resolution moves to the native side (Phase 11).
   - **Bridge-envelope churn:** zero new variants.  **Bridge gap
     stubbed:** wikilink suggestion needs
     `FromHost::WikilinkQuery { prefix }` /
@@ -566,7 +567,7 @@ Two bridge gaps stubbed locally and logged in
     with real vault titles.  Stub: `wikilinkSuggestion.ts ::
     defaultWikilinkItemsProvider` returns `[]`.  Logged in
     [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps); target
-    row Phase 10 (`vault_search`) or focused Phase 9 follow-up.
+    row Phase 11 (`vault_search`) or focused Phase 10 follow-up.
 
 - **8.27 — IME composition + render-recovery + transform-error
   guard (`7afa7072`).**  Ports `useEditorComposing.ts` +
@@ -678,8 +679,46 @@ Two bridge gaps stubbed locally and logged in
     wrapper whose `onLinksChanged` seam fires but doesn't
     propagate.  Logged in
     [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps); target
-    row Phase 10.1 (`git_provider` rename pipeline) or Phase 9.6
+    row Phase 11.1 (`git_provider` rename pipeline) or Phase 10.6
     (`vault_lifecycle`).
+
+---
+
+### Phase 9 — Note-toolbar product features
+
+Opened 2026-05-21 immediately after Phase 8 close-out at `1a96c20a`.
+Scope is the seven note-toolbar slots that Phase 8 deferred — see
+[`phases/phase-9/worklist.md`](phases/phase-9/worklist.md) for the
+row-by-row ledger (`9.2.1`–`9.2.7`) and per-row scope notes
+(React reference, dependencies, size estimate).
+
+**Numbering note.** Phase 9 in earlier roadmap revisions named the
+behavioral-layer crate extraction (`command_registry`, `nav_history`,
+`multi_select`, `dialog_stack`, `auto_git`, `vault_lifecycle`,
+`telemetry_pipeline`).  That phase shifted to **Phase 10** when this
+user-visible product phase took over the Phase 9 slot.  Every
+downstream phase shifted by one: Service expansion → Phase 11,
+Modal chrome → Phase 12, Parity hardening → Phase 13.  See
+[`roadmap.md`](roadmap.md) Phase 10 §Note for the rationale.
+
+**Suggested implementation order** (from worklist cross-row notes):
+
+1. `9.2.1` + `9.2.2` together — both write the same `vault::Frontmatter`
+   boolean (`_favorite` + `_organized`); landing the new write path in
+   one commit pair amortises the shared work.
+2. `9.2.5` — chrome-only attach of `ai_panel` to the right dock plus
+   a real `ToggleAiPanel` action; provider plumbing stays stubbed.
+3. `9.2.4` — raw-mode bridge variant + chrome `raw_editor` wiring.
+4. `9.2.6` — new `toc_panel` crate + `ToHost::Headings` bridge variant.
+5. `9.2.3` — neighbourhood selection mode (largest row; depends on
+   `vault::backlinks(id)` and a new sidebar / note-list selection
+   shape).
+6. `9.2.7` — overflow menu last, once `9.2.3` / `9.2.4` / `9.2.6` have
+   real dispatchers it can route to.
+
+Tracked as a single live phase with row-driven verification per
+[`process.md`](process.md); orchestrator dispatches subagents, user
+verifies live in the running app.
 
 ---
 
