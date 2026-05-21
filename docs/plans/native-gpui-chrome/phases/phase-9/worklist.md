@@ -21,8 +21,8 @@
 
 ## 2. High Priority
 
-9.2.1. Star toggle → favourite frontmatter + sidebar favourites section
-9.2.2. Organised toggle → inbox-advance frontmatter
+9.2.1. ✅ Star toggle → favourite frontmatter + sidebar favourites section
+9.2.2. ✅ Organised toggle → inbox-advance frontmatter
 9.2.3. Neighbourhood action → backlink filter in note-list
 9.2.4. Raw-mode toggle → editor-host raw bridge
 9.2.5. AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
@@ -55,6 +55,26 @@ Favorites section reading the vault-wide favourites list; (3) the
 star glyph on the toolbar reflects the read.  No bridge variant
 required.  **Size:** small.
 
+**Closure (commit `<this-commit>`).**  Landed the shared write path
+as `Vault::set_frontmatter_bool` (`crates/vault/src/lib.rs:460`),
+backed by a byte-identical YAML rewriter
+(`crates/vault/src/frontmatter.rs::set_bool_in_raw`) that splits the
+note into `(opener, yaml, closer, body)` and mutates only the target
+line — toggle-on appends, toggle-off removes (absent ⇔ false), and a
+crlf-flavour fixture round-trips byte-for-byte through the suite.
+`Frontmatter::favorite()` / `organized()` plus `Note::is_favorite()` /
+`is_organized()` are the read-side accessors; `Vault::note_sync(id)` /
+`iter_notes()` give chrome a borrow-only path for per-render reads
+without spinning up a `Task`.  The note-toolbar star cell now
+dispatches `toggle_frontmatter_flag` (filled `StarFill` vs outline
+`Star` driven by `is_favorite`) and the `SidebarPanel`'s new
+`FAVORITES` section reads the live vault on every render — empty list
+hides the section entirely (no empty header), and toggling either
+direction from any source flips the row count on the next paint.
+Out of scope and explicitly deferred: `_favorite_index` ordering /
+drag-reorder (Phase 9.2 follow-up), and editor-host live-frontmatter
+sync (revisit when rename-bridge lands).
+
 #### 9.2.2
 
 **Source row:** Phase 8 `8.2.10` (➡️).  **React reference:**
@@ -70,6 +90,20 @@ toggle, not a navigation action.
 additionally consumes a `explicit_organization_enabled` boolean on
 `settings_store`.  **Size:** small.  **Implementation note:** batch
 with `9.2.1` for shared write-path landing.
+
+**Closure (commit `<this-commit>`).**  Shipped alongside `9.2.1` on
+the shared `Vault::set_frontmatter_bool` write path
+(`crates/vault/src/lib.rs:460`); the organized toolbar cell now
+dispatches `toggle_frontmatter_flag(id, "_organized", …)` via the same
+helper as the star cell.  The cell remains a pure frontmatter toggle
+— the inbox-advance behaviour from
+`useInboxOrganizeAdvance.handleToggleOrganized` is **deferred** until
+`settings_store::explicit_organization_enabled` lands (out-of-scope
+for this commit; flagged as `TODO(9.2.2-followup)` on the toolbar
+cell).  When the setting arrives, the chrome-side handler can read
+the gate, find the next inbox note via `Vault::iter_notes()`, and
+dispatch `OpenNoteEvent` from the same closure that today only writes
+the YAML flag.
 
 #### 9.2.3
 

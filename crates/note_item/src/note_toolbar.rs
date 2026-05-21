@@ -28,6 +28,7 @@ use gpui::{
 };
 use gpui_component::{h_flex, tooltip::Tooltip, ActiveTheme, IconName};
 use ui::tree_dump::DumpAsExt as _;
+use vault::{NoteId, Vault};
 
 /// Height of the note toolbar strip, in logical points.
 ///
@@ -39,15 +40,32 @@ pub const NOTE_TOOLBAR_HEIGHT_PT: f32 = 52.0;
 
 /// Render the toolbar row for a single note.
 ///
-/// `path` is the on-disk path; the breadcrumb extracts the type label
-/// from its filename prefix and uses the file stem as the trailing
-/// segment.
-pub(crate) fn render(path: &Path, cx: &App) -> AnyElement {
+/// `id` is the vault id of the note (used by the star + organized
+/// cells to dispatch the frontmatter toggle).  `path` is the on-disk
+/// path; the breadcrumb extracts the type label from its filename
+/// prefix and uses the file stem as the trailing segment.
+///
+/// The cell-state read (`favorite` / `organized`) goes through the
+/// installed [`Vault`] global; absent vault (mock-mode + chrome tests
+/// without a real vault) renders the cells in their "off" state and
+/// the click handlers become log-only.
+pub(crate) fn render(id: NoteId, path: &Path, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let bg = theme.background;
     let border = theme.border;
     let fg = theme.foreground;
     let muted = theme.muted_foreground;
+
+    let (is_favorite, is_organized) = cx
+        .try_global::<Vault>()
+        .and_then(|v| {
+            // `try_global` returns a borrow of the vault; the note
+            // lookup is cheap (HashMap of id → Note) and we only need
+            // the two booleans.
+            v.note_sync(id)
+                .map(|note| (note.is_favorite(), note.is_organized()))
+        })
+        .unwrap_or((false, false));
 
     let stem: SharedString = path
         .file_stem()
@@ -94,24 +112,53 @@ pub(crate) fn render(path: &Path, cx: &App) -> AnyElement {
 
     // Action cluster — mirrors `BreadcrumbActions` (BreadcrumbBar.tsx
     // L811-890) left-to-right, plus the trailing inspector toggle
-    // (L987-994).  Unwired cells (worklist 2.9-2.14, 2.17) keep a
-    // log-only stub; reveal / copy-path / inspector (2.15 / 2.16 /
-    // 2.18) dispatch real handlers.
+    // (L987-994).  Star / organized (worklist 9.2.1 / 9.2.2) dispatch
+    // through `Vault::set_frontmatter_bool`; reveal / copy-path /
+    // inspector (2.15 / 2.16 / 2.18) dispatch real handlers; the
+    // remaining cells keep a log-only stub until their Phase 9 rows
+    // ship.
     let reveal_path = path.to_path_buf();
     let copy_path = path.to_path_buf();
+    // Filled-vs-outline star glyph mirrors the React `FavoriteAction`
+    // shape: outline when off, filled when on.  `IconName::StarFill`
+    // is the closest available pair from `gpui-component-assets`.
+    let star_icon = if is_favorite {
+        IconName::StarFill
+    } else {
+        IconName::Star
+    };
+    let star_tooltip = if is_favorite {
+        "Unstar this note"
+    } else {
+        "Star this note"
+    };
+    let organized_tooltip = if is_organized {
+        "Mark as unorganized"
+    } else {
+        "Mark as organized"
+    };
     let actions = h_flex()
         .items_center()
         .gap(px(4.0))
         .text_color(muted)
-        .child(stub_cell(
+        .child(toolbar_cell(
             "note-toolbar-star",
-            IconName::Star,
-            "Star this note",
+            star_icon,
+            star_tooltip,
+            move |_window, cx| toggle_frontmatter_flag(id, "_favorite", !is_favorite, cx),
         ))
-        .child(stub_cell(
+        // The React tooltip says "Show in Organized view", but the
+        // underlying handler is a pure `_organized` frontmatter
+        // toggle, not a navigation action.  TODO(9.2.2-followup): the
+        // inbox-advance behaviour driven by
+        // `useInboxOrganizeAdvance` is gated on
+        // `settings_store::explicit_organization_enabled`; revisit
+        // when the setting lands.
+        .child(toolbar_cell(
             "note-toolbar-organized",
             IconName::CircleCheck,
-            "Show in Organized view",
+            organized_tooltip,
+            move |_window, cx| toggle_frontmatter_flag(id, "_organized", !is_organized, cx),
         ))
         .child(stub_cell(
             "note-toolbar-neighborhood",
@@ -270,6 +317,33 @@ fn copy_path_to_clipboard(path: &Path, cx: &App) {
     cx.write_to_clipboard(ClipboardItem::new_string(path_str));
 }
 
+/// Dispatch a `_favorite` / `_organized` toggle to the installed
+/// [`Vault`] global.  Shared by the star (worklist 9.2.1) and
+/// organized (worklist 9.2.2) cells — both call
+/// `vault.set_frontmatter_bool(...).detach()`, so factoring it out
+/// keeps the click closures one-liners and centralises the
+/// "no-vault-installed" guard.
+///
+/// `detach()` matches the existing `Vault::save` dispatch pattern in
+/// `note_item::install_dispatch_task` (lib.rs L595): the returned
+/// `Task` is observed via the next render, not awaited inline.
+fn toggle_frontmatter_flag(id: NoteId, key: &str, value: bool, cx: &mut App) {
+    if !cx.has_global::<Vault>() {
+        log::warn!(
+            target: "note_item::toolbar",
+            "{key} toggle ignored: no Vault global installed (note id={id:?})",
+        );
+        return;
+    }
+    cx.global_mut::<Vault>()
+        .set_frontmatter_bool(id, key, value)
+        .detach();
+    log::info!(
+        target: "note_item::toolbar",
+        "{key} toggle dispatched: id={id:?} value={value}",
+    );
+}
+
 /// Singular type label for the breadcrumb (`procedure-foo.md` →
 /// `"Procedure"`).
 ///
@@ -378,5 +452,98 @@ mod tests {
         // React: `.breadcrumb-bar { height: 52px }` (BreadcrumbBar.tsx:1061).
         // 52.0 is exactly representable in f32 — direct equality is sound.
         assert_eq!(NOTE_TOOLBAR_HEIGHT_PT, 52.0);
+    }
+
+    /// Worklist 9.2.1 — clicking the star cell flips the `_favorite`
+    /// flag on disk and in memory through the installed `Vault`
+    /// global.  Exercises the full toolbar dispatch path:
+    /// `toggle_frontmatter_flag` → `Vault::set_frontmatter_bool`.
+    #[gpui::test]
+    fn star_cell_dispatches_favorite_toggle(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let note_path = dir.path().join("n.md");
+        std::fs::write(&note_path, "# heading\nbody\n").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        let id = cx.update(|cx| cx.foreground_executor().block_on(vault.notes())[0]);
+        cx.update(|cx| cx.set_global(vault));
+
+        // Read current state (off), then toggle via the same helper
+        // the click closure uses.  This intentionally bypasses the
+        // GPUI click chain — driving `on_click` headlessly requires a
+        // mounted entity + hitbox, and the dispatch behaviour is the
+        // load-bearing invariant we want pinned.
+        cx.update(|cx| {
+            let current = cx
+                .global::<vault::Vault>()
+                .note_sync(id)
+                .map(|n| n.is_favorite())
+                .unwrap();
+            assert!(!current, "fixture starts unfavoured");
+            toggle_frontmatter_flag(id, "_favorite", true, cx);
+        });
+        cx.run_until_parked();
+
+        // In-memory frontmatter must reflect the toggle synchronously
+        // (the toolbar reads `note_sync(id).is_favorite()` on the next
+        // render pass).
+        cx.update(|cx| {
+            let after = cx
+                .global::<vault::Vault>()
+                .note_sync(id)
+                .map(|n| n.is_favorite())
+                .unwrap();
+            assert!(after, "in-memory frontmatter must mirror the toggle");
+        });
+        // On-disk bytes carry the new line.
+        let on_disk = std::fs::read_to_string(&note_path).unwrap();
+        assert!(
+            on_disk.contains("_favorite: true"),
+            "disk write must include the new line; got: {on_disk:?}",
+        );
+    }
+
+    /// Worklist 9.2.2 — the organized cell shares the same dispatch
+    /// path as the star cell but writes the `_organized` key.  Pin the
+    /// key separately so a typo there can't slip past star coverage.
+    #[gpui::test]
+    fn organized_cell_dispatches_organized_toggle(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let note_path = dir.path().join("n.md");
+        std::fs::write(&note_path, "---\ntype: Note\n---\nbody\n").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        let id = cx.update(|cx| cx.foreground_executor().block_on(vault.notes())[0]);
+        cx.update(|cx| cx.set_global(vault));
+
+        cx.update(|cx| {
+            toggle_frontmatter_flag(id, "_organized", true, cx);
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let after = cx
+                .global::<vault::Vault>()
+                .note_sync(id)
+                .map(|n| n.is_organized())
+                .unwrap();
+            assert!(after, "organized toggle must mutate the in-memory map");
+        });
+        let on_disk = std::fs::read_to_string(&note_path).unwrap();
+        assert_eq!(
+            on_disk, "---\ntype: Note\n_organized: true\n---\nbody\n",
+            "organized cell must write the `_organized` key, not anything else",
+        );
+    }
+
+    /// Worklist 9.2.1 / 9.2.2 — the toggle helper must degrade
+    /// gracefully when no `Vault` global is installed (mock-mode
+    /// chrome tests, periscope smokes).  The click stays log-only and
+    /// does NOT panic.
+    #[gpui::test]
+    fn toggle_helper_is_a_noop_without_vault_global(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            // Sanity: no `Vault` global is installed by default.
+            assert!(!cx.has_global::<vault::Vault>());
+            toggle_frontmatter_flag(NoteId::from_raw(7), "_favorite", true, cx);
+        });
     }
 }

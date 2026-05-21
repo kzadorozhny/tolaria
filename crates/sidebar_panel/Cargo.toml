@@ -16,5 +16,8 @@ ui = { path = "../ui" }
 vault = { path = "../vault" }
 workspace = { path = "../workspace" }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui_platform = { workspace = true, features = ["test-support"] }

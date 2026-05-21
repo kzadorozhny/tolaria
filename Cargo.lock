@@ -7269,6 +7269,7 @@ dependencies = [
  "gpui-component",
  "gpui_platform",
  "mock_fixtures",
+ "tempfile",
  "ui",
  "vault",
  "workspace",

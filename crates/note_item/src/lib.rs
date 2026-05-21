@@ -671,8 +671,8 @@ impl Render for NoteItem {
         // WebView is mounted — `new_blank_with_webview` constructs the
         // entity with `path = PathBuf::new()`, and neither cluster has
         // meaningful state to render until a note swaps in.
-        let toolbar =
-            (!self.path.as_os_str().is_empty()).then(|| note_toolbar::render(&self.path, cx));
+        let toolbar = (!self.path.as_os_str().is_empty())
+            .then(|| note_toolbar::render(self.id, &self.path, cx));
 
         // Block-level flex column instead of `gpui_component::v_flex()`:
         // the helper bundles `align-items: center`, which we don't want

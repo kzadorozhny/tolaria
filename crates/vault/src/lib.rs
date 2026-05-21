@@ -129,6 +129,23 @@ impl Note {
     pub fn frontmatter(&self) -> &Frontmatter {
         &self.frontmatter
     }
+
+    /// Shorthand for `self.frontmatter().favorite()` — true iff the
+    /// note's `_favorite` key is literal `true`.  Wired to the
+    /// note-toolbar star cell and the sidebar Favorites section
+    /// (worklist 9.2.1).
+    #[must_use]
+    pub fn is_favorite(&self) -> bool {
+        self.frontmatter.favorite()
+    }
+
+    /// Shorthand for `self.frontmatter().organized()` — true iff the
+    /// note's `_organized` key is literal `true`.  Wired to the
+    /// note-toolbar organized cell (worklist 9.2.2).
+    #[must_use]
+    pub fn is_organized(&self) -> bool {
+        self.frontmatter.organized()
+    }
 }
 
 /// Recoverable errors from vault operations.
@@ -309,6 +326,27 @@ impl Vault {
         Task::ready(self.notes.get(&id).cloned())
     }
 
+    /// Synchronous reference to the in-memory metadata for a single
+    /// note.  Cheap HashMap lookup with no `Task` indirection — the
+    /// render path in `note_toolbar` reads `favorite()` / `organized()`
+    /// once per paint, and a `Task<Option<Note>>` (which clones the
+    /// `Note`) would be wasteful there.  Prefer this accessor when the
+    /// caller already holds the GPUI foreground lock via a `&Vault`
+    /// borrow.
+    #[must_use]
+    pub fn note_sync(&self, id: NoteId) -> Option<&Note> {
+        self.notes.get(&id)
+    }
+
+    /// Synchronous iterator over every note's metadata.  Order is
+    /// unspecified (HashMap iteration order).  Used by chrome surfaces
+    /// that need to compute a derived view of the vault on every
+    /// render — see `sidebar_panel::compute_favorites` (worklist
+    /// 9.2.1).
+    pub fn iter_notes(&self) -> impl Iterator<Item = &Note> {
+        self.notes.values()
+    }
+
     /// Read the on-disk body of a note.  When a background executor is
     /// installed (see [`set_executor`]) the file read happens on the
     /// background thread pool; otherwise it runs inline so legacy test
@@ -389,6 +427,103 @@ impl Vault {
             }
         }
         Ok(())
+    }
+
+    /// Toggle a boolean key (`_favorite`, `_organized`, …) inside the
+    /// note's YAML frontmatter, preserving every byte outside the
+    /// affected line.
+    ///
+    /// Semantics (matching the React handler):
+    ///
+    /// - `value == true` writes `{key}: true` — inserts a fresh
+    ///   frontmatter block if the note had none, replaces the existing
+    ///   line if the key was present, or appends a new line just
+    ///   before the closing `---` otherwise.
+    /// - `value == false` **removes** the line — absence is the
+    ///   canonical "off" representation, mirroring
+    ///   `useEntryActions.handleToggleFavorite`.
+    ///
+    /// The in-memory [`Note::frontmatter`] is updated **before** the
+    /// disk write is queued so a follow-up render of `vault.notes`
+    /// observes the new state without waiting for an fs-watcher tick
+    /// — important for the toolbar star / organized cells which
+    /// re-render off the same frame as the click.
+    ///
+    /// Worklist 9.2.1 (star) and 9.2.2 (organized) share this path:
+    /// landing them together amortises the YAML splitter +
+    /// byte-identical rewrite cost.
+    ///
+    /// # Errors
+    ///
+    /// - `NotFound(id)` when the id is unknown.
+    /// - `Io { path, source }` when reading or writing the file fails.
+    pub fn set_frontmatter_bool(
+        &mut self,
+        id: NoteId,
+        key: &str,
+        value: bool,
+    ) -> Task<Result<(), VaultError>> {
+        // Read the current bytes on the foreground thread — we need
+        // them synchronously to update the in-memory map.  At Tolaria's
+        // note sizes (a few KiB) the read is negligible vs. the
+        // scheduling overhead of bouncing onto the background pool
+        // just for an open/read pair.
+        let Some(note) = self.notes.get(&id) else {
+            return Task::ready(Err(VaultError::NotFound(id)));
+        };
+        let path = note.path.clone();
+        let raw = match read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(err) => return Task::ready(Err(err)),
+        };
+        let new_contents = frontmatter::set_bool_in_raw(&raw, key, value);
+        // Fast path: the on-disk bytes already match the requested
+        // state.  Skip both the in-memory mutation and the write so
+        // identical toggles don't churn the fs-watcher.
+        if new_contents == raw {
+            return Task::ready(Ok(()));
+        }
+        // Update the in-memory frontmatter map BEFORE queueing the
+        // disk write so the next render sees the new state without
+        // racing an fs-watcher tick.  On disk-write failure the
+        // in-memory state is briefly ahead of disk — acceptable for
+        // an optimistic toggle (matches the React handler's
+        // optimistic-update + rollback shape, minus the rollback).
+        // TODO(9.2-followup): on write failure, revert the in-memory
+        // mutation and surface a chrome-side toast.
+        if let Some(note) = self.notes.get_mut(&id) {
+            if value {
+                note.frontmatter.insert_bool(key, true);
+            } else {
+                note.frontmatter.remove(key);
+            }
+        }
+        match self.background_executor.as_ref() {
+            Some(executor) => executor
+                .clone()
+                .spawn(async move { write_to_disk(&path, &new_contents) }),
+            None => {
+                let result =
+                    std::fs::write(&path, &new_contents).map_err(|source| VaultError::Io {
+                        path: path.clone(),
+                        source,
+                    });
+                if result.is_ok() {
+                    // Mirror `save_sync`'s metadata refresh so tests
+                    // that round-trip `toggle → read` see the new
+                    // byte size without an extra rescan.
+                    if let Some(note) = self.notes.get_mut(&id) {
+                        if let Ok(meta) = std::fs::metadata(&note.path) {
+                            note.byte_size = meta.len();
+                            if let Ok(t) = meta.modified() {
+                                note.modified = DateTime::<Utc>::from(t);
+                            }
+                        }
+                    }
+                }
+                Task::ready(result)
+            }
+        }
     }
 
     /// Create a new markdown note in the vault root with an empty body.
@@ -1049,6 +1184,180 @@ mod tests {
         // Drop the vault explicitly so we can assert the watcher
         // thread is cleaned up on the test path too.
         drop(v);
+    }
+
+    // -----------------------------------------------------------------
+    // set_frontmatter_bool — worklist 9.2.1 / 9.2.2
+    // -----------------------------------------------------------------
+
+    #[gpui::test]
+    async fn set_frontmatter_bool_toggle_on_preserves_existing_keys(cx: &mut gpui::TestAppContext) {
+        let dir = tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "n.md",
+            "---\ntype: Note\nstatus: Done\n---\n\n# Heading\n\nA body paragraph.\n",
+        );
+        let root = dir.path().to_path_buf();
+        let mut vault = cx
+            .update(|cx| Vault::open_at_async(root, cx))
+            .await
+            .expect("async open must succeed");
+        let id = vault.note_ids_sync()[0];
+        vault
+            .set_frontmatter_bool(id, "_favorite", true)
+            .await
+            .expect("toggle-on must succeed");
+        // On-disk bytes must include the new line and leave the rest
+        // (including the body) verbatim.
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk,
+            "---\ntype: Note\nstatus: Done\n_favorite: true\n---\n\n# Heading\n\nA body paragraph.\n",
+            "toggle-on must append the key without touching surrounding bytes",
+        );
+        // In-memory frontmatter mirrors the new state.
+        let note = vault.note(id).await.expect("note exists");
+        assert!(
+            note.is_favorite(),
+            "in-memory frontmatter must reflect the toggle"
+        );
+        assert_eq!(
+            note.frontmatter()
+                .get("type")
+                .map(|v| matches!(v, FrontmatterValue::Text(_))),
+            Some(true),
+            "other keys must survive the rewrite",
+        );
+    }
+
+    #[gpui::test]
+    async fn set_frontmatter_bool_toggle_on_inserts_block_when_absent(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "n.md",
+            "# Just a heading\n\nNo frontmatter here.\n",
+        );
+        let root = dir.path().to_path_buf();
+        let mut vault = cx
+            .update(|cx| Vault::open_at_async(root, cx))
+            .await
+            .expect("async open must succeed");
+        let id = vault.note_ids_sync()[0];
+        vault
+            .set_frontmatter_bool(id, "_organized", true)
+            .await
+            .expect("toggle-on must succeed even with no existing block");
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk, "---\n_organized: true\n---\n# Just a heading\n\nNo frontmatter here.\n",
+            "toggle-on must prepend a fresh frontmatter block",
+        );
+    }
+
+    #[gpui::test]
+    async fn set_frontmatter_bool_toggle_off_removes_line(cx: &mut gpui::TestAppContext) {
+        let dir = tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "n.md",
+            "---\ntype: Note\n_favorite: true\nstatus: Done\n---\n\nbody\n",
+        );
+        let root = dir.path().to_path_buf();
+        let mut vault = cx
+            .update(|cx| Vault::open_at_async(root, cx))
+            .await
+            .expect("async open must succeed");
+        let id = vault.note_ids_sync()[0];
+        vault
+            .set_frontmatter_bool(id, "_favorite", false)
+            .await
+            .expect("toggle-off must succeed");
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk, "---\ntype: Note\nstatus: Done\n---\n\nbody\n",
+            "toggle-off must remove the line (absent ⇔ false)",
+        );
+        let note = vault.note(id).await.expect("note exists");
+        assert!(!note.is_favorite());
+    }
+
+    #[gpui::test]
+    async fn set_frontmatter_bool_round_trip_preserves_body_bytes(cx: &mut gpui::TestAppContext) {
+        // Fixture body lifted from the React reference shape: tabs,
+        // mixed paragraphs, a wikilink — all of these must survive a
+        // toggle-on + toggle-off cycle byte-for-byte.
+        let body = "\n# Sponsor Onboarding\n\nTurn a signed sponsor into a smooth first placement.\n\n- Confirm the publication date.\n- Hand off recurring communication to [[person-matteo-cellini]].\n";
+        let initial = format!(
+            "---\ntype: Procedure\naliases:\n  - \"[[Sponsor Onboarding]]\"\nbelongs_to: \"[[responsibility-sponsorships]]\"\nowner: \"[[person-luca-rossi]]\"\ncadence: \"As needed\"\n---\n{body}"
+        );
+        let dir = tempdir().unwrap();
+        let path = write(dir.path(), "procedure.md", &initial);
+        let root = dir.path().to_path_buf();
+        let mut vault = cx
+            .update(|cx| Vault::open_at_async(root, cx))
+            .await
+            .expect("async open must succeed");
+        let id = vault.note_ids_sync()[0];
+        vault
+            .set_frontmatter_bool(id, "_favorite", true)
+            .await
+            .expect("toggle-on must succeed");
+        vault
+            .set_frontmatter_bool(id, "_favorite", false)
+            .await
+            .expect("toggle-off must succeed");
+        let after_round_trip = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after_round_trip, initial,
+            "toggle-on then toggle-off must restore the original bytes exactly",
+        );
+    }
+
+    #[test]
+    fn set_frontmatter_bool_sync_path_writes_and_updates_metadata() {
+        // Sync path mirrors `save_sync`: useful for unit tests that
+        // don't want a `TestAppContext` spin-up.
+        let dir = tempdir().unwrap();
+        let path = write(dir.path(), "n.md", "---\ntype: Note\n---\nbody\n");
+        let mut v = Vault::open_at(dir.path()).unwrap();
+        let id = v.note_ids_sync()[0];
+        let original_size = std::fs::metadata(&path).unwrap().len();
+        // No background executor installed → Task::ready inline.
+        let _ = v.set_frontmatter_bool(id, "_favorite", true);
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert_eq!(on_disk, "---\ntype: Note\n_favorite: true\n---\nbody\n");
+        let new_size = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            new_size > original_size,
+            "byte_size on disk grew after toggle-on"
+        );
+        let cached_size = v.notes.get(&id).map(|n| n.byte_size).unwrap_or(0);
+        assert_eq!(
+            cached_size, new_size,
+            "sync path must refresh the cached byte_size to match disk",
+        );
+    }
+
+    #[gpui::test]
+    async fn set_frontmatter_bool_unknown_id_returns_not_found(cx: &mut gpui::TestAppContext) {
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let mut vault = cx
+            .update(|cx| Vault::open_at_async(root, cx))
+            .await
+            .expect("async open must succeed");
+        let err = vault
+            .set_frontmatter_bool(NoteId(99), "_favorite", true)
+            .await
+            .expect_err("unknown id must error");
+        assert!(
+            matches!(err, VaultError::NotFound(NoteId(99))),
+            "expected NotFound(99), got {err:?}",
+        );
     }
 
     #[test]

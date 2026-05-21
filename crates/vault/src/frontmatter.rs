@@ -93,6 +93,53 @@ impl Frontmatter {
     pub fn iter(&self) -> impl Iterator<Item = (&SharedString, &FrontmatterValue)> {
         self.values.iter()
     }
+
+    /// True iff the note's `_favorite` flag is set to a literal `true`
+    /// in its YAML frontmatter.  Absent or non-boolean values read as
+    /// `false`, matching the React handler's `entry.favorite` shape.
+    ///
+    /// Wired to the note-toolbar star cell (worklist 9.2.1) and to the
+    /// sidebar `Favorites` section that lists every note where this
+    /// returns `true`.
+    #[must_use]
+    pub fn favorite(&self) -> bool {
+        matches!(self.get("_favorite"), Some(FrontmatterValue::Bool(true)))
+    }
+
+    /// True iff the note's `_organized` flag is set to a literal `true`
+    /// in its YAML frontmatter.  Absent or non-boolean values read as
+    /// `false`.
+    ///
+    /// Wired to the note-toolbar "organized" cell (worklist 9.2.2).
+    /// The inbox-advance behaviour driven by the React
+    /// `useInboxOrganizeAdvance` hook is intentionally NOT implemented
+    /// at this layer; the cell is a pure frontmatter toggle until
+    /// `explicit_organization_enabled` lands on `settings_store`.
+    #[must_use]
+    pub fn organized(&self) -> bool {
+        matches!(self.get("_organized"), Some(FrontmatterValue::Bool(true)))
+    }
+
+    /// Insert or replace a boolean key in the in-memory map.
+    ///
+    /// `crate`-visible because it is paired exclusively with
+    /// [`crate::Vault::set_frontmatter_bool`]: callers that go through
+    /// any other path would skip the on-disk rewrite, leaving disk and
+    /// memory out of sync.
+    pub(crate) fn insert_bool(&mut self, key: &str, value: bool) {
+        self.values.insert(
+            SharedString::from(key.to_owned()),
+            FrontmatterValue::Bool(value),
+        );
+    }
+
+    /// Remove a key from the in-memory map.  No-op if the key is
+    /// absent.  Paired with [`crate::Vault::set_frontmatter_bool`] —
+    /// see [`insert_bool`][Self::insert_bool] for the rationale on the
+    /// limited visibility.
+    pub(crate) fn remove(&mut self, key: &str) {
+        self.values.remove(key);
+    }
 }
 
 /// Extract the YAML frontmatter block from the start of `raw`.
@@ -219,6 +266,361 @@ fn yaml_value_to_frontmatter(value: &serde_yaml::Value) -> Option<FrontmatterVal
             )))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Byte-identical rewriter (worklist 9.2.1 / 9.2.2 — `set_frontmatter_bool`)
+// ---------------------------------------------------------------------------
+
+/// Rewrite the YAML frontmatter block of `raw` so the boolean `key` lands
+/// at `value`, preserving every byte outside the affected line.
+///
+/// Behaviour matrix:
+///
+/// | Note has frontmatter? | New value | Existing line for `key`? | Result                                            |
+/// |-----------------------|-----------|--------------------------|---------------------------------------------------|
+/// | yes                   | `true`    | yes                      | line rewritten in place (`{key}: true`)           |
+/// | yes                   | `true`    | no                       | new line appended just before the closing `---`   |
+/// | yes                   | `false`   | yes                      | line **removed** (absent ⇔ `false`)               |
+/// | yes                   | `false`   | no                       | unchanged                                         |
+/// | no                    | `true`    | —                        | fresh `---\n{key}: true\n---\n` prepended         |
+/// | no                    | `false`   | —                        | unchanged                                         |
+///
+/// `false` is encoded as **absence** rather than `{key}: false` to
+/// mirror the React handler `useEntryActions.handleToggleFavorite`,
+/// where omitting the key is the canonical "off" representation.
+///
+/// Outside of the rewritten / inserted / removed line the body is
+/// preserved byte-for-byte: this matches the editor-host pin from
+/// Phase 8.26 (byte-identical round-trip for editor-driven saves) at
+/// the chrome-side write path so frontmatter toggles don't reflow the
+/// rest of the YAML keys, the body, or line endings.
+///
+/// `crate`-visible because it is paired exclusively with
+/// [`crate::Vault::set_frontmatter_bool`].
+#[must_use]
+pub(crate) fn set_bool_in_raw(raw: &str, key: &str, value: bool) -> String {
+    let Some(parts) = FrontmatterParts::from_raw(raw) else {
+        // No frontmatter block — only need to act when toggling to
+        // `true`.  Otherwise the file already matches the desired
+        // (absent ⇔ false) state.
+        if !value {
+            return raw.to_owned();
+        }
+        // Default to lf line endings (Tolaria's editor never writes
+        // CRLF).  A user-authored CRLF body without a frontmatter
+        // block survives intact because we only insert the lf-flavoured
+        // prefix at the very top.
+        let mut out = String::with_capacity(raw.len() + 4 + key.len() + 8);
+        out.push_str("---\n");
+        out.push_str(key);
+        out.push_str(": true\n");
+        out.push_str("---\n");
+        out.push_str(raw);
+        return out;
+    };
+
+    let (new_yaml, new_closer) = parts.rewrite_yaml(key, value);
+    let mut out = String::with_capacity(
+        parts.opener.len() + new_yaml.len() + new_closer.len() + parts.body.len(),
+    );
+    out.push_str(parts.opener);
+    out.push_str(&new_yaml);
+    out.push_str(&new_closer);
+    out.push_str(parts.body);
+    out
+}
+
+/// The four byte slices of a note that has a frontmatter block:
+/// `opener` (e.g. `"---\n"`), `yaml`, `closer` (e.g. `"\n---\n"`),
+/// `body`.  Concatenating them reconstructs the original input — the
+/// invariant the rewriter relies on for byte-identical preservation.
+struct FrontmatterParts<'a> {
+    opener: &'a str,
+    yaml: &'a str,
+    closer: &'a str,
+    body: &'a str,
+    /// Line ending used inside the YAML block — `"\n"` for lf,
+    /// `"\r\n"` for crlf.  Detected from the opener delimiter so
+    /// newly-inserted lines match the existing flavour.
+    newline: &'static str,
+}
+
+impl<'a> FrontmatterParts<'a> {
+    /// Split `raw` into its frontmatter parts, or `None` if the input
+    /// has no recognised frontmatter block.
+    fn from_raw(raw: &'a str) -> Option<Self> {
+        // Detect the opener flavour first; the slice after it drives
+        // the closer search.
+        let (opener, rest, newline): (&str, &str, &'static str) =
+            if let Some(rest) = raw.strip_prefix("---\n") {
+                ("---\n", rest, "\n")
+            } else if let Some(rest) = raw.strip_prefix("---\r\n") {
+                ("---\r\n", rest, "\r\n")
+            } else {
+                return None;
+            };
+        // Empty frontmatter — opener immediately followed by the
+        // closing `---\n` / `---\r\n`.  Treat as a yaml-less block so
+        // appends still produce a well-formed file.
+        if let Some(body) = rest.strip_prefix("---\n") {
+            return Some(Self {
+                opener,
+                yaml: "",
+                closer: "---\n",
+                body,
+                newline,
+            });
+        }
+        if let Some(body) = rest.strip_prefix("---\r\n") {
+            return Some(Self {
+                opener,
+                yaml: "",
+                closer: "---\r\n",
+                body,
+                newline,
+            });
+        }
+        // Search for the closing delimiter in the same line-ending
+        // flavour as the opener; tolerate the lf variant inside a
+        // crlf-flavoured opener (mixed-eol files exist in the wild).
+        for closer in ["\n---\n", "\r\n---\r\n"] {
+            if let Some(end) = rest.find(closer) {
+                let yaml = &rest[..end];
+                let body = &rest[end + closer.len()..];
+                return Some(Self {
+                    opener,
+                    yaml,
+                    closer,
+                    body,
+                    newline,
+                });
+            }
+        }
+        // Trailing `---` at EOF (no newline after the close).
+        if let Some(yaml) = rest.strip_suffix("\n---") {
+            return Some(Self {
+                opener,
+                yaml,
+                closer: "\n---",
+                body: "",
+                newline,
+            });
+        }
+        if let Some(yaml) = rest.strip_suffix("\r\n---") {
+            return Some(Self {
+                opener,
+                yaml,
+                closer: "\r\n---",
+                body: "",
+                newline,
+            });
+        }
+        None
+    }
+
+    /// Produce a new YAML block with `key` set / appended / removed,
+    /// preserving every other line byte-for-byte.  Returns both the
+    /// rewritten YAML body **and** a (possibly adjusted) closer
+    /// delimiter so the rewriter can re-emit a well-formed block when
+    /// transitioning between empty / non-empty yaml.
+    fn rewrite_yaml(&self, key: &str, value: bool) -> (String, String) {
+        let span = LineSpan::find(self.yaml, key);
+        match (span, value) {
+            (Some(span), true) => (self.rewrite_line(span, key), self.closer.to_owned()),
+            (Some(span), false) => self.remove_line(span),
+            (None, true) => self.append_line(key),
+            (None, false) => (self.yaml.to_owned(), self.closer.to_owned()),
+        }
+    }
+
+    fn rewrite_line(&self, span: LineSpan, key: &str) -> String {
+        let mut out = String::with_capacity(self.yaml.len() + key.len() + 8);
+        out.push_str(&self.yaml[..span.start]);
+        out.push_str(key);
+        out.push_str(": true");
+        out.push_str(&self.yaml[span.value_end..]);
+        out
+    }
+
+    /// Remove the matched line and re-balance the closer.
+    ///
+    /// Three cases:
+    ///
+    /// 1. **Removed line has a terminator** (mid-block): drop the line
+    ///    and its terminator; the surrounding lines concatenate
+    ///    cleanly.  Closer stays as-is.
+    /// 2. **Removed line is the last in the block** (no terminator):
+    ///    the predecessor's terminator becomes a phantom trailing
+    ///    newline — strip it so the new yaml ends without a terminator
+    ///    (matches the original invariant that the closer owns the
+    ///    leading newline).
+    /// 3. **Removed line was the *only* line** (yaml becomes empty):
+    ///    convert the closer to the empty-block flavour (`"---\n"` /
+    ///    `"---\r\n"`) so the resulting file matches the canonical
+    ///    empty-frontmatter shape.
+    fn remove_line(&self, span: LineSpan) -> (String, String) {
+        let mut out = String::with_capacity(self.yaml.len());
+        out.push_str(&self.yaml[..span.start]);
+        out.push_str(&self.yaml[span.line_end..]);
+        if !out.is_empty() && span.value_end == self.yaml.len() {
+            // Case 2: trim the orphaned terminator we left in front of
+            // the removed last line.
+            if let Some(stripped) = out.strip_suffix(self.newline) {
+                out.truncate(stripped.len());
+            }
+        }
+        let closer = if out.is_empty() {
+            // Case 3: collapse to the empty-block closer flavour.
+            empty_block_closer(self.newline).to_owned()
+        } else {
+            self.closer.to_owned()
+        };
+        (out, closer)
+    }
+
+    /// Append a new `{key}: true` line at the end of the block.
+    ///
+    /// When the block is currently empty the closer is the
+    /// empty-block flavour (`"---\n"`) and does NOT carry a leading
+    /// newline — we have to upgrade both the yaml and the closer to
+    /// the non-empty flavour so the resulting file is well-formed.
+    fn append_line(&self, key: &str) -> (String, String) {
+        let mut out = String::with_capacity(self.yaml.len() + key.len() + self.newline.len() + 8);
+        out.push_str(self.yaml);
+        // Non-empty existing yaml ends without a newline (the closer
+        // owns the separator).  When it doesn't (a malformed block),
+        // re-add one so the new line lands cleanly.
+        if !self.yaml.is_empty() && !self.yaml.ends_with(self.newline) {
+            out.push_str(self.newline);
+        }
+        out.push_str(key);
+        out.push_str(": true");
+        let closer = if self.yaml.is_empty() {
+            // Upgrade the empty-block closer to its non-empty
+            // flavour so the appended line is followed by a
+            // separating newline.
+            non_empty_closer(self.newline).to_owned()
+        } else {
+            self.closer.to_owned()
+        };
+        (out, closer)
+    }
+}
+
+/// Empty-block closer for the given line-ending flavour (`"---\n"`
+/// for lf, `"---\r\n"` for crlf).
+fn empty_block_closer(newline: &str) -> &'static str {
+    if newline == "\r\n" {
+        "---\r\n"
+    } else {
+        "---\n"
+    }
+}
+
+/// Non-empty closer for the given line-ending flavour (`"\n---\n"`
+/// for lf, `"\r\n---\r\n"` for crlf).
+fn non_empty_closer(newline: &str) -> &'static str {
+    if newline == "\r\n" {
+        "\r\n---\r\n"
+    } else {
+        "\n---\n"
+    }
+}
+
+/// Byte range of a `{key}: …` line inside a YAML block, plus the
+/// position immediately after its value (used by the rewriter to
+/// preserve any trailing whitespace / comment that follows).
+#[derive(Debug, Clone, Copy)]
+struct LineSpan {
+    /// Inclusive start of the matched line within the YAML block.
+    start: usize,
+    /// One past the end of the *value* on the matched line — i.e. the
+    /// position of the line's terminator (or end-of-block).  Used by
+    /// `rewrite_line` so any trailing comment / whitespace on the same
+    /// line stays intact.
+    value_end: usize,
+    /// One past the end of the matched line, **including** its
+    /// terminator (`\n` or `\r\n`).  Used by `remove_line` so the
+    /// surrounding lines concatenate without leaving an empty gap.
+    line_end: usize,
+}
+
+impl LineSpan {
+    /// Scan `yaml` for a line that starts with `{key}:` (optionally
+    /// preceded by ASCII spaces — top-level keys are not indented in
+    /// frontmatter, but we tolerate a stray space).  Returns the line
+    /// span when found.
+    ///
+    /// Only matches keys at the top level: a nested-map key with the
+    /// same name (`other:\n  _favorite: true`) is intentionally
+    /// skipped because frontmatter in Tolaria is a flat sheet (see the
+    /// crate docs).  Lines belonging to a nested block are
+    /// distinguished by leading whitespace ≥ 2 chars.
+    fn find(yaml: &str, key: &str) -> Option<Self> {
+        let bytes = yaml.as_bytes();
+        let mut line_start = 0;
+        while line_start <= bytes.len() {
+            // Locate this line's terminator (\n or \r\n) and the
+            // byte offset of the next line.
+            let (value_end, line_end) = next_line_terminator(bytes, line_start);
+            let line = &yaml[line_start..value_end];
+            if line_starts_with_key(line, key) {
+                return Some(Self {
+                    start: line_start,
+                    value_end,
+                    line_end,
+                });
+            }
+            if line_end == line_start {
+                // Empty input or terminal newline-less line we've
+                // already inspected — done.
+                break;
+            }
+            line_start = line_end;
+        }
+        None
+    }
+}
+
+/// Find the end-of-line terminator starting at `from`.  Returns
+/// `(value_end, line_end)`:
+///
+/// - `value_end` is the byte offset of the terminator character (or
+///   `bytes.len()` when the line runs to EOF without one).
+/// - `line_end` is the byte offset *after* the terminator (or
+///   `bytes.len()` when there is no terminator).
+///
+/// Handles both `\n` and `\r\n`.
+fn next_line_terminator(bytes: &[u8], from: usize) -> (usize, usize) {
+    let mut i = from;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' {
+            return (i, i + 1);
+        }
+        if bytes[i] == b'\r' && bytes.get(i + 1) == Some(&b'\n') {
+            return (i, i + 2);
+        }
+        i += 1;
+    }
+    (bytes.len(), bytes.len())
+}
+
+/// Returns `true` iff `line` starts with `{key}:` at the top level —
+/// i.e. no leading whitespace ≥ 2 chars, no `#` comment marker, no
+/// `-` list marker.
+fn line_starts_with_key(line: &str, key: &str) -> bool {
+    // Drop up to one leading ASCII space; reject deeper indentation as
+    // a nested-map child.
+    let stripped = match line.strip_prefix(' ') {
+        Some(rest) if rest.starts_with(' ') => return false,
+        Some(rest) => rest,
+        None => line,
+    };
+    let Some(rest) = stripped.strip_prefix(key) else {
+        return false;
+    };
+    rest.starts_with(':')
 }
 
 /// Cheap shape-only detection: `YYYY-MM-DD[Tt ...]?` matches.  Avoids
@@ -372,5 +774,133 @@ mod tests {
         let (fm, body) = parse(raw);
         assert!(fm.is_empty());
         assert_eq!(body, "body\n");
+    }
+
+    // -----------------------------------------------------------------
+    // set_bool_in_raw — byte-identical rewrite tests
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn set_bool_inserts_block_when_absent_and_value_true() {
+        let raw = "# Heading\n\nbody body body\n";
+        let out = set_bool_in_raw(raw, "_favorite", true);
+        assert_eq!(
+            out,
+            "---\n_favorite: true\n---\n# Heading\n\nbody body body\n"
+        );
+    }
+
+    #[test]
+    fn set_bool_leaves_input_unchanged_when_value_false_and_no_block() {
+        let raw = "# Heading\n\nno frontmatter\n";
+        let out = set_bool_in_raw(raw, "_favorite", false);
+        assert_eq!(out, raw, "false on a frontmatter-less note must be a no-op");
+    }
+
+    #[test]
+    fn set_bool_appends_line_when_key_missing_and_value_true() {
+        let raw = "---\ntype: Note\nstatus: Done\n---\n\n# body\n";
+        let out = set_bool_in_raw(raw, "_favorite", true);
+        assert_eq!(
+            out, "---\ntype: Note\nstatus: Done\n_favorite: true\n---\n\n# body\n",
+            "append must preserve existing keys and body verbatim",
+        );
+    }
+
+    #[test]
+    fn set_bool_rewrites_existing_line_value_true() {
+        let raw = "---\ntype: Note\n_favorite: false\nstatus: Done\n---\nbody\n";
+        let out = set_bool_in_raw(raw, "_favorite", true);
+        assert_eq!(
+            out, "---\ntype: Note\n_favorite: true\nstatus: Done\n---\nbody\n",
+            "rewrite must touch only the target line",
+        );
+    }
+
+    #[test]
+    fn set_bool_removes_line_when_value_false() {
+        let raw = "---\ntype: Note\n_favorite: true\nstatus: Done\n---\nbody\n";
+        let out = set_bool_in_raw(raw, "_favorite", false);
+        assert_eq!(
+            out, "---\ntype: Note\nstatus: Done\n---\nbody\n",
+            "false must remove the matching line",
+        );
+    }
+
+    #[test]
+    fn set_bool_false_on_absent_key_is_a_noop() {
+        let raw = "---\ntype: Note\n---\nbody\n";
+        let out = set_bool_in_raw(raw, "_favorite", false);
+        assert_eq!(out, raw, "false on an absent key must round-trip verbatim");
+    }
+
+    #[test]
+    fn set_bool_preserves_body_bytes_exactly() {
+        // Body deliberately mixes hard tabs, double newlines, trailing
+        // whitespace, and a wikilink — the rewriter must not normalise
+        // any of it.
+        let body = "\n# Heading\n\nA paragraph with\ta tab and trailing space.   \n\n- bullet [[wiki link]]\n";
+        let raw = format!("---\ntype: Note\n---\n{body}");
+        let out = set_bool_in_raw(&raw, "_favorite", true);
+        assert_eq!(
+            out,
+            format!("---\ntype: Note\n_favorite: true\n---\n{body}"),
+            "body bytes must round-trip identically",
+        );
+    }
+
+    #[test]
+    fn set_bool_round_trip_to_false_restores_original() {
+        let raw = "---\ntype: Note\nstatus: Done\n---\n\nbody\n";
+        let after_true = set_bool_in_raw(raw, "_favorite", true);
+        let after_false = set_bool_in_raw(&after_true, "_favorite", false);
+        assert_eq!(
+            after_false, raw,
+            "toggle-on then toggle-off must restore the original bytes exactly",
+        );
+    }
+
+    #[test]
+    fn set_bool_handles_crlf_line_endings() {
+        let raw = "---\r\ntype: Note\r\nstatus: Done\r\n---\r\nbody\r\n";
+        let out = set_bool_in_raw(raw, "_favorite", true);
+        assert_eq!(
+            out, "---\r\ntype: Note\r\nstatus: Done\r\n_favorite: true\r\n---\r\nbody\r\n",
+            "appended line must use the same line-ending flavour as the existing block",
+        );
+    }
+
+    #[test]
+    fn set_bool_handles_empty_frontmatter_block() {
+        let raw = "---\n---\nbody\n";
+        let out = set_bool_in_raw(raw, "_favorite", true);
+        assert_eq!(out, "---\n_favorite: true\n---\nbody\n");
+    }
+
+    #[test]
+    fn favorite_and_organized_accessors_read_bool_keys() {
+        let raw = "---\n_favorite: true\n_organized: true\nother: foo\n---\nbody\n";
+        let (fm, _) = parse(raw);
+        assert!(fm.favorite());
+        assert!(fm.organized());
+
+        let (fm_none, _) = parse("---\nother: foo\n---\nbody\n");
+        assert!(!fm_none.favorite());
+        assert!(!fm_none.organized());
+
+        let (fm_false, _) = parse("---\n_favorite: false\n---\nbody\n");
+        assert!(
+            !fm_false.favorite(),
+            "literal `_favorite: false` must read as not-favorite",
+        );
+    }
+
+    #[test]
+    fn insert_bool_and_remove_mutate_in_memory_map() {
+        let mut fm = Frontmatter::default();
+        fm.insert_bool("_favorite", true);
+        assert!(fm.favorite());
+        fm.remove("_favorite");
+        assert!(!fm.favorite());
     }
 }

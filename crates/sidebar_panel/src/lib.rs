@@ -72,11 +72,14 @@ pub struct SidebarSelectionChangedEvent {
     pub display_label: SharedString,
 }
 
-/// Identifies one of the three collapsible sections in the sidebar.
+/// Identifies one of the collapsible sections in the sidebar.
 /// The top fixed group (Inbox / All Notes / Archive) has no header and
 /// is intentionally not addressable here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SidebarSection {
+    /// "FAVORITES" — list of notes whose frontmatter has
+    /// `_favorite: true`.  Worklist 9.2.1.
+    Favorites,
     Views,
     Types,
     Folders,
@@ -94,6 +97,12 @@ pub enum SidebarSelection {
     AllNotes,
     /// "Archive" — soft-deleted entries.
     Archive,
+    /// A favourite note — payload is the in-memory [`vault::NoteId`]'s
+    /// raw value (see [`vault::NoteId::from_raw`]).  Selecting a row
+    /// in the Favorites section emits this so the workspace can route
+    /// the click into `OpenNoteEvent` / `note_list_pane` exactly the
+    /// way the All Notes list does.  Worklist 9.2.1.
+    Favorite(u64),
     /// A saved view; payload is the display name.
     View(SharedString),
     /// A typed group (Areas / Events / …).
@@ -144,6 +153,21 @@ pub struct TypeEntry {
 pub struct SavedView {
     pub name: SharedString,
     pub count: usize,
+}
+
+/// One starred note shown in the `FAVORITES` section.  Worklist
+/// 9.2.1.
+///
+/// `id` keys the [`SidebarSelection::Favorite`] payload and is stable
+/// across re-renders within a single `Vault` lifetime.  `title` is the
+/// row label — sourced from the note's filename stem so the chrome
+/// can render the section without re-reading the YAML.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FavoriteEntry {
+    /// Stable identifier — see [`vault::NoteId`].
+    pub id: vault::NoteId,
+    /// Display label — the note's filename stem.
+    pub title: SharedString,
 }
 
 /// A folder row derived from note file paths.  `path` stays stable
@@ -200,11 +224,12 @@ pub struct SidebarPanel {
     position: DockPosition,
 }
 
-/// Per-section collapse bookkeeping.  Three booleans rather than a
-/// `HashSet` so we sidestep an allocation in the common (empty) case
-/// and keep the struct trivially `Default`.
+/// Per-section collapse bookkeeping.  One boolean per section rather
+/// than a `HashSet` so we sidestep an allocation in the common (empty)
+/// case and keep the struct trivially `Default`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SectionCollapseState {
+    favorites: bool,
     views: bool,
     types: bool,
     folders: bool,
@@ -213,6 +238,7 @@ struct SectionCollapseState {
 impl SectionCollapseState {
     fn get(self, section: SidebarSection) -> bool {
         match section {
+            SidebarSection::Favorites => self.favorites,
             SidebarSection::Views => self.views,
             SidebarSection::Types => self.types,
             SidebarSection::Folders => self.folders,
@@ -221,6 +247,7 @@ impl SectionCollapseState {
 
     fn toggle(&mut self, section: SidebarSection) {
         match section {
+            SidebarSection::Favorites => self.favorites = !self.favorites,
             SidebarSection::Views => self.views = !self.views,
             SidebarSection::Types => self.types = !self.types,
             SidebarSection::Folders => self.folders = !self.folders,
@@ -451,6 +478,13 @@ impl SidebarPanel {
             SidebarSelection::Inbox => SharedString::new_static("Inbox"),
             SidebarSelection::AllNotes => SharedString::new_static("All Notes"),
             SidebarSelection::Archive => SharedString::new_static("Archive"),
+            // Favourite labels are not cached in the panel state (the
+            // section is recomputed per render from the live vault);
+            // surface the raw id as a stand-in label so the
+            // `display_label` field stays populated.  The workspace
+            // consumer (note-list-pane / breadcrumb) typically looks up
+            // the live title from the vault id payload anyway.
+            SidebarSelection::Favorite(id) => SharedString::from(format!("note {id}")),
             SidebarSelection::View(name) => name.clone(),
             SidebarSelection::Type(label) => label.clone(),
             SidebarSelection::Folder(path) => self
@@ -1060,9 +1094,31 @@ impl Render for SidebarPanel {
             SidebarSelection::Archive,
         );
 
+        let favorites_collapsed = self.collapsed.get(SidebarSection::Favorites);
         let views_collapsed = self.collapsed.get(SidebarSection::Views);
         let types_collapsed = self.collapsed.get(SidebarSection::Types);
         let folders_collapsed = self.collapsed.get(SidebarSection::Folders);
+
+        // --- FAVORITES section (worklist 9.2.1) ---
+        // Derived live from the vault on every render; no panel-side
+        // cache.  The list filters out any non-starred note via
+        // `note.is_favorite()`.  An empty list hides the section
+        // entirely (no empty header), matching the React reference.
+        let favorites = compute_favorites(cx);
+        let favorite_rows: Vec<AnyElement> = if favorites_collapsed {
+            Vec::new()
+        } else {
+            favorites
+                .iter()
+                .map(|entry| {
+                    let selected = matches!(
+                        &self.selected,
+                        SidebarSelection::Favorite(id) if *id == entry.id.get()
+                    );
+                    sidebar_favorite_row(entry, selected, p, &entity)
+                })
+                .collect()
+        };
 
         // --- VIEWS section ---
         let view_rows: Vec<AnyElement> = if views_collapsed {
@@ -1106,6 +1162,30 @@ impl Render for SidebarPanel {
                 .map(|(ix, folder)| sidebar_folder_row(ix, folder, &self.selected, p, &entity))
                 .collect()
         };
+
+        // Favorites section is hidden entirely when the live vault
+        // has no starred notes (matches the React reference —
+        // `src/components/Sidebar.tsx:213` only renders the header
+        // when the list is non-empty).  Building the header optimally
+        // requires the list count, so compute the section only when
+        // there's at least one row to show.
+        let favorites_section = (!favorites.is_empty()).then(|| {
+            let favorites_header = section_header(
+                "sidebar-section-favorites-header",
+                "FAVORITES",
+                favorites_collapsed,
+                p,
+                vec![],
+                toggle_section_handler(&entity, SidebarSection::Favorites),
+            );
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .child(favorites_header)
+                .children(favorite_rows)
+                .dump_as("sidebar-section-favorites")
+        });
 
         let views_header = section_header(
             "sidebar-section-views-header",
@@ -1186,6 +1266,13 @@ impl Render for SidebarPanel {
             .child(row_inbox)
             .child(row_all)
             .child(row_arch)
+            // FAVORITES sits between the fixed top group and the
+            // saved-Views / Types stack — worklist 9.2.1 places it
+            // above Types in the same way the React reference does
+            // (`src/components/Sidebar.tsx:213`).  `.children(...)`
+            // accepts an `Option<AnyElement>` so the section
+            // disappears cleanly when there are no starred notes.
+            .children(favorites_section)
             .child(views_section)
             .child(types_section)
             .child(folders_section)
@@ -1237,6 +1324,69 @@ fn sidebar_top_row(
             handle.update(cx, |this, cx| this.select(s, cx));
         },
     )
+}
+
+/// FAVORITES section row builder.  Uses a filled-star leading glyph
+/// (matches the React `FavoriteAction` "on" state) and dispatches
+/// [`SidebarSelection::Favorite`] on click so the workspace can route
+/// the click into `OpenNoteEvent`.
+fn sidebar_favorite_row(
+    entry: &FavoriteEntry,
+    selected: bool,
+    p: &Palette,
+    entity: &gpui::Entity<SidebarPanel>,
+) -> AnyElement {
+    let leading = icon_glyph(
+        IconName::StarFill,
+        if selected { p.selection_fg } else { p.muted_fg },
+    );
+    let id = entry.id;
+    let handle = entity.clone();
+    let gpui_id: SharedString = format!("sidebar-favorite-{}", id.get()).into();
+    build_row(
+        gpui_id,
+        "sidebar-favorite-row",
+        entry.title.as_ref(),
+        leading,
+        0,
+        selected,
+        p,
+        move |cx: &mut App| {
+            handle.update(cx, |this, cx| {
+                this.select(SidebarSelection::Favorite(id.get()), cx)
+            });
+        },
+    )
+}
+
+/// Compute the FAVORITES row list from the live [`Vault`] global.
+///
+/// Returns `Vec::new()` when no vault is installed (mock-mode / chrome
+/// tests / pre-vault startup), so the section renders as empty and
+/// the render path's "hide section when empty" branch fires.
+///
+/// Recomputed per render rather than cached — at Tolaria vault sizes
+/// (a few hundred notes) the HashMap walk + filter is sub-microsecond
+/// and avoids a cache-invalidation contract between
+/// `Vault::set_frontmatter_bool` and `SidebarPanel`.
+fn compute_favorites(cx: &App) -> Vec<FavoriteEntry> {
+    let Some(vault) = cx.try_global::<Vault>() else {
+        return Vec::new();
+    };
+    let mut out: Vec<FavoriteEntry> = vault
+        .iter_notes()
+        .filter(|note| note.is_favorite())
+        .map(|note| FavoriteEntry {
+            id: note.id,
+            title: note.title.clone(),
+        })
+        .collect();
+    // Stable alphabetical order so re-renders don't shuffle rows.
+    // The React reference orders by `_favorite_index` (Phase 9.2.1
+    // out-of-scope follow-up); plain alphabetical is the lowest-cost
+    // stand-in until the index lands.
+    out.sort_by(|a, b| a.title.cmp(&b.title));
+    out
 }
 
 /// VIEWS section row builder — uses a leading star icon to mark the
@@ -1770,5 +1920,132 @@ mod tests {
             })
             .unwrap();
         cx.run_until_parked();
+    }
+
+    // ----- Worklist 9.2.1 — Favorites section -----
+
+    /// Empty vault → `compute_favorites` returns an empty list, so
+    /// the render path skips the FAVORITES section entirely.  The
+    /// `.children(favorites_section)` chain in `Render` accepts an
+    /// `Option`, so no empty header lands on the tree.
+    #[gpui::test]
+    fn favorites_section_empty_when_no_starred_notes(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.md"), "no frontmatter\n").unwrap();
+        std::fs::write(dir.path().join("b.md"), "---\ntype: Note\n---\nbody\n").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let favs = compute_favorites(cx);
+            assert!(
+                favs.is_empty(),
+                "no starred notes → empty favourites list (got {} rows)",
+                favs.len(),
+            );
+        });
+    }
+
+    /// One starred note → the favourites list surfaces exactly that
+    /// row, with the note's filename stem as the title.
+    #[gpui::test]
+    fn favorites_section_lists_starred_notes(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("project-laputa.md"),
+            "---\n_favorite: true\n---\nbody\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("untyped.md"), "no frontmatter\n").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        cx.update(|cx| {
+            cx.set_global(vault);
+            let favs = compute_favorites(cx);
+            assert_eq!(favs.len(), 1, "exactly one starred note, got {favs:?}");
+            assert_eq!(favs[0].title.as_ref(), "project-laputa");
+        });
+    }
+
+    /// Toggling the favourite flag through the vault write path
+    /// flips the section's contents on the next render — pinning the
+    /// "no panel-side cache" contract from the worklist annotation.
+    #[gpui::test]
+    fn favorites_section_reflects_live_vault_toggles(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("note.md"), "---\ntype: Note\n---\nbody\n").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        let id = cx.update(|cx| cx.foreground_executor().block_on(vault.notes())[0]);
+        cx.update(|cx| cx.set_global(vault));
+
+        // Pre-toggle: no favourites.
+        cx.update(|cx| {
+            assert!(compute_favorites(cx).is_empty());
+        });
+
+        // Toggle on via the public write path — this is the same
+        // method `note_toolbar::toggle_frontmatter_flag` dispatches.
+        cx.update(|cx| {
+            cx.global_mut::<vault::Vault>()
+                .set_frontmatter_bool(id, "_favorite", true)
+                .detach();
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let favs = compute_favorites(cx);
+            assert_eq!(
+                favs.len(),
+                1,
+                "toggle-on must surface the note in the favourites list",
+            );
+        });
+
+        // Toggle off — the row must disappear.
+        cx.update(|cx| {
+            cx.global_mut::<vault::Vault>()
+                .set_frontmatter_bool(id, "_favorite", false)
+                .detach();
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(
+                compute_favorites(cx).is_empty(),
+                "toggle-off must remove the row from the favourites list",
+            );
+        });
+    }
+
+    /// Selecting a Favorite row emits the expected
+    /// [`SidebarSelectionChangedEvent`] with the note id payload.
+    #[gpui::test]
+    fn select_favorite_emits_event(cx: &mut TestAppContext) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        install_theme(cx);
+        let received: Rc<RefCell<Vec<SidebarSelection>>> = Rc::new(RefCell::new(Vec::new()));
+        let panel = cx.update(|cx| cx.new(|_| SidebarPanel::new()));
+        cx.update(|cx| {
+            let recv = received.clone();
+            cx.subscribe(
+                &panel,
+                move |_panel, event: &SidebarSelectionChangedEvent, _cx| {
+                    recv.borrow_mut().push(event.selection.clone());
+                },
+            )
+            .detach();
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            panel.update(cx, |panel, cx| {
+                panel.select(SidebarSelection::Favorite(7), cx);
+            });
+        });
+        cx.run_until_parked();
+
+        let got = received.borrow().clone();
+        assert_eq!(got, vec![SidebarSelection::Favorite(7)]);
     }
 }

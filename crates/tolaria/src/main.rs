@@ -800,14 +800,24 @@ mod macos {
                         // emits on change), so this subscription
                         // doesn't churn on idempotent clicks.
                         let scoped_list = note_list.clone();
+                        // Worklist 9.2.1 — the FAVORITES sidebar
+                        // section emits `SidebarSelection::Favorite(id)`
+                        // when the user clicks a starred-note row.
+                        // The natural action there is to open the
+                        // note, NOT swap the note-list scope — but
+                        // this closure already owns the slot via
+                        // `scoped_open_slot` so we can route the
+                        // click straight into `open_note`.
+                        let scoped_open_slot = slot.clone();
+                        let scoped_open_handle = note_list.clone();
                         model_cx
                             .subscribe_in(
                                 &sidebar,
                                 window,
-                                move |_ws,
+                                move |ws_view,
                                       _side,
                                       event: &SidebarSelectionChangedEvent,
-                                      _window,
+                                      window,
                                       cx| {
                                     let scope = match event.selection.clone() {
                                         SidebarSelection::Inbox => NoteListScope::Inbox,
@@ -818,6 +828,30 @@ mod macos {
                                             NoteListScope::Folder(path)
                                         }
                                         SidebarSelection::View(name) => NoteListScope::View(name),
+                                        SidebarSelection::Favorite(raw_id) => {
+                                            // Favorites click → open the note
+                                            // directly, mirroring `OpenNoteEvent`
+                                            // dispatch from the note-list pane.
+                                            // Skip the scope/header update — the
+                                            // user picked a single note, not a
+                                            // filter.
+                                            let id = vault::NoteId::from_raw(raw_id);
+                                            if let Err(e) = crate::open_note::open_note(
+                                                ws_view,
+                                                id,
+                                                &scoped_open_slot,
+                                                window,
+                                                cx,
+                                            ) {
+                                                log::error!(
+                                                    "open_note from favourite failed: {e:#}"
+                                                );
+                                            }
+                                            scoped_open_handle.update(cx, |list, cx| {
+                                                list.set_active(Some(id), cx);
+                                            });
+                                            return;
+                                        }
                                     };
                                     // Worklist 2.1 — keep the note-list-pane header in
                                     // sync with the row label so users see which slice
