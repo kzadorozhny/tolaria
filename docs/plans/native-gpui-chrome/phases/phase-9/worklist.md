@@ -29,7 +29,10 @@
 9.2.6. ToC action → new `toc_panel` crate + headings bridge
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. Note Inspector Panel content — backlinks, references, type instances, outline
-9.2.9. Star action stops working when the note is updated outside the UI
+9.2.9. ⏳ Star action stops working when the note is updated outside the UI
+9.2.10. ⏳ Organized toolbar cell needs green-checked colour treatment
+9.2.11. ⏳ Star toolbar cell needs orange-filled colour treatment when active
+9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
 
 ## 3. Low Priority
 
@@ -142,7 +145,7 @@ has no current mode-switch envelope; (3) chrome side of
 chip + find bar; (4) `note_item` tracks `raw_mode: bool` per tab.
 **Size:** medium.
 
-**Closure (commit `<this-commit>`).**  Shipped the chrome-owned raw
+**Closure (commit `45b6622d`).**  Shipped the chrome-owned raw
 toggle.  Seam: `editor_bridge::ToHost::SetRawMode(SetRawMode {
 enabled })` (native → editor; the annotation above mis-labels it
 `FromHost::*` — the editor is the receiver, not the sender).  Chrome
@@ -319,6 +322,51 @@ to medium depending on which root cause is real.
 user redirects.  9.2.1 stays at ✅ for now — the regression is a
 post-shipping bug rather than a 9.2.1 implementation defect, so it
 gets its own row per the `[high]` syntax the user used.
+
+#### 9.2.10
+
+**Source:** user-reported visual regression on 9.2.2 (organized
+toggle), 2026-05-21, with attached screenshot showing the desired
+treatment.  **Symptom:** when `_organized: true`, the toolbar cell
+distinguishes itself only by icon-fill variant; the user expects a
+green-filled glyph (matches the React `BreadcrumbBar.tsx`
+`OrganizedAction` styling).
+
+**Scope:** add a colour treatment to the organized toolbar cell
+when active — green when checked, default-muted otherwise.  Tap the
+existing `theme.success` / type-colour palette so the green tracks
+light/dark mode.  Surface: `crates/note_item/src/note_toolbar.rs`
+organized branch.  **Size:** small.
+
+#### 9.2.11
+
+**Source:** user-reported visual regression on 9.2.1 (star toggle),
+2026-05-21, with attached screenshot showing the desired treatment.
+**Symptom:** when `_favorite: true`, the toolbar cell uses
+`IconName::StarFill` but the colour stays muted; the user expects
+the active star to render orange (matches the React
+`BreadcrumbBar.tsx` `FavoriteAction` styling).
+
+**Scope:** add a colour treatment to the star toolbar cell when
+active — orange (`#F59E0B` / amber-500-ish, theme-aware) when
+checked, default-muted otherwise.  Same surface as 9.2.10; the two
+ship together as one commit.  **Size:** small.
+
+#### 9.2.12
+
+**Source:** user-reported behavioural bug on Inbox sidebar view,
+2026-05-21.  **Symptom:** the Inbox view shows every non-archived
+note in the vault; it should exclude notes with `_organized: true`.
+
+**Scope:** add an `is_organized` filter to the Inbox scope in
+`crates/note_list_pane` (or wherever `NoteListScope::Inbox` resolves
+to a filtered note list).  React parity: `useInboxOrganizeAdvance`
+treats `_organized` as the explicit "out of the inbox" marker —
+toggling organized on a note pulls it out of the Inbox view; the
+note remains visible elsewhere (All Notes, Favourites, etc.).
+Surface: `crates/note_list_pane/src/lib.rs` filter logic + a
+regression test asserting an organized note doesn't appear in
+Inbox.  **Size:** small.
 
 ### Cross-row notes
 
