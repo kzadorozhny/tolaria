@@ -223,7 +223,7 @@ variant — no existing `editor_bridge` envelope carries headings.
 **Size:** medium — sizeable bridge surface but the panel itself is
 read-only.
 
-**Closure (commit `<this-commit>`).**  Seam: the annotation above
+**Closure (commit `5bd2533e`).**  Seam: the annotation above
 names `ToHost::Headings` but the editor is the *sender* and the
 native chrome is the *receiver*, so the variant lives on
 `editor_bridge::FromHost::Headings(Headings { items: Vec<Heading> })`
