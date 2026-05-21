@@ -338,7 +338,7 @@ harness call site that depended on it, so treat registered names
 as an API surface — add ADR-style discipline before renaming.
 
 The Phase 8 sweep scenarios in
-[`phase-8-sweep.md`](phase-8-sweep.md) follow this rule: scenarios
+[`phases/phase-8/sweep.md`](phases/phase-8/sweep.md) follow this rule: scenarios
 that target a chrome element use `--id`; scenarios that target a
 point inside the editor body use coordinates but document the
 target region via the surrounding `--id` lookup.
@@ -400,7 +400,7 @@ export BIN_PID=15654   # from the harness banner
 
 `OUT_DIR` defaults to `target/periscope/sweep`; sweep docs override
 it per their own conventions (e.g. `target/periscope/phase-8-sweep`
-for `phase-8-sweep.md`).
+for `phases/phase-8/sweep.md`).
 
 `TOLARIA_PROFILE=release` skips the SIGUSR1 `tree_dump` handler —
 `--id` lookups won't resolve.  Use `debug` (the default) for any
@@ -600,7 +600,7 @@ Options:
 ## Synthetic input — `type-text`, `key`, `hover`, `double-click`
 
 These four primitives extend the `click` path so the editor-body
-gesture scenarios in `docs/plans/native-gpui-chrome/phase-8-sweep.md`
+gesture scenarios in `docs/plans/native-gpui-chrome/phases/phase-8/sweep.md`
 can run without a human in the loop.  `osascript keystroke` is blocked
 inside the WKWebView editor body (`AGENTS.md` §4 macOS gotchas), but
 raw `CGEvent` keyboard / mouse events go through the system queue

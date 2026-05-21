@@ -9,7 +9,7 @@
 Run on the user's macOS host — periscope needs Screen Recording +
 Accessibility permission and a windowed Tolaria binary, neither of
 which the Anthropic agent sandbox can provide.  See
-`phase-8-issues.md` ("Periscope Phase 8 smoke sweep") for the
+`phases/phase-8/worklist.md` ("Periscope Phase 8 smoke sweep") for the
 follow-up status entry.
 
 The sweep is split into two pieces:
@@ -97,7 +97,7 @@ The script writes a banner like
        /Users/you/tolaria/target/periscope screenshot --pid 15654 --raise \
           --out /Users/you/tolaria/target/periscope/phase-8-sweep/00-light-baseline.png
 
-    Scenario list: see the consuming doc (e.g. `docs/plans/native-gpui-chrome/phase-8-sweep.md`)
+    Scenario list: see the consuming doc (e.g. `docs/plans/native-gpui-chrome/phases/phase-8/sweep.md`)
 
 ==> Press <enter> in this terminal to tear down.
 ```
@@ -315,7 +315,7 @@ export OUT_DIR=target/periscope/phase-8-sweep
 
 - **Captures:** `target/periscope/phase-8-sweep/06-wikilink-suggestion.png`
 - **Covers:** Phase 8.26 (wikilink suggestion popup) — list will be
-  empty until bridge variants land (`phase-8-issues.md` "Bridge
+  empty until bridge variants land (`phases/phase-8/worklist.md` "Bridge
   gaps" §1; no `FromHost::WikilinkQuery` variant yet).  The capture
   shows the menu chrome — that is the Phase 8 evidence we want.
 - **Preconditions:** BlockNote editor focused with cursor in a

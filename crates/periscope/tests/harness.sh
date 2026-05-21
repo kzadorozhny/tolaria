@@ -3,7 +3,7 @@
 # Generic Tolaria spawn-and-wait harness for periscope-driven capture
 # sweeps.  Companion scenario docs live under `docs/plans/.../`; the
 # first example consumer is
-# `docs/plans/native-gpui-chrome/phase-8-sweep.md`.
+# `docs/plans/native-gpui-chrome/phases/phase-8/sweep.md`.
 #
 # Spawns a `tolaria` window pinned to 1516x1052 against demo-vault-v2,
 # resolves the binary pid `periscope list` reports, prints
@@ -115,7 +115,7 @@ echo "    Drive captures from another shell, e.g.:"
 echo "      $PERISCOPE_BIN screenshot --pid $BIN_PID --raise \\"
 echo "          --out $OUT_DIR/00-light-baseline.png"
 echo ""
-echo "    Scenario list: see the consuming doc (e.g. \`docs/plans/native-gpui-chrome/phase-8-sweep.md\`)"
+echo "    Scenario list: see the consuming doc (e.g. \`docs/plans/native-gpui-chrome/phases/phase-8/sweep.md\`)"
 echo ""
 
 if [[ "$BLOCK" = "0" ]]; then

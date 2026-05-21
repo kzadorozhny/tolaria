@@ -61,28 +61,36 @@ row-by-row in both themes.  Each sub-task ships its own commit.
 | 7.7 | Note-list visual parity — `MMM D · Created MMM D` metadata line; `selected_id` + `theme.list_active` pale-accent row | ✅ shipped (`897091bf`) |
 | 7.8 | Custom title-bar strip — `workspace::title_bar::TitleBar` + `TRAFFIC_LIGHTS_PADDING_PT`; `TitlebarOptions::appears_transparent` | ✅ shipped (`897091bf`) |
 | 7.9 | WKWebView editor-body dark-mode CSS — `editor-host/style.css` palette + `NoteItem::set_theme` + theme-observer broadcast | ✅ shipped (`897091bf`) |
-| 7.10 | Visual-issue QA wave — interactive periscope-driven catalogue + per-issue commits (#001–#021); see [`visual-issues.md`](visual-issues.md) and `progress.md` § Phase 7 follow-up | ✅ shipped |
+| 7.10 | Visual-issue QA wave — interactive periscope-driven catalogue + per-issue commits (#001–#021); see [`phases/phase-7/worklist.md`](phases/phase-7/worklist.md) and `progress.md` § Phase 7 follow-up | ✅ shipped |
 
 **✅ Phase 7 complete.**  Live chrome matches
 `tolaria-demo-vault-v2-{light,dark}.png` row-by-row in both themes
 (`897091bf` baseline), and every reported visual delta in
-`visual-issues.md` (#001 through #021) has shipped its own per-issue
+`phases/phase-7/worklist.md` (7.2.001 through 7.2.020) has shipped its own per-issue
 commit.  The `embed_poc` spike that validated the WKWebView-in-GPUI
 approach in Phase 0 is no longer load-bearing now that the resize
 artifact fixes have been ported into the production `note_item`
 path — schedule its removal under Phase 7 close-out.
 
+## Closed
+
+**Phase 8 — closed 2026-05-21 (`1a96c20a`).**  Behavioral fidelity pass.  29/29 in-scope rows resolved; 6 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9 as net-new product work.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the post-mortem and [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md) for the row-level ledger.
+
 ## Active
 
-### Phase 8 — Behavioral fidelity pass
+### Phase 9 — note-toolbar product features + new regression sweep
+
+Phase 9 inherits the six toolbar slots deferred from Phase 8 (`note-toolbar-star`, `-organized`, `-neighborhood`, `-raw`, `-ai`, `-toc`, `-more`) and accumulates any new regression rows reported during dogfood.  Worklist lives at [`phases/phase-9/worklist.md`](phases/phase-9/worklist.md); copy the deferred Phase 8 rows in as Phase 9 entries (carrying their `➡️` markers across) when scoping begins.
+
+### Phase 8 — Behavioral fidelity pass (CLOSED)
 
 Phase 7 brought the chrome to **visual** parity with the React app.
-Phase 8 brings it to **behavioral** parity — the chrome looks right,
-but row clicks don't navigate, bulk-action buttons no-op, inspector
-sub-panels render `"Phase 3 wires…"` placeholders, the search panel
-has no query field, and a dozen React-side surfaces (frontmatter
-editing, folder tree, filter builder, vault switcher, …) have no
-GPUI counterpart at all.  Phase 8 closes both gaps.
+Phase 8 brought it to **behavioral** parity — the chrome looked right,
+but row clicks didn't navigate, bulk-action buttons no-op'd, inspector
+sub-panels rendered `"Phase 3 wires…"` placeholders, the search panel
+had no query field, and a dozen React-side surfaces (frontmatter
+editing, folder tree, filter builder, vault switcher, …) had no
+GPUI counterpart at all.  Phase 8 closed both gaps.
 
 Three strands run in parallel:
 
@@ -208,7 +216,7 @@ criteria):**
 
 User driven feedback gate for new surfaces implemented in Phase 8
 
-Use `phase-8-issues.md` as a follow-up task list shared with the user.
+Use `phases/phase-8/worklist.md` as a follow-up task list shared with the user.
 Mark completed items as ✅ with a link to the commit.
 
 **Exit criteria:**
@@ -238,7 +246,7 @@ Mark completed items as ✅ with a link to the commit.
   regressions.  Kept under ~10 captures total so the smoke suite
   stays under ~60 s.  Anything verifiable in-process MUST land as
   `#[gpui::test]` instead.
-- Every `phase-8-issues.md` task should be resolved before moving on.
+- Every `phases/phase-8/worklist.md` task should be resolved before moving on.
 
 
 

@@ -34,12 +34,13 @@ spec lives in [`components.md`](components.md).
 | 7.7 — Note-list visual parity | ✅ done | `897091bf` | +3 (221) | `NoteListPane`: `MMM D · Created MMM D` metadata line, `selected_id` field + `open` / `set_active` helpers, `theme.list_active` pale-accent on the active row, `visible_entries` returns `impl Iterator`. |
 | 7.8 — Custom title-bar strip | ✅ done | `897091bf` | +1 (222) | `workspace::title_bar::TitleBar` view + `TRAFFIC_LIGHTS_PADDING_PT = 72.0`; mounted by `TolariaWorkspace::empty`; `TitlebarOptions::appears_transparent` lets GPUI draw under the macOS chrome.  Each cell is `id()`-tagged + `dump_as`-registered. |
 | 7.9 — WKWebView editor-body dark-mode CSS | ✅ done | `897091bf` | (222) | `editor-host/style.css` gains `--fg-muted`, `caret-color`, italic placeholder, `color-mix(...)` selection; `NoteItem::set_theme` propagates via `document.documentElement.dataset.theme` (no `tolariaBridge` Ready dependency); `tolaria/main.rs` observes `gpui_component::theme::Theme` and broadcasts. |
-| 7.10 — Visual-issue QA wave | ✅ done | `6b92a6ba` → `3c70b6b9` | (~234) | Periscope-driven interactive QA loop catalogued and closed visual deltas #001–#021 in their own per-issue commits.  Final per-issue rundown in the [Phase 7 follow-up](#phase-7-follow-up--visual-issue-qa-wave) table below; full diagnostic notes in [`visual-issues.md`](visual-issues.md). |
+| 7.10 — Visual-issue QA wave | ✅ done | `6b92a6ba` → `3c70b6b9` | (~234) | Periscope-driven interactive QA loop catalogued and closed visual deltas #001–#021 in their own per-issue commits.  Final per-issue rundown in the [Phase 7 follow-up](#phase-7-follow-up--visual-issue-qa-wave) table below; full diagnostic notes in [`phases/phase-7/worklist.md`](phases/phase-7/worklist.md). |
 | **✅ Phase 7 complete** | shipped at `3c70b6b9` | ~234 | Visual fidelity baseline (`897091bf`) plus 21 closed visual issues.  The `embed_poc` spike is no longer load-bearing — schedule removal under Phase 7 close-out. |
 | 8.x — Behavioral fidelity pass (Strand A — stub completion) | ✅ done (14 of 14) | `fa3267b4` (8.1), `2271f925` (8.2), `ce3af214` (8.3), `b830c42d` (8.4), `62b3beae` (8.5), `0fbe3568` (8.6), `3dad69ce` (8.7), `88afa9f7` (8.8), `c876ce8b` (8.9), `333bbc92` (8.10), `07c7ec7f` / `dbf8c00f` / `c65ac9de` / `aad8dbbb` (8.11.1–8.11.4), `97487dce` (8.12), `95b1ee4b` + `6470e304` (8.13), `66014021` (8.14 scaffold), `a98cdfcd` (8.23) | (folded into 271+) | Wired interactions land per crate.  8.11 vault gains frontmatter parser, folder/asset surfacing, background executor, and notify-based fs-watcher (4 sub-rows).  8.13 completes with pane resize observer + tab close/reorder events.  8.14 ships the structured per-tab scaffold; real editable controls remain Phase 9-blocked.  Action `Save` / `NewNote` / `OpenSettings` / `QuickOpen` / `CommandPalette` stay `log_stub` placeholders — wired by Phase 9.1 `command_registry` + Phase 8.14 follow-ups + Phase 11.x. |
 | 8.x — Behavioral fidelity pass (Strand B — missing surfaces) | ✅ done (8 of 8 crates) | `13421226` (8.17), `ef520117` (8.15), `65d6ec71` (8.16), `481c89ab` (8.18), `af7d3e14` (8.19), `3111ed89` (8.20), `cfdfc5e4` (8.21), `6190d076` (8.22) | (folded into 271+) | New crates shipped: `folder_tree`, `frontmatter_panel`, `raw_editor`, `filter_builder`, `workspace_switcher`, `note_retargeting`, `rendering_primitives`, `onboarding_prompts`.  Each follows the `from_or_empty` + `from_mock` pattern set by `folder_tree`. |
-| 8.x — Behavioral fidelity pass (Strand C — editor-host body parity) | ✅ done (7 of 7) | `4c7998e7` (8.24), `fa1aae40` (8.25), `0d871de4` (8.26), `7afa7072` (8.27), `48cddd2b` (8.28), `63c79224` (8.29), `1e1f77ac` (8.30) | (folded into 271+; vitest 0 → 271) | BlockNote + CodeMirror carry-over from `src/components/blockNote*.ts` / `src/extensions/*` / `src/components/useEditor*.ts` into `editor-host/`, replacing the Phase-4b `<textarea>` MVP.  Bundle 3.95 kB → 2.26 MiB (~580× — see [Bundle-size record](#bundle-size-record-phase-8-close-out) below).  Two bridge gaps stubbed for Phase 9/10 follow-up — see [`phase-8-issues.md`](phase-8-issues.md#bridge-gaps).  Zero new `ToHost` / `FromHost` variants this phase. |
-| **✅ Phase 8 complete** | shipped at `1e1f77ac` (Strand C tail) + `6190d076` (Strand B tail) + `aad8dbbb` (Strand A tail) | 271+ | All 30 rows landed across Strand A (14), Strand B (8), Strand C (7), plus Strand A 8.13 modal subset and 8.14 scaffold.  Editor-host vitest suite grew from 0 → 271 over Strand C; workspace + crate tests grew from ~261 → ~271+ over Strand A.  Two bridge-envelope gaps logged for Phase 9/10 follow-up.  Phase 8 visual issues catalogued in [`phase-8-issues.md`](phase-8-issues.md). |
+| 8.x — Behavioral fidelity pass (Strand C — editor-host body parity) | ✅ done (7 of 7) | `4c7998e7` (8.24), `fa1aae40` (8.25), `0d871de4` (8.26), `7afa7072` (8.27), `48cddd2b` (8.28), `63c79224` (8.29), `1e1f77ac` (8.30) | (folded into 271+; vitest 0 → 271) | BlockNote + CodeMirror carry-over from `src/components/blockNote*.ts` / `src/extensions/*` / `src/components/useEditor*.ts` into `editor-host/`, replacing the Phase-4b `<textarea>` MVP.  Bundle 3.95 kB → 2.26 MiB (~580× — see [Bundle-size record](#bundle-size-record-phase-8-close-out) below).  Two bridge gaps stubbed for Phase 9/10 follow-up — see [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps).  Zero new `ToHost` / `FromHost` variants this phase. |
+| **✅ Phase 8 complete** | shipped at `1e1f77ac` (Strand C tail) + `6190d076` (Strand B tail) + `aad8dbbb` (Strand A tail) | 271+ | All 30 rows landed across Strand A (14), Strand B (8), Strand C (7), plus Strand A 8.13 modal subset and 8.14 scaffold.  Editor-host vitest suite grew from 0 → 271 over Strand C; workspace + crate tests grew from ~261 → ~271+ over Strand A.  Two bridge-envelope gaps logged for Phase 9/10 follow-up.  Phase 8 visual issues catalogued in [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md). |
+| **✅ Phase 8 closed** | closed 2026-05-21 at `1a96c20a` | 402+ | Manual regression sweep: 29/29 in-scope rows resolved; 6 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9.  Architectural deltas: Angle-C2 transparent base layer + WKWebView z-order reversal, byte-identical YAML frontmatter round-trip, GPUI element-picker inspector renderer wired, dynamic native menu labels.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the full ledger. |
 | 9.x — Behavioral layers | ⏳ planned | — | — | `command_registry`, `nav_history`, `multi_select`, `dialog_stack`, `auto_git`, `vault_lifecycle`, `telemetry_pipeline` (9.1–9.7). |
 | 10.x — Service expansion | ⏳ planned | — | — | `git_provider`, `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`, `vault_registry`, `window_state`, `native_text_assistance`, `settings_panel` persistence. |
 | 11.x — Modal chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` (one task per crate). |
@@ -308,9 +309,9 @@ reference in both modes.
 
 After the `897091bf` baseline, an interactive QA loop catalogued
 each remaining visual delta in
-[`visual-issues.md`](visual-issues.md); each entry was fixed in
+[`phases/phase-7/worklist.md`](phases/phase-7/worklist.md); each entry was fixed in
 its own commit using the `fix(<crate>): visual-issue #NNN — <one-liner>`
-style.  See [`live-snapshots/`](live-snapshots/) for the before /
+style.  See [`phases/phase-7/snapshots/`](phases/phase-7/snapshots/) for the before /
 after captures referenced by individual entries.
 
 | Issue(s) | Commit | Crate(s) | Summary |
@@ -380,7 +381,7 @@ expose the trailing `theme.background` strip.
 All 30 rows landed across three parallel strands (Strand A — stub
 completion; Strand B — missing surfaces; Strand C — editor-host body
 parity).  Per-row entries below.  Visual-issue follow-ups live in
-[`phase-8-issues.md`](phase-8-issues.md).
+[`phases/phase-8/worklist.md`](phases/phase-8/worklist.md).
 
 #### Bundle-size record (Phase 8 close-out)
 
@@ -498,7 +499,7 @@ commits.  All ship Vitest coverage inside `editor-host/`.  No new
 bridge-envelope variants this phase — the `editor_bridge` snake_case
 wire shape stays locked in by the Phase 4 `editor_bridge` tests.
 Two bridge gaps stubbed locally and logged in
-[`phase-8-issues.md`](phase-8-issues.md#bridge-gaps).
+[`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps).
 
 - **8.24 — BlockNote core mount (`4c7998e7`).**  Replaces the
   Phase-4b `<textarea>` with a real BlockNote editor bound to the
@@ -564,7 +565,7 @@ Two bridge gaps stubbed locally and logged in
     `ToHost::WikilinkSuggestions { items }` to populate the menu
     with real vault titles.  Stub: `wikilinkSuggestion.ts ::
     defaultWikilinkItemsProvider` returns `[]`.  Logged in
-    [`phase-8-issues.md`](phase-8-issues.md#bridge-gaps); target
+    [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps); target
     row Phase 10 (`vault_search`) or focused Phase 9 follow-up.
 
 - **8.27 — IME composition + render-recovery + transform-error
@@ -676,7 +677,7 @@ Two bridge gaps stubbed locally and logged in
     `useEditorSaveWithLinks` ships as a thin `useEditorSave`
     wrapper whose `onLinksChanged` seam fires but doesn't
     propagate.  Logged in
-    [`phase-8-issues.md`](phase-8-issues.md#bridge-gaps); target
+    [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps); target
     row Phase 10.1 (`git_provider` rename pipeline) or Phase 9.6
     (`vault_lifecycle`).
 

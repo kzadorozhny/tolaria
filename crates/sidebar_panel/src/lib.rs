@@ -296,7 +296,7 @@ impl SidebarPanel {
     /// was rooted at.  We strip it from every note's parent path so
     /// folder rows are indented relative to the vault root rather than
     /// the filesystem root — see issue 002 in
-    /// `docs/plans/native-gpui-chrome/visual-issues.md`.
+    /// `docs/plans/native-gpui-chrome/phases/phase-7/worklist.md`.
     fn build_from_samples(samples: Vec<(NoteKind, PathBuf)>, vault_root: Option<PathBuf>) -> Self {
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
         // Set of relative paths from the vault root.  `""` is the

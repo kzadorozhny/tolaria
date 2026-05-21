@@ -1,32 +1,44 @@
-# Visual-fidelity issue catalog
+# Phase 7 worklist
 
-Per-issue notes captured during the Phase 7 redo QA pass.  Each entry
-pairs a user-supplied UI crop (saved under
-[`live-snapshots/`](live-snapshots/)) with a short description of what
-is wrong, what the intended behaviour / appearance is, and the
-implementation status.
+> **Phase 7 status: CLOSED.**  All 20 visual-fidelity issues resolved on `feat/native-gpui-chrome` (Phase 7 final tip `3c70b6b9`).  See `close-out.md` for the post-mortem.
 
-## Workflow
+## 1. Blockers
 
-1. User pastes a UI crop + description into the conversation.
-2. The crop is saved as
-   `live-snapshots/issue-NNN.png` (zero-padded incrementing index).
-3. A new section is appended to this file with:
-   - Image link
-   - Reporter description
-   - Hypothesised root cause
-   - Status (`open` / `in-progress` / `fixed in <sha>`)
+## 2. High Priority
 
-Issues are appended in arrival order, not severity order; reorder by
-re-reading this file before fix passes.
+7.2.001. ✅ Sidebar selection treatment uses deep-blue flood instead of pale-blue + accent text
+7.2.002. ✅ FOLDERS section: deep indent, wrong root icon, missing section caret
+7.2.003. ✅ TYPES rows ignore each type's frontmatter icon / colour / label
+7.2.004. ✅ Sidebar / note-list rows hover with a light-green tint
+7.2.005. ✅ Title-bar strip is cramped against the top edge
+7.2.006. ✅ VIEWS / TYPES section headers missing collapse caret
+7.2.007. ✅ Traffic lights glued to the top of the title-bar strip
+7.2.008. ✅ Title-bar action cluster still misaligned with traffic lights
+7.2.009. ✅ Title-bar action items not vertically centred in the strip
+7.2.010. ✅ Note-list row treatment misses type accent, layout, and dates
+7.2.011. ✅ Note row: oversized padding, Unicode ellipsis, icon-clipped snippet width, missing left accent bar
+7.2.012. ✅ Snippet hard-truncates at 120 chars instead of native word-boundary wrap; horizontal padding too generous
+7.2.013. ✅ Note row right padding clips trailing icons and date label
+7.2.014. ✅ Note-list scrollbar paints an opaque track over the right column
+7.2.015. ✅ Note-list rows miss the sidebar's hover treatment; dark `list_hover` not subtle
+7.2.016. ✅ Title bar matches Zed dims
+7.2.017. ✅ status-bar icons + left-aligned services + separators
+7.2.018. ✅ WKWebView shows a trailing strip during window / splitter resize
+7.2.019. ✅ Top Note toolbar row
+7.2.020. ✅ Sidebar show / hide button
 
-## Open issues
+## 3. Low Priority
 
-### 001 — Sidebar selection treatment uses deep-blue flood instead of pale-blue + accent text
+---
+
+### Annotations and details
+
+#### 7.2.001
+
 
 | Current | Reference |
 |---------|-----------|
-| [issue-001-current.png](live-snapshots/issue-001-current.png) | [issue-001-reference.png](live-snapshots/issue-001-reference.png) |
+| [issue-001-current.png](snapshots/issue-001-current.png) | [issue-001-reference.png](snapshots/issue-001-reference.png) |
 
 **Reporter:** "The selection background is incorrect.  The item
 background is light blue.  Icon is coloured.  The number pill has
@@ -46,15 +58,16 @@ and the row fill should be the pale `list_active` tone.  Fix touches
 selected branch.
 
 **Status:** fixed.  Verified in
-[after-001-002-light.png](live-snapshots/after-001-002-light.png) —
+[after-001-002-light.png](snapshots/after-001-002-light.png) —
 Inbox row paints pale-blue with blue text/icon and the count chip is
 inverted (dark-blue bg, white text).
 
-### 002 — FOLDERS section: deep indent, wrong root icon, missing section caret
+#### 7.2.002
+
 
 | Current | Reference |
 |---------|-----------|
-| [issue-002-current.png](live-snapshots/issue-002-current.png) | [issue-002-reference.png](live-snapshots/issue-002-reference.png) |
+| [issue-002-current.png](snapshots/issue-002-current.png) | [issue-002-reference.png](snapshots/issue-002-reference.png) |
 
 **Reporter:** "Folders list is misaligned.  The first-level icon is
 wrong.  Selection background is incorrect."
@@ -78,18 +91,19 @@ wrong.  Selection background is incorrect."
    ours flooded with primary.  Already addressed in #001.
 
 **Status:** fixed.  Verified in
-[after-001-002-light.png](live-snapshots/after-001-002-light.png) —
+[after-001-002-light.png](snapshots/after-001-002-light.png) —
 `demo-vault-v2` sits at depth 0 (flush left), `type` at depth 1, and
 the FOLDERS section header carries the chevron-down on the left.
 Outstanding polish: thin vertical connector line under nested
 folders, deferred until a real folder dataset surfaces in Phase 8.12
 (`vault` crate folders / assets) or Phase 10.3 (`vault_watcher`).
 
-### 003 — TYPES rows ignore each type's frontmatter icon / colour / label
+#### 7.2.003
+
 
 | Current | Reference |
 |---------|-----------|
-| [issue-003-current.png](live-snapshots/issue-003-current.png) | [issue-003-reference.png](live-snapshots/issue-003-reference.png) |
+| [issue-003-current.png](snapshots/issue-003-current.png) | [issue-003-reference.png](snapshots/issue-003-reference.png) |
 
 **Reporter:** "The note type icon / accent is defined by frontmatter
 e.g. `type: Type, icon: calendar, color: orange, sidebar label:
@@ -135,15 +149,16 @@ tokens to `IconName::*` and 24-bit hex.  Each TYPES row builds with
 `palette_tinted_with(type.color)` so selection paints the row bg
 with the type's light tint and the count pill with its full colour
 (white text).  Verified in
-[after-003-events-selected.png](live-snapshots/after-003-events-selected.png) —
+[after-003-events-selected.png](snapshots/after-003-events-selected.png) —
 clicking the Measures row paints a cyan accent on the row + cyan
 count pill.
 
-### 004 — Sidebar / note-list rows hover with a light-green tint
+#### 7.2.004
+
 
 | Current |
 |---------|
-| [issue-004-current.png](live-snapshots/issue-004-current.png) |
+| [issue-004-current.png](snapshots/issue-004-current.png) |
 
 **Reporter:** "Sidebar items and note list items have light-green
 hover background."
@@ -161,11 +176,12 @@ clickable row so the hover paint is the neutral
 `.hover(|this| this.bg(hover_bg))`.  Selected rows skip the
 hover paint so the selection fill stays stable.
 
-### 005 — Title-bar strip is cramped against the top edge
+#### 7.2.005
+
 
 | Current |
 |---------|
-| [issue-005-current.png](live-snapshots/issue-005-current.png) |
+| [issue-005-current.png](snapshots/issue-005-current.png) |
 
 **Reporter:** "The title area is a bit cramped.  Make sure there is
 the same padding from the top edge of the window as from the bottom
@@ -185,13 +201,14 @@ to `38.0`; the change cascades into the
 `ui::tree_dump::set_window_y_offset` initialisation in `main.rs` so
 periscope's click coordinates stay aligned with the new strip
 height.  Verified in
-[after-005-title-bar.png](live-snapshots/after-005-title-bar.png).
+[after-005-title-bar.png](snapshots/after-005-title-bar.png).
 
-### 006 — VIEWS / TYPES section headers missing collapse caret
+#### 7.2.006
+
 
 | Current |
 |---------|
-| [issue-006-current.png](live-snapshots/issue-006-current.png) |
+| [issue-006-current.png](snapshots/issue-006-current.png) |
 
 **Reporter:** "Types and Views section should have collapsible
 arrows.  Similar to the folders section."
@@ -206,13 +223,14 @@ affordance uniform across all three groups.
 **Status:** fixed.  Both VIEWS and TYPES headers now call
 `section_header_with_leading(...)` with a chevron-down leading
 glyph (`sidebar-views-caret`, `sidebar-types-caret`).  Verified in
-[after-006-section-carets.png](live-snapshots/after-006-section-carets.png).
+[after-006-section-carets.png](snapshots/after-006-section-carets.png).
 
-### 007 — Traffic lights glued to the top of the title-bar strip
+#### 7.2.007
+
 
 | Current |
 |---------|
-| [issue-007-current.png](live-snapshots/issue-007-current.png) |
+| [issue-007-current.png](snapshots/issue-007-current.png) |
 
 **Reporter:** "The title bar system icons are misaligned.  Those
 should be vertically centered over the title bar."
@@ -230,11 +248,12 @@ only relocates the buttons *inside* the system titlebar region
 near the top of our 38-pt custom strip.  The follow-up fix moves
 the action cluster up to match the lights instead.
 
-### 008 — Title-bar action cluster still misaligned with traffic lights
+#### 7.2.008
+
 
 | Current |
 |---------|
-| [issue-008-current.png](live-snapshots/issue-008-current.png) |
+| [issue-008-current.png](snapshots/issue-008-current.png) |
 
 **Reporter:** "Is not properly vertically centred."
 
@@ -251,11 +270,12 @@ padding via the unchanged 38-pt height.
 with the traffic lights left a tall empty band below the cluster
 and the user preferred the cluster centred within the strip.
 
-### 009 — Title-bar action items not vertically centred in the strip
+#### 7.2.009
+
 
 | Current |
 |---------|
-| [issue-009-current.png](live-snapshots/issue-009-current.png) |
+| [issue-009-current.png](snapshots/issue-009-current.png) |
 
 **Reporter:** "Traffic lights are positioned correctly.  But title
 bar items are not centred vertically."
@@ -268,13 +288,14 @@ default top position.
 
 **Status:** fixed.  `title_bar` swaps `items_start` →
 `items_center` and drops the `pt(2.0)` inset.  Verified in
-[after-009-cluster-centered.png](live-snapshots/after-009-cluster-centered.png).
+[after-009-cluster-centered.png](snapshots/after-009-cluster-centered.png).
 
-### 010 — Note-list row treatment misses type accent, layout, and dates
+#### 7.2.010
+
 
 | Current | Reference |
 |---------|-----------|
-| [issue-010-current.png](live-snapshots/issue-010-current.png) | [issue-010-reference.png](live-snapshots/issue-010-reference.png) |
+| [issue-010-current.png](snapshots/issue-010-current.png) | [issue-010-reference.png](snapshots/issue-010-reference.png) |
 
 **Reporter:** "The note highlight needs to use the note type accent
 colour similar to the sidebar.  The top-right corner has the note
@@ -309,13 +330,14 @@ changes: title `font_semibold`, snippet wrapped to two lines with
 (left) / created (right) with `justify_between`, selected-row bg
 paints `light_tint(type_color, 0.14)`, top-right corner draws the
 type's own icon in its full accent colour.  Verified in
-[after-010-note-row-redesign.png](live-snapshots/after-010-note-row-redesign.png).
+[after-010-note-row-redesign.png](snapshots/after-010-note-row-redesign.png).
 
-### 011 — Note row: oversized padding, Unicode ellipsis, icon-clipped snippet width, missing left accent bar
+#### 7.2.011
+
 
 | Current | Reference |
 |---------|-----------|
-| [issue-011-current.png](live-snapshots/issue-011-current.png) | [issue-011-reference.png](live-snapshots/issue-011-reference.png) |
+| [issue-011-current.png](snapshots/issue-011-current.png) | [issue-011-reference.png](snapshots/issue-011-reference.png) |
 
 **Reporter:** "Decrease note text padding to match original React.
 Trimmed description needs to end with `...`.  Text box should span to
@@ -349,12 +371,13 @@ drops to `px(12) / py(10)`; selected rows render a 2-pt leading
 accent strip in `type_color` via an outer `items_stretch` h_flex.
 The truncation test asserts `chars().count() == 123` (120 graphemes
 + 3 dots) and `ends_with("...")`.  Verified in
-[after-011-row-layout.png](live-snapshots/after-011-row-layout.png) —
+[after-011-row-layout.png](snapshots/after-011-row-layout.png) —
 selected Sponsorship MRR row shows the cyan accent bar + tinted bg,
 icons are visible at the title-row right edge, and `Created May 3,
 2026` is no longer clipped.
 
-### 012 — Snippet hard-truncates at 120 chars instead of native word-boundary wrap; horizontal padding too generous
+#### 7.2.012
+
 
 **Reporter:** "The note text snippet should NOT rely on
 `SNIPPET_MAX_CHARS`.  The text should be trimmed to the closest word
@@ -403,13 +426,14 @@ Check React component layout values."
   pass.
 
 Verified in
-[after-012-native-wrap-tighter-padding.png](live-snapshots/after-012-native-wrap-tighter-padding.png) —
+[after-012-native-wrap-tighter-padding.png](snapshots/after-012-native-wrap-tighter-padding.png) —
 each visible snippet wraps at a word boundary ("Areas are ongoing
 domains of responsibility / with no fixed end date.", "Owns sponsor
 outreach and makes the / responsibility/procedure relationships feel
 like r…") and the row text starts closer to the left edge.
 
-### 013 — Note row right padding clips trailing icons and date label
+#### 7.2.013
+
 
 **Reporter:** "Update note item right padding to match the left
 padding."
@@ -424,12 +448,13 @@ type icon on every row.
 **Status:** fixed.  Inner row padding split into `pl(6)` / `pr(8)`
 so the visible text inset is symmetric 8 / 8 across the row.
 Verified in
-[after-013-symmetric-padding.png](live-snapshots/after-013-symmetric-padding.png) —
+[after-013-symmetric-padding.png](snapshots/after-013-symmetric-padding.png) —
 "Created May 3, 2026" renders fully, trailing per-type icons are
 flush with the right inset, and the selected Sponsorships row's
 green accent strip + tint reads cleanly.
 
-### 014 — Note-list scrollbar paints an opaque track over the right column
+#### 7.2.014
+
 
 **Reporter:** "The item list vertical scroll bar area is not
 transparent when visible."
@@ -450,9 +475,10 @@ transparent track while the thumb still paints with
 `scrollbar_thumb` (`#D9D9D6` light / `#46433B` dark).  Result is
 an overlay-style scrollbar — thumb visible against the row
 content, no rectangular track painted.  Verified in
-[after-014-015-scrollbar-hover.png](live-snapshots/after-014-015-scrollbar-hover.png).
+[after-014-015-scrollbar-hover.png](snapshots/after-014-015-scrollbar-hover.png).
 
-### 015 — Note-list rows miss the sidebar's hover treatment; dark `list_hover` not subtle
+#### 7.2.015
+
 
 **Reporter:** "Note list items must have same hover highlight
 behavior as sidebar items." …followed by: "Match hover highlight
@@ -494,7 +520,8 @@ consistency."
   field, so a single value drives both surfaces.  Any future
   row-hover paint must follow the same rule — no hard-coded colours.
 
-### 016 — Title bar matches Zed dims
+#### 7.2.016
+
 
 **Reporter:** engineering — no crop required (numeric spec only).
 
@@ -538,9 +565,10 @@ Recording grant / display available in the CI environment.
 
 ---
 
-### Issue 017 — status-bar icons + left-aligned services + separators
+#### 7.2.017
 
-**Reference:** ![issue 017 reference](live-snapshots/issue-017-reference.png)
+
+**Reference:** ![issue 017 reference](snapshots/issue-017-reference.png)
 
 **Reporter:** "the status bar elements need to have icons, and item
 spacing similar to React component.  The placeholder_services items
@@ -594,7 +622,8 @@ icons + left-aligned services + separators`.  5/5 status_bar tests
 pass; clippy clean for `-p status_bar -p tolaria --all-targets -D
 warnings`.
 
-### 018 — WKWebView shows a trailing strip during window / splitter resize
+#### 7.2.018
+
 
 **Reporter:** "the embedded web view is showing background painting
 artifacts on window and panel resizing operations."
@@ -656,9 +685,10 @@ Runtime verified by the reporter: live window resize and
 splitter drag no longer expose the trailing `theme.background`
 strip.
 
-### 019 — Top Note toolbar row
+#### 7.2.019
 
-**Reference:** ![issue 019 reference](live-snapshots/issue-019-reference.png)
+
+**Reference:** ![issue 019 reference](snapshots/issue-019-reference.png)
 
 **Reporter:** "Implement top Note toolbar row.  Some commands
 mistakenly were placed in to the title bar.  Use React code as a
@@ -735,7 +765,8 @@ inspector).  Two consequences:
 2/2 toolbar tests pass; 23/23 workspace tests pass; clippy clean
 for `-p note_item -p workspace --all-targets -D warnings`.
 
-### 020 — Sidebar show / hide button
+#### 7.2.020
+
 
 **Reporter:** "Implement sidebar show/hide button."  Reference crop
 shows `[● ● ●] [▢] [←] [→]` in the title-bar's left cluster — the
@@ -798,3 +829,4 @@ in the implementation:
 
 3/3 title_bar tests pass; clippy clean for `-p workspace
 --all-targets -D warnings`.
+
