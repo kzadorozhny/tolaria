@@ -323,7 +323,7 @@ user redirects.  9.2.1 stays at ✅ for now — the regression is a
 post-shipping bug rather than a 9.2.1 implementation defect, so it
 gets its own row per the `[high]` syntax the user used.
 
-**Closure (commit `<this-commit>`).**  Root cause was the
+**Closure (commit `e5978cd4`).**  Root cause was the
 `set_frontmatter_bool` fast path (`crates/vault/src/lib.rs:493`):
 when the disk bytes already matched the requested state (because an
 external edit got there first), the fast path returned `Ok(())`
