@@ -32,7 +32,7 @@
 9.2.9. ⏳ Star action stops working when the note is updated outside the UI
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
-9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
+9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
 
 ## 3. Low Priority
 
@@ -338,7 +338,7 @@ existing `theme.success` / type-colour palette so the green tracks
 light/dark mode.  Surface: `crates/note_item/src/note_toolbar.rs`
 organized branch.  **Size:** small.
 
-**Closure (commit `<this-commit>`).**  Shipped paired with `9.2.11`.
+**Closure (commit `e1d61a32`).**  Shipped paired with `9.2.11`.
 A new `toolbar_cell_with_active_color` helper paints the glyph in an
 explicit `Hsla` when the cell is active, suppressing the background
 tint that `toolbar_cell_with_active` (the raw-mode helper) draws so
@@ -364,7 +364,7 @@ active — orange (`#F59E0B` / amber-500-ish, theme-aware) when
 checked, default-muted otherwise.  Same surface as 9.2.10; the two
 ship together as one commit.  **Size:** small.
 
-**Closure (commit `<this-commit>`).**  Shipped paired with `9.2.10`
+**Closure (commit `e1d61a32`).**  Shipped paired with `9.2.10`
 through the same `toolbar_cell_with_active_color` helper.  The star
 branch passes `gpui::rgb(0xD69E2E)` (the light-mode literal of
 `--accent-yellow`, see `src/index.css:77`) directly rather than a
@@ -392,6 +392,18 @@ note remains visible elsewhere (All Notes, Favourites, etc.).
 Surface: `crates/note_list_pane/src/lib.rs` filter logic + a
 regression test asserting an organized note doesn't appear in
 Inbox.  **Size:** small.
+
+**Closure (commit `<this-commit>`).**  `NoteEntry` gained an
+`is_organized: bool` field populated from `Note::is_organized()` in
+`collect_vault_entries` (and seeded `false` for the `MockVault`
+branch, which has no triage state).  `scope_matches` flips the
+`NoteListScope::Inbox` arm from a pass-through to
+`!entry.is_organized`, leaving every other scope unchanged.  The
+`AllNotes` / `Type(_)` / `Folder(_)` / `View(_)` / `Archive` arms
+still see organized notes — moving a note out of the inbox does not
+remove it from the vault.  A `#[gpui::test]`
+(`inbox_scope_excludes_organized_notes`) opens a real on-disk vault
+with one organized + one fresh note and asserts both invariants.
 
 ### Cross-row notes
 

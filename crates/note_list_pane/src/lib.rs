@@ -202,19 +202,18 @@ impl RowStatus {
 /// `SidebarSelectionChangedEvent` subscription (Phase 8.1), combined
 /// with the text filter in [`NoteListPane::visible_entries`].
 ///
-/// `Inbox`, `AllNotes`, and `View(_)` all pass through every entry for
-/// now — the underlying vault has no triage / saved-view metadata
-/// yet, so until Phase 10.9 (`vault_registry`) and Phase 8.18
-/// (`filter_builder`) land, these scopes show the full list rather
-/// than risk hiding everything behind an empty predicate.  `Archive`
-/// returns no entries (no archive flag on `Note` yet).  `Type` and
-/// `Folder` are the load-bearing filters and narrow the list to
-/// matching entries.
+/// `Inbox` excludes notes flagged with `_organized: true` (worklist
+/// 9.2.12) — the React-side semantic.  `AllNotes` and `View(_)` pass
+/// through; `Archive` returns no entries (no archive flag on `Note`
+/// yet).  `Type` and `Folder` are the load-bearing filters and narrow
+/// the list to matching entries.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum NoteListScope {
-    /// Inbox row in the sidebar.  Treated as a pass-through until
-    /// the vault surfaces a triage flag (matches the Phase 7
-    /// inbox-count = total-count contract in `sidebar_panel`).
+    /// Inbox row in the sidebar.  Shows every note that has NOT been
+    /// flagged with `_organized: true` via the toolbar's organized
+    /// toggle (worklist 9.2.12) — toggling organized on a note pulls
+    /// it out of the inbox view; the note remains visible elsewhere
+    /// (All Notes, Favourites, its type row, …).
     #[default]
     Inbox,
     /// "All Notes" — every entry that is not archived.  Pass-through.
@@ -335,6 +334,12 @@ pub struct NoteEntry {
     /// instead because it survives renames and matches the YAML
     /// definition in `<vault>/views/*.yml`.
     pub view_type: SharedString,
+    /// `_organized: true` flag from the note's YAML frontmatter.
+    /// Drives the [`NoteListScope::Inbox`] predicate (worklist 9.2.12)
+    /// — organized notes drop out of the inbox view but remain visible
+    /// everywhere else (All Notes, Favourites, Types, …), mirroring
+    /// React's `useInboxOrganizeAdvance` semantics.
+    pub is_organized: bool,
 }
 
 /// Default header-strip title — mirrors the sidebar's default
@@ -647,6 +652,11 @@ fn collect_vault_entries(cx: &mut App) -> Vec<NoteEntry> {
             // filters (`NoteListScope::View`) can narrow to
             // notes whose YAML declares e.g. `type: Project`.
             view_type: frontmatter_view_type(note.frontmatter()),
+            // Inbox scope (worklist 9.2.12) hides notes the user has
+            // already moved out of triage.  Read the cached
+            // frontmatter directly so the predicate is a branch-only
+            // hot path on every render.
+            is_organized: note.is_organized(),
         });
     }
     entries
@@ -711,7 +721,15 @@ fn icon_for_frontmatter_name(name: &str) -> IconName {
 /// everything inside" semantics.
 fn scope_matches(scope: &NoteListScope, entry: &NoteEntry) -> bool {
     match scope {
-        NoteListScope::Inbox | NoteListScope::AllNotes => true,
+        // Inbox hides notes the user has explicitly moved out of
+        // triage via the toolbar's organized toggle (worklist 9.2.12).
+        // React parity: `useInboxOrganizeAdvance` treats `_organized:
+        // true` as the explicit "out of the inbox" marker; the note
+        // remains visible everywhere else (`AllNotes`, Favourites, the
+        // matching Type row, …) so this filter is intentionally
+        // scope-local.
+        NoteListScope::Inbox => !entry.is_organized,
+        NoteListScope::AllNotes => true,
         NoteListScope::Archive => false,
         NoteListScope::Type(label) => entry.type_label.as_ref() == label.as_ref(),
         NoteListScope::Folder(path) => {
@@ -874,6 +892,11 @@ impl NoteListPane {
                     // for every fixture note, so saved-view filters
                     // (e.g. Active Projects) work without a real vault.
                     view_type: mock_view_type(&note),
+                    // MockVault notes never carry `_organized` (the
+                    // seed has no triage state), so every mock row
+                    // stays in the inbox.  Real vaults flip this via
+                    // `Note::is_organized()` in `collect_vault_entries`.
+                    is_organized: false,
                 });
             }
         }
@@ -2556,6 +2579,62 @@ mod tests {
                 assert!(
                     !pane.filter_open(),
                     "close_filter on an already-closed pane stays closed",
+                );
+            })
+            .unwrap();
+    }
+
+    /// Worklist 9.2.12 — the Inbox scope must hide notes flagged with
+    /// `_organized: true`, but those notes must still surface in every
+    /// other scope (`AllNotes`, the matching `Type`, …).  React parity:
+    /// toggling organized "advances" a note out of the inbox without
+    /// otherwise removing it from the vault.
+    #[gpui::test]
+    fn inbox_scope_excludes_organized_notes(cx: &mut TestAppContext) {
+        use std::fs;
+        install_theme(cx);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Two notes — one already triaged (`_organized: true`), one
+        // still in the inbox.  Both carry a `type: Note` so the
+        // saved-view scope (`type == Note`) and type-label scope
+        // (`Notes`) include both rows when active.
+        fs::write(
+            dir.path().join("triaged.md"),
+            "---\ntype: Note\n_organized: true\n---\nbody\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("fresh.md"), "---\ntype: Note\n---\nbody\n").unwrap();
+
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        cx.update(|cx| cx.set_global(vault));
+        let window = cx.add_window(|_window, cx| NoteListPane::from_vault(cx));
+
+        window
+            .update(cx, |pane, _window, cx| {
+                assert_eq!(pane.entries.len(), 2, "fixture must load both notes");
+
+                // Inbox is the default scope; the organized note must
+                // NOT be visible, the fresh one MUST be.
+                let inbox_titles: Vec<&str> =
+                    pane.visible_entries().map(|e| e.title.as_ref()).collect();
+                assert_eq!(
+                    inbox_titles,
+                    vec!["fresh"],
+                    "Inbox must hide the organized note and surface only the fresh one",
+                );
+
+                // Flip to AllNotes — both rows reappear, confirming
+                // the filter is scope-local rather than a hard
+                // deletion from `entries`.
+                pane.set_scope(NoteListScope::AllNotes, cx);
+                let mut all_titles: Vec<&str> =
+                    pane.visible_entries().map(|e| e.title.as_ref()).collect();
+                all_titles.sort();
+                assert_eq!(
+                    all_titles,
+                    vec!["fresh", "triaged"],
+                    "AllNotes must include the organized note alongside the fresh one",
                 );
             })
             .unwrap();
