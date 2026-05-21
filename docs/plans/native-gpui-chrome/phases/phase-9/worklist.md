@@ -33,7 +33,7 @@
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
-9.2.13. Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
+9.2.13. ⏳ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 
 ## 3. Low Priority
 
