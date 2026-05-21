@@ -23,7 +23,7 @@
 
 9.2.1. ✅ Star toggle → favourite frontmatter + sidebar favourites section
 9.2.2. ✅ Organised toggle → inbox-advance frontmatter
-9.2.3. ⏳ Neighbourhood action → backlink filter in note-list
+9.2.3. ✅ Neighbourhood action → backlink filter in note-list
 9.2.4. ✅ Raw-mode toggle → editor-host raw bridge
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
 9.2.6. ✅ ToC action → new `toc_panel` crate + headings bridge
@@ -128,6 +128,40 @@ counterpart yet); (2) a new "neighbourhood" selection mode in
 wikilinks of one note; (3) shared selection history with the future
 Phase 10 `nav_history` crate — stub locally inside `note_item` if
 `nav_history` hasn't landed yet.  **Size:** large.
+
+**Closure (commit `<this-commit>`).**  Vault gained two read-only
+queries: `Vault::backlinks(id) -> Vec<NoteId>` (notes whose body
+contains `[[…]]` resolving to `id`) at `crates/vault/src/lib.rs:814`,
+and `Vault::outbound_links(id) -> Vec<NoteId>` at `:863`.  Both
+parse wikilinks via a small hand-rolled `WikilinkTargets` iterator
+that mirrors `src-tauri/src/vault/parsing.rs::extract_outgoing_links`
+for React parity — exact-title match on the link target, deterministic
+sort by `NoteId` so callers (including `9.2.8`) don't have to re-sort,
+per-note IO failures degrade gracefully (log + skip), and self-links
+are filtered defensively in both queries plus the action handler.
+A `TODO(9.2.3-fence)` flags the known gap that fenced-code blocks
+aren't excluded — same gap the React parser has.
+
+Sidebar gained `SidebarSelection::Neighborhood(u64)` (transient
+selection, never rendered as a permanent row); note-list-pane gained
+`NoteListScope::Neighborhood(NoteId, HashSet<NoteId>)` — the id-set
+is pre-resolved at scope-change time so the per-row `scope_matches`
+predicate stays O(1).  Toolbar's `note-toolbar-neighborhood` cell now
+dispatches `actions::EnterNeighborhood`; the handler (in
+`tolaria/src/main.rs:840`) reads the active note id, builds the
+`backlinks ∪ outbound_links ∖ {id}` set, swaps both sidebar
+selection and note-list scope, and emits a
+`SidebarSelectionChangedEvent` with `display_label = "Neighborhood
+of <title>"` so the note-list header reflects the mode.
+
+Nav-history stub: skipped — staying as a `TODO(nav-history)` rather
+than a 30-line local store, per the worklist's "drop the stub if
+it bloats this row" guidance.  Phase 10 `nav_history` picks this up
+with the proper shape.  Heading-click → body-anchor navigation
+(deferred from `9.2.6`) stays parked.  Tests: +15 in `vault`
+(parser edge cases + integration: empty target, unclosed bracket,
+whitespace, pipe alias, 3-note vault, self-link, dedup, unknown
+id), +tests in other crates covering the scope shape and handler.
 
 #### 9.2.4
 

@@ -109,6 +109,27 @@ pub enum SidebarSelection {
     Type(SharedString),
     /// A folder path.
     Folder(SharedString),
+    /// Transient "neighbourhood mode" — payload is the active note's
+    /// [`vault::NoteId`] raw value (matches the [`Favorite`] shape so
+    /// the workspace can resolve it the same way).  Phase 9 worklist
+    /// 9.2.3: pushed onto the selection by the note-toolbar `Map`
+    /// cell, consumed by `note_list_pane` to drive a
+    /// `NoteListScope::Neighborhood(id)` filter.
+    ///
+    /// **Not** rendered as a permanent sidebar row — there is no
+    /// "Neighborhood" section in the Types / Views / Folders list.
+    /// The sidebar's section-render passes ignore this variant (their
+    /// `matches!()` predicates only test for the rows they own), so
+    /// no existing row paints a `Neighborhood`-selected highlight;
+    /// neighbourhood mode is "sidebar-mode-without-a-row".  The
+    /// `note-list-pane` header reflects it via the event's
+    /// `display_label`.
+    ///
+    /// `Favorite`-shaped (raw `u64`) for consistency with the only
+    /// other note-id-bearing variant: cheap to embed in the GPUI
+    /// event, no extra crate dep, and lossless across the
+    /// `NoteId::from_raw` round-trip.
+    Neighborhood(u64),
 }
 
 /// One typed group of notes shown in the `TYPES` section.
@@ -493,6 +514,18 @@ impl SidebarPanel {
                 .find(|f| f.path == *path)
                 .map(|f| f.display.clone())
                 .unwrap_or_else(|| folder_display_fallback(path)),
+            // Worklist 9.2.3 — neighbourhood mode shows the active
+            // note's title in the note-list-pane header.  The panel
+            // itself doesn't render this variant (no permanent row),
+            // but the workspace handler that dispatches the
+            // `SidebarSelectionChangedEvent` overrides this label with
+            // the live note title from the vault before emit.  Keeping
+            // a fallback here means the event is non-empty even if the
+            // panel produced it directly (e.g. a future programmatic
+            // path).
+            SidebarSelection::Neighborhood(id) => {
+                SharedString::from(format!("Neighborhood of note {id}"))
+            }
         }
     }
 

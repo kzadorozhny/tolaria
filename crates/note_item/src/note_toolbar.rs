@@ -177,10 +177,29 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
             organized_active_color(cx),
             move |_window, cx| toggle_frontmatter_flag(id, "_organized", !is_organized, cx),
         ))
-        .child(stub_cell(
+        // Worklist 9.2.3 — clicking dispatches `EnterNeighborhood`;
+        // the chrome-side handler resolves the active `NoteItem` via
+        // the shared `ActiveNoteItemSlot`, computes the union of
+        // `vault.backlinks(id)` and `vault.outbound_links(id)`, and
+        // pushes a `NoteListScope::Neighborhood(id, ids)` onto the
+        // note-list pane.  The React reference's tooltip is "Show
+        // notes that link to this note" rather than "Show neighborhood
+        // graph" — the row is a filter, not a graph view.  Glyph stays
+        // `IconName::Map` per the React parity reference.  Active-state
+        // colour treatment is deferred (the React surface doesn't
+        // paint one either; the visual feedback comes from the
+        // note-list itself swapping its rows).
+        .child(toolbar_cell(
             "note-toolbar-neighborhood",
             IconName::Map,
-            "Show neighborhood graph",
+            "Show neighborhood",
+            |_window, cx| {
+                cx.dispatch_action(&actions::EnterNeighborhood);
+                log::info!(
+                    target: "note_item::toolbar",
+                    "neighborhood: dispatched EnterNeighborhood"
+                );
+            },
         ))
         // Worklist 9.2.4 — clicking dispatches `ToggleRawEditor`; the
         // chrome-side handler resolves the active `NoteItem` and flips

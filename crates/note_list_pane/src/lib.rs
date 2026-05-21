@@ -233,6 +233,25 @@ pub enum NoteListScope {
     /// Show notes flagged by `name`'s saved view.  Phase 9 work; for
     /// the visual-fidelity pass this passes through unchanged.
     View(SharedString),
+    /// "Neighbourhood of note `id`" — the note-toolbar `Map` cell
+    /// (worklist 9.2.3) pushes this when the user clicks
+    /// `EnterNeighborhood`.  Matches every entry whose id appears in
+    /// `ids` — pre-resolved at scope-change time so per-entry
+    /// `scope_matches` lookups stay O(1) without re-walking the vault
+    /// once per row.
+    ///
+    /// `ids` carries the union `vault.backlinks(id) ∪
+    /// vault.outbound_links(id)` minus `id` itself (the active note is
+    /// excluded — mirrors the React `resolveNeighborhoodSelection`
+    /// behaviour).  When the active note has no neighbours the set is
+    /// empty and the list renders zero rows, which matches the React
+    /// fallback.
+    ///
+    /// The active note's id is preserved separately (the leading
+    /// `NoteId`) so chrome consumers that need the "this is the
+    /// anchor" identity (header label, future back-navigation) don't
+    /// have to walk the id-set.
+    Neighborhood(NoteId, HashSet<NoteId>),
 }
 
 // ---------------------------------------------------------------------------
@@ -741,6 +760,11 @@ fn scope_matches(scope: &NoteListScope, entry: &NoteEntry) -> bool {
             ep == path.as_ref() || ep.starts_with(&format!("{path}/"))
         }
         NoteListScope::View(name) => view_matches(name, entry),
+        // Worklist 9.2.3 — neighbourhood mode shows only the
+        // pre-resolved id-set.  The active note itself is excluded
+        // upstream (see `Neighborhood` doc comment), so we don't
+        // double-check `entry.id == *anchor` here.
+        NoteListScope::Neighborhood(_anchor, ids) => ids.contains(&entry.id),
     }
 }
 
@@ -2263,6 +2287,67 @@ mod tests {
                     pane.visible_entries().count(),
                     0,
                     "Archive scope returns 0 until the vault surfaces an archive flag",
+                );
+            })
+            .unwrap();
+    }
+
+    /// Worklist 9.2.3 — `set_scope(Neighborhood(anchor, ids))` must
+    /// narrow the visible list to entries whose id is in the
+    /// pre-resolved id-set.  The active note itself is excluded by the
+    /// action handler before the scope is pushed, so `scope_matches`
+    /// never needs to test `entry.id == anchor`.
+    #[gpui::test]
+    fn set_scope_neighborhood_narrows_to_resolved_ids(cx: &mut TestAppContext) {
+        use std::collections::HashSet;
+        use std::fs;
+        install_theme(cx);
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("a.md"), "# A\nbody").unwrap();
+        fs::write(dir.path().join("b.md"), "# B\nbody").unwrap();
+        fs::write(dir.path().join("c.md"), "# C\nbody").unwrap();
+        fs::write(dir.path().join("d.md"), "# D\nbody").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        // `vault::Note::title` is the on-disk filename stem
+        // (lowercase here because the temp files are `a.md` / `b.md`),
+        // while `NoteEntry::title` is derived from the H1 in the body
+        // and renders as `"A"` / `"B"`.  Look up vault ids by stem and
+        // assert visible titles by uppercase.
+        let id_for_stem = |stem: &str, v: &vault::Vault| {
+            v.iter_notes()
+                .find(|n| n.title.as_ref() == stem)
+                .map(|n| n.id)
+                .expect("id lookup")
+        };
+        let anchor = id_for_stem("a", &vault);
+        let id_b = id_for_stem("b", &vault);
+        let id_c = id_for_stem("c", &vault);
+        cx.update(|cx| cx.set_global(vault));
+
+        let window = cx.add_window(|_window, cx| NoteListPane::from_vault(cx));
+
+        window
+            .update(cx, |pane, _window, cx| {
+                // Pre-resolved id-set carries B + C only.  D is in the
+                // vault but not in the neighbourhood.
+                let mut ids: HashSet<vault::NoteId> = HashSet::new();
+                ids.insert(id_b);
+                ids.insert(id_c);
+                pane.set_scope(NoteListScope::Neighborhood(anchor, ids), cx);
+                let titles: std::collections::BTreeSet<&str> =
+                    pane.visible_entries().map(|e| e.title.as_ref()).collect();
+                assert_eq!(
+                    titles,
+                    ["B", "C"].into_iter().collect(),
+                    "Neighborhood scope must show only the pre-resolved id-set",
+                );
+                // Empty id-set must render zero rows (active note has
+                // no neighbours).
+                pane.set_scope(NoteListScope::Neighborhood(anchor, HashSet::new()), cx);
+                assert_eq!(
+                    pane.visible_entries().count(),
+                    0,
+                    "Empty neighbourhood id-set must render zero rows",
                 );
             })
             .unwrap();

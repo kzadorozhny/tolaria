@@ -808,6 +808,78 @@ mod macos {
                     cx.on_action(move |_: &actions::NewNote, cx| {
                         action_note_list.update(cx, |pane, cx| pane.request_create_note(cx));
                     });
+
+                    // Worklist 9.2.3 — `EnterNeighborhood` swaps the
+                    // note-list pane to "neighbourhood mode" for the
+                    // active note: every note that links to it
+                    // (`vault::backlinks`) plus every note it links to
+                    // (`vault::outbound_links`), minus the active note
+                    // itself.  Mirrors React's
+                    // `BreadcrumbBar.tsx::NeighborhoodAction` →
+                    // `onEnterNeighborhood` → `useNeighborhoodEntry`.
+                    //
+                    // The sidebar's row highlight intentionally stays
+                    // put — React's `useNeighborhoodEntry` doesn't
+                    // change the sidebar's `SidebarSelection` either,
+                    // it only pushes a new "viewing one note's
+                    // neighbourhood" filter onto the note-list.  The
+                    // user's previous sidebar context (Inbox / All
+                    // Notes / a Type) survives so they can exit
+                    // neighbourhood mode by clicking another sidebar
+                    // row.
+                    //
+                    // TODO(nav-history, Phase 10): the React
+                    // `neighborhoodHistoryRef` stack lets users walk
+                    // back through prior selections via Escape.  Phase
+                    // 10's `nav_history` crate is the proper home for
+                    // that bookkeeping; the present row only ships the
+                    // forward path (enter mode) and leaves
+                    // back-navigation for the dedicated crate.
+                    let neighborhood_slot = active_note_item.clone();
+                    let neighborhood_note_list = note_list.clone();
+                    cx.on_action(move |_: &actions::EnterNeighborhood, cx| {
+                        let Some(item) = neighborhood_slot.borrow().as_ref().cloned() else {
+                            log::debug!("EnterNeighborhood: no active NoteItem");
+                            return;
+                        };
+                        let id = item.read(cx).id();
+                        let Some(vault) = cx.try_global::<vault::Vault>() else {
+                            log::warn!("EnterNeighborhood: no Vault global installed");
+                            return;
+                        };
+                        // Title for the header label is read before
+                        // we drop the immutable vault borrow — keeps
+                        // the `set_header_title` call below a single
+                        // owned `SharedString`.
+                        let title = vault
+                            .note_sync(id)
+                            .map(|n| n.title.clone())
+                            .unwrap_or_else(|| gpui::SharedString::from(format!("note {}", id.get())));
+                        // Union of inbound + outbound, minus the active
+                        // note itself.  Both query fns already exclude
+                        // self-links, so the union doesn't reintroduce
+                        // it; the `remove(&id)` below is belt-and-braces
+                        // for the future fold of fenced-code awareness
+                        // that might surface self-targets again.
+                        let mut ids: std::collections::HashSet<vault::NoteId> =
+                            vault.backlinks(id).into_iter().collect();
+                        ids.extend(vault.outbound_links(id));
+                        ids.remove(&id);
+                        let header =
+                            gpui::SharedString::from(format!("Neighborhood of {title}"));
+                        let count = ids.len();
+                        neighborhood_note_list.update(cx, |pane, cx| {
+                            pane.set_scope(
+                                note_list_pane::NoteListScope::Neighborhood(id, ids),
+                                cx,
+                            );
+                            pane.set_header_title(header, cx);
+                        });
+                        log::info!(
+                            target: "tolaria::neighborhood",
+                            "EnterNeighborhood: id={id:?} resolved {count} neighbour(s)",
+                        );
+                    });
                     // Slot holding the currently mounted `NoteItem` so
                     // successive `OpenNoteEvent`s reuse the same entity
                     // (and underlying WKWebView) instead of constructing a
@@ -946,6 +1018,27 @@ mod macos {
                                             scoped_open_handle.update(cx, |list, cx| {
                                                 list.set_active(Some(id), cx);
                                             });
+                                            return;
+                                        }
+                                        // Worklist 9.2.3 — neighbourhood mode
+                                        // doesn't flow through the sidebar
+                                        // selection event in normal
+                                        // operation (the toolbar action
+                                        // handler updates the note-list
+                                        // pane directly so the resolved
+                                        // id-set isn't re-walked here),
+                                        // but the variant is exhaustive on
+                                        // `SidebarSelection` and a future
+                                        // path may emit it (e.g. a
+                                        // programmatic test).  No-op so
+                                        // the subscriber compiles and
+                                        // future emitters fail loud in
+                                        // logs rather than silently
+                                        // narrowing the list.
+                                        SidebarSelection::Neighborhood(raw_id) => {
+                                            log::debug!(
+                                                "SidebarSelectionChangedEvent::Neighborhood({raw_id}) ignored — handled by EnterNeighborhood action"
+                                            );
                                             return;
                                         }
                                     };

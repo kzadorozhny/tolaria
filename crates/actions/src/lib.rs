@@ -68,6 +68,21 @@ gpui::actions!(
         /// keybinding (React parity — the React
         /// `BreadcrumbBar.tsx::TableOfContentsAction` is mouse-only).
         ToggleTableOfContents,
+        /// Switch the note-list pane to "neighbourhood mode" for the
+        /// active note (Phase 9 worklist 9.2.3).  Mirrors React's
+        /// `BreadcrumbBar.tsx::NeighborhoodAction`
+        /// (`onEnterNeighborhood` → `useNeighborhoodEntry`).
+        ///
+        /// Parameter-less: the handler in `tolaria/src/main.rs`
+        /// resolves the active [`NoteItem`] via the shared
+        /// `ActiveNoteItemSlot` (same lookup `ToggleRawEditor`
+        /// uses), reads its `NoteId`, computes
+        /// `vault.backlinks(id) ∪ vault.outbound_links(id)`, and
+        /// pushes the resulting `NoteListScope::Neighborhood(id,
+        /// ids)` onto the note-list pane.  Dispatched from the
+        /// note-toolbar `note-toolbar-neighborhood` cell; no default
+        /// keybinding (React parity — the React handler is mouse-only).
+        EnterNeighborhood,
         CloseTab,
         /// Phase 8.13 — dismiss the active modal in `TolariaWorkspace`'s
         /// `ModalLayer`.  Bound to `escape` in the modal-active context

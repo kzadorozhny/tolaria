@@ -772,6 +772,130 @@ impl Vault {
     pub fn note_ids_sync(&self) -> Vec<NoteId> {
         self.note_ids_vec()
     }
+
+    /// Notes whose body contains a `[[wikilink]]` pointing at `id` —
+    /// the "inbound" half of the note's neighbourhood (Phase 9 worklist
+    /// 9.2.3).  Walks every other note's on-disk body, parses each
+    /// `[[target]]` / `[[target|alias]]` occurrence, and matches the
+    /// target against the destination note's filename stem (the same
+    /// value [`Note::title`] carries).  Match is **exact, case
+    /// sensitive** — mirrors the rest of the codebase, which stores
+    /// titles as `SharedString` derived directly from `Path::file_stem`
+    /// without any case-folding.
+    ///
+    /// On-demand parse rather than a cached index: at Tolaria-scale
+    /// vaults the call site (neighbourhood-mode entry from the toolbar
+    /// `Map` cell) fires rarely, so the cost of one pass over every
+    /// note body per click is far smaller than the bookkeeping cost of
+    /// maintaining an inbound-link index across [`set_frontmatter_bool`]
+    /// / [`save`] / [`rescan`] / fs-watcher ticks.  The result is
+    /// **sorted ascending by [`NoteId`]** so callers don't observe
+    /// HashMap iteration jitter — and the inspector_panel (worklist
+    /// 9.2.8) can rely on a stable list.
+    ///
+    /// Returns an empty `Vec` when `id` is unknown.  Skips the active
+    /// note itself (a note that links to its own title doesn't count
+    /// as its own backlink).
+    ///
+    /// IO failures while reading a candidate note's body degrade
+    /// gracefully — the offending note is logged and skipped, the rest
+    /// of the result stays valid.
+    ///
+    /// # Performance
+    ///
+    /// O(N) synchronous file reads on the calling thread (one per
+    /// other note in the vault).  At Tolaria-scale vaults (≤ a few
+    /// thousand notes) and the rare call cadence (mouse click on the
+    /// `Map` toolbar cell, or one inspector_panel render), this stays
+    /// well under one frame.  If a future workflow calls this on a
+    /// hot path, route the reads onto [`Vault::set_executor`]'s
+    /// background pool the way [`Vault::note_content`] does.
+    #[must_use]
+    pub fn backlinks(&self, id: NoteId) -> Vec<NoteId> {
+        let Some(target) = self.notes.get(&id) else {
+            return Vec::new();
+        };
+        let target_title = target.title.as_ref();
+        let mut hits: Vec<NoteId> = Vec::new();
+        for note in self.notes.values() {
+            if note.id == id {
+                continue;
+            }
+            let raw = match std::fs::read_to_string(&note.path) {
+                Ok(s) => s,
+                Err(err) => {
+                    log::debug!(
+                        "vault::backlinks: skipping {:?} (read failed: {err})",
+                        note.path,
+                    );
+                    continue;
+                }
+            };
+            if wikilink_targets(&raw).any(|t| t == target_title) {
+                hits.push(note.id);
+            }
+        }
+        hits.sort();
+        hits
+    }
+
+    /// Notes that the body at `id` links TO via `[[wikilink]]` syntax —
+    /// the "outbound" half of the neighbourhood (Phase 9 worklist
+    /// 9.2.3).  Mirror of [`backlinks`]: parses the active note's body
+    /// once, resolves every `[[target]]` to a [`NoteId`] by exact
+    /// title (`file_stem`) match, and returns the de-duplicated set.
+    ///
+    /// Targets that don't resolve to any note in the vault (broken
+    /// links, drafts that point at a yet-to-be-created title) are
+    /// silently dropped — the neighbourhood-mode predicate only needs
+    /// the resolvable subset.
+    ///
+    /// Result is **sorted ascending by [`NoteId`]**.  Returns an empty
+    /// `Vec` when `id` is unknown or the note's body cannot be read.
+    ///
+    /// # Performance
+    ///
+    /// One synchronous file read (the active note's body) plus an
+    /// O(N) HashMap build (one entry per other note's title).  Cheap
+    /// at Tolaria-scale; see [`Vault::backlinks`] for the same
+    /// caveats around hot-path use.
+    #[must_use]
+    pub fn outbound_links(&self, id: NoteId) -> Vec<NoteId> {
+        let Some(note) = self.notes.get(&id) else {
+            return Vec::new();
+        };
+        let raw = match std::fs::read_to_string(&note.path) {
+            Ok(s) => s,
+            Err(err) => {
+                log::debug!(
+                    "vault::outbound_links: read failed for {:?}: {err}",
+                    note.path,
+                );
+                return Vec::new();
+            }
+        };
+        // Build a title → id map so every parsed target is one HashMap
+        // lookup, not an O(n) scan per occurrence.  Skip the source
+        // note so a self-link doesn't surface as its own neighbour.
+        let mut title_to_id: HashMap<&str, NoteId> = HashMap::with_capacity(self.notes.len());
+        for n in self.notes.values() {
+            if n.id == id {
+                continue;
+            }
+            title_to_id.insert(n.title.as_ref(), n.id);
+        }
+        let mut hits: Vec<NoteId> = Vec::new();
+        let mut seen: std::collections::HashSet<NoteId> = std::collections::HashSet::new();
+        for target in wikilink_targets(&raw) {
+            if let Some(&nid) = title_to_id.get(target) {
+                if seen.insert(nid) {
+                    hits.push(nid);
+                }
+            }
+        }
+        hits.sort();
+        hits
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -822,6 +946,69 @@ fn sync_in_memory_from_disk(note: &mut Note, raw: &str, path: &Path) {
         note.byte_size = meta.len();
         if let Ok(t) = meta.modified() {
             note.modified = DateTime::<Utc>::from(t);
+        }
+    }
+}
+
+/// Iterator over every `[[target]]` occurrence in `body`, yielding the
+/// target portion only (`[[Alpha|alias]]` → `"Alpha"`, `[[Beta]]` →
+/// `"Beta"`).  Mirrors the React-side semantics implemented by
+/// `src-tauri/src/vault/parsing.rs::extract_outgoing_links` so the
+/// inspector_panel row (worklist 9.2.8) and neighbourhood-mode filter
+/// (worklist 9.2.3) reach the same targets the Tauri-era UI did.
+///
+/// Phase 9 MVP: doesn't filter out `[[…]]` occurrences that fall inside
+/// fenced code blocks.  Bringing fenced-code awareness over from the
+/// React `wikilinks.ts` parser is a follow-up — see `TODO(9.2.3-fence)`
+/// below.  At Tolaria's scale (no synthetic vaults with hostile bodies)
+/// the false positive rate is small enough to ship without it.
+///
+/// Returns an `Iterator` borrowing from `body` so callers don't pay an
+/// allocation per occurrence.  `body` outlives the iterator by
+/// construction — every caller holds it on the stack for the duration
+/// of the parse.
+fn wikilink_targets(body: &str) -> impl Iterator<Item = &str> {
+    // TODO(9.2.3-fence): respect fenced-code blocks the way
+    // `src/utils/wikilinks.ts::iterateWikilinks` does, so a backtick
+    // block containing `[[Foo]]` doesn't produce a phantom outbound
+    // link.  Tracked alongside the same gap in the React parser tests.
+    WikilinkTargets {
+        body,
+        search_from: 0,
+    }
+}
+
+/// State machine backing [`wikilink_targets`] — exists as a named
+/// struct rather than an inline closure so the iterator type can be
+/// `impl Iterator<Item = &'a str>` without `'static` bounds on the
+/// callback shape.
+struct WikilinkTargets<'a> {
+    body: &'a str,
+    search_from: usize,
+}
+
+impl<'a> Iterator for WikilinkTargets<'a> {
+    type Item = &'a str;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let rel_start = self.body[self.search_from..].find("[[")?;
+            let abs_inner = self.search_from + rel_start + 2;
+            let rel_end = self.body[abs_inner..].find("]]")?;
+            let inner = &self.body[abs_inner..abs_inner + rel_end];
+            self.search_from = abs_inner + rel_end + 2;
+            // `[[Alpha|alias]]` → take the part before `|`.  Strip
+            // surrounding whitespace so `[[  Alpha  ]]` still resolves
+            // (mirrors the React parser's `.trim()`).
+            let target = match inner.find('|') {
+                Some(idx) => inner[..idx].trim(),
+                None => inner.trim(),
+            };
+            if target.is_empty() {
+                // `[[]]` and `[[|alias]]` carry no target — skip.
+                continue;
+            }
+            return Some(target);
         }
     }
 }
@@ -1582,5 +1769,153 @@ mod tests {
         // Silence unused warnings on the `mut` bindings above.
         folders.clear();
         assets.clear();
+    }
+
+    // ---------------------------------------------------------------------
+    // Worklist 9.2.3 — wikilink parser + backlinks / outbound_links
+    // ---------------------------------------------------------------------
+
+    /// Helper for `wikilink_targets` callers in the tests — collects the
+    /// iterator into a `Vec` so equality assertions stay one-liners.
+    fn parse_targets(body: &str) -> Vec<&str> {
+        wikilink_targets(body).collect()
+    }
+
+    #[test]
+    fn wikilink_targets_extracts_plain_targets() {
+        let body = "Linking to [[Alpha]] and [[Beta]] in the body.";
+        assert_eq!(parse_targets(body), vec!["Alpha", "Beta"]);
+    }
+
+    #[test]
+    fn wikilink_targets_extracts_pipe_aliases() {
+        // `[[Target|Alias]]` must yield the target half, not the alias.
+        let body = "See [[Alpha|first]] and [[Beta|second]].";
+        assert_eq!(parse_targets(body), vec!["Alpha", "Beta"]);
+    }
+
+    #[test]
+    fn wikilink_targets_trims_surrounding_whitespace() {
+        let body = "[[  Alpha  ]] and [[\tBeta\t|alias]]";
+        assert_eq!(parse_targets(body), vec!["Alpha", "Beta"]);
+    }
+
+    #[test]
+    fn wikilink_targets_skips_empty_targets() {
+        // `[[]]` and `[[|alias]]` carry no target — drop both.
+        let body = "[[]] [[|alias]] [[Alpha]] [[ |only-pipe]]";
+        assert_eq!(parse_targets(body), vec!["Alpha"]);
+    }
+
+    #[test]
+    fn wikilink_targets_handles_no_links() {
+        assert!(parse_targets("plain body without any wikilinks").is_empty());
+    }
+
+    #[test]
+    fn wikilink_targets_handles_unclosed_bracket() {
+        // An unterminated `[[Foo` must not panic and must not yield a
+        // false-positive target.  Mirrors the React parser's tolerance.
+        assert!(parse_targets("dangling [[Foo and nothing else").is_empty());
+    }
+
+    /// Three-note vault where A → B and C → B; `backlinks(B)` must
+    /// return `[A.id, C.id]` sorted ascending so iteration-order
+    /// jitter from the underlying `HashMap` doesn't leak into the
+    /// public contract.
+    #[test]
+    fn backlinks_collects_inbound_links() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "A.md", "body links to [[B]].");
+        write(dir.path(), "B.md", "I am the target.");
+        write(dir.path(), "C.md", "C also points at [[B|nickname]].");
+        let v = Vault::open_at(dir.path()).unwrap();
+        let id_for_title = |t: &str| {
+            v.iter_notes()
+                .find(|n| n.title.as_ref() == t)
+                .map(|n| n.id)
+                .expect("id lookup")
+        };
+        let id_a = id_for_title("A");
+        let id_b = id_for_title("B");
+        let id_c = id_for_title("C");
+        let mut expected = vec![id_a, id_c];
+        expected.sort();
+        assert_eq!(v.backlinks(id_b), expected);
+    }
+
+    #[test]
+    fn backlinks_excludes_the_active_note_itself() {
+        // A note linking to its own title (`[[A]]` inside `A.md`) must
+        // not surface as its own backlink — the neighbourhood predicate
+        // excludes the active note by id.
+        let dir = tempdir().unwrap();
+        write(dir.path(), "A.md", "self reference [[A]] inside body");
+        write(dir.path(), "B.md", "[[A]] from B");
+        let v = Vault::open_at(dir.path()).unwrap();
+        let id_a = v.iter_notes().find(|n| n.title.as_ref() == "A").unwrap().id;
+        let id_b = v.iter_notes().find(|n| n.title.as_ref() == "B").unwrap().id;
+        assert_eq!(v.backlinks(id_a), vec![id_b]);
+    }
+
+    #[test]
+    fn backlinks_returns_empty_for_unknown_id() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "A.md", "body");
+        let v = Vault::open_at(dir.path()).unwrap();
+        assert!(v.backlinks(NoteId(9_999)).is_empty());
+    }
+
+    #[test]
+    fn outbound_links_resolves_targets_to_ids() {
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "A.md",
+            "links to [[B]] and [[C|alias]] and [[Missing]]",
+        );
+        write(dir.path(), "B.md", "body");
+        write(dir.path(), "C.md", "body");
+        let v = Vault::open_at(dir.path()).unwrap();
+        let id_a = v.iter_notes().find(|n| n.title.as_ref() == "A").unwrap().id;
+        let id_b = v.iter_notes().find(|n| n.title.as_ref() == "B").unwrap().id;
+        let id_c = v.iter_notes().find(|n| n.title.as_ref() == "C").unwrap().id;
+        let mut expected = vec![id_b, id_c];
+        expected.sort();
+        let got = v.outbound_links(id_a);
+        assert_eq!(got, expected, "missing-target wikilinks must drop silently");
+    }
+
+    #[test]
+    fn outbound_links_deduplicates_repeated_targets() {
+        // The same `[[B]]` mentioned three times must surface `B.id`
+        // only once — neighbourhood-mode's id-set predicate would dupe
+        // the entry otherwise.
+        let dir = tempdir().unwrap();
+        write(dir.path(), "A.md", "[[B]] [[B|alias]] and once more [[B]]");
+        write(dir.path(), "B.md", "body");
+        let v = Vault::open_at(dir.path()).unwrap();
+        let id_a = v.iter_notes().find(|n| n.title.as_ref() == "A").unwrap().id;
+        let id_b = v.iter_notes().find(|n| n.title.as_ref() == "B").unwrap().id;
+        assert_eq!(v.outbound_links(id_a), vec![id_b]);
+    }
+
+    #[test]
+    fn outbound_links_excludes_self_link() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "A.md", "self [[A]] and [[B]]");
+        write(dir.path(), "B.md", "body");
+        let v = Vault::open_at(dir.path()).unwrap();
+        let id_a = v.iter_notes().find(|n| n.title.as_ref() == "A").unwrap().id;
+        let id_b = v.iter_notes().find(|n| n.title.as_ref() == "B").unwrap().id;
+        assert_eq!(v.outbound_links(id_a), vec![id_b]);
+    }
+
+    #[test]
+    fn outbound_links_returns_empty_for_unknown_id() {
+        let dir = tempdir().unwrap();
+        write(dir.path(), "A.md", "body");
+        let v = Vault::open_at(dir.path()).unwrap();
+        assert!(v.outbound_links(NoteId(9_999)).is_empty());
     }
 }
