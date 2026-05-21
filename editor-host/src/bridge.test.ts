@@ -644,3 +644,132 @@ describe("dispatchToHost set_raw_mode", () => {
         expect(handlers.rawNoteCalls).toEqual([]);
     });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 9 worklist 9.2.6 — `Headings` envelope emission.
+// The dispatcher pushes a `headings` envelope after the editor mounts
+// a new markdown body (so the native ToC panel populates immediately)
+// and after the raw → rich flip (so the panel refreshes when the user
+// hops back into BlockNote).  Raw `note_open` and rich → raw send an
+// empty list so the panel clears its rows.
+// ---------------------------------------------------------------------------
+
+describe("dispatchToHost headings emission", () => {
+    let editor: BlockNoteEditor;
+    beforeEach(() => {
+        editor = BlockNoteEditor.create();
+    });
+
+    /** Capture every `postMessage` payload from `send` inside `body`. */
+    function withPostedIpc(body: () => void): string[] {
+        const posted: string[] = [];
+        const w = window as unknown as { ipc?: { postMessage(m: string): void } };
+        const prev = w.ipc;
+        w.ipc = { postMessage: (m: string) => posted.push(m) };
+        try {
+            body();
+        } finally {
+            w.ipc = prev;
+        }
+        return posted;
+    }
+
+    it("sends headings after a markdown note_open", () => {
+        const handlers = makeHandlers();
+        const posted = withPostedIpc(() => {
+            dispatchToHost(
+                editor,
+                {
+                    k: "note_open",
+                    v: {
+                        id: 1,
+                        path: "/v/a.md",
+                        body: "# Hello\n\nbody\n\n## World\n",
+                    },
+                },
+                handlers,
+            );
+        });
+
+        const headings = posted
+            .map((line) => JSON.parse(line) as { k: string; v?: { items?: unknown[] } })
+            .filter((env) => env.k === "headings");
+        expect(headings).toHaveLength(1);
+        // BlockNote's parse gives the headings real block ids, so we
+        // only assert the visible shape (level + text) — the anchor is
+        // tied to the parser's id assignment.
+        const items =
+            headings[0]?.v?.items as Array<{ level: number; text: string }> | undefined;
+        expect(items?.length).toBeGreaterThanOrEqual(2);
+        expect(items?.[0]?.level).toBe(1);
+        expect(items?.[0]?.text).toBe("Hello");
+        expect(items?.[1]?.level).toBe(2);
+        expect(items?.[1]?.text).toBe("World");
+    });
+
+    it("sends an empty headings list when a raw note opens", () => {
+        const handlers = makeHandlers();
+        const posted = withPostedIpc(() => {
+            dispatchToHost(
+                editor,
+                {
+                    k: "note_open",
+                    v: { id: 7, path: "/v/config.yaml", body: "key: 1\n" },
+                },
+                handlers,
+            );
+        });
+        const headings = posted
+            .map((line) => JSON.parse(line) as { k: string; v?: { items?: unknown[] } })
+            .filter((env) => env.k === "headings");
+        expect(headings).toEqual([
+            { k: "headings", v: { items: [] } },
+        ]);
+    });
+
+    it("clears headings on a rich → raw flip and re-emits on raw → rich", () => {
+        const handlers = makeHandlers();
+        // Open a markdown note so the dispatcher mounts BlockNote.
+        withPostedIpc(() => {
+            dispatchToHost(
+                editor,
+                {
+                    k: "note_open",
+                    v: { id: 9, path: "/v/note.md", body: "# Hi\n\nbody\n" },
+                },
+                handlers,
+            );
+        });
+
+        // rich → raw should emit `{ items: [] }`.
+        const richToRaw = withPostedIpc(() => {
+            dispatchToHost(
+                editor,
+                { k: "set_raw_mode", v: { enabled: true } },
+                handlers,
+            );
+        });
+        const richToRawHeadings = richToRaw
+            .map((line) => JSON.parse(line) as { k: string; v?: { items?: unknown[] } })
+            .filter((env) => env.k === "headings");
+        expect(richToRawHeadings).toEqual([
+            { k: "headings", v: { items: [] } },
+        ]);
+
+        // raw → rich should emit the freshly-parsed outline.
+        const rawToRich = withPostedIpc(() => {
+            dispatchToHost(
+                editor,
+                { k: "set_raw_mode", v: { enabled: false } },
+                handlers,
+            );
+        });
+        const rawToRichHeadings = rawToRich
+            .map((line) => JSON.parse(line) as { k: string; v?: { items?: Array<{ text: string }> } })
+            .filter((env) => env.k === "headings");
+        expect(rawToRichHeadings).toHaveLength(1);
+        const items = rawToRichHeadings[0]?.v?.items;
+        expect(items?.length).toBeGreaterThanOrEqual(1);
+        expect(items?.[0]?.text).toBe("Hi");
+    });
+});

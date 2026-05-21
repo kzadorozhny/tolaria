@@ -218,10 +218,25 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
             IconName::Asterisk,
             "Open AI assistant",
         ))
-        .child(stub_cell(
+        // Worklist 9.2.6 — clicking dispatches `ToggleTableOfContents`;
+        // the chrome-side handler resolves the active workspace and
+        // attaches / toggles the `toc_panel::TocPanel` in the right
+        // dock.  Active-state colour treatment is deferred to a
+        // follow-up: tracking the panel-open state across renders
+        // would couple `note_item` to the workspace dock, and the
+        // dock toggle already gives the user visual feedback via the
+        // panel itself appearing or disappearing.
+        .child(toolbar_cell(
             "note-toolbar-toc",
             IconName::Menu,
             "Table of contents",
+            |_window, cx| {
+                cx.dispatch_action(&actions::ToggleTableOfContents);
+                log::info!(
+                    target: "note_item::toolbar",
+                    "toc: dispatched ToggleTableOfContents"
+                );
+            },
         ))
         .child(toolbar_cell(
             "note-toolbar-reveal",

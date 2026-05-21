@@ -26,7 +26,7 @@
 9.2.3. Neighbourhood action → backlink filter in note-list
 9.2.4. ✅ Raw-mode toggle → editor-host raw bridge
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
-9.2.6. ⏳ ToC action → new `toc_panel` crate + headings bridge
+9.2.6. ✅ ToC action → new `toc_panel` crate + headings bridge
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
@@ -222,6 +222,55 @@ nodes extracted from the BlockNote editor.
 variant — no existing `editor_bridge` envelope carries headings.
 **Size:** medium — sizeable bridge surface but the panel itself is
 read-only.
+
+**Closure (commit `<this-commit>`).**  Seam: the annotation above
+names `ToHost::Headings` but the editor is the *sender* and the
+native chrome is the *receiver*, so the variant lives on
+`editor_bridge::FromHost::Headings(Headings { items: Vec<Heading> })`
+(same direction-correction the 9.2.4 closure flagged for
+`SetRawMode`).  `Heading { level: u8, text: String, anchor: String }`
+ships with serde round-trip + empty-list tests pinning the wire
+shape `{"k":"headings","v":{"items":[…]}}`.  Editor host
+(`editor-host/src/EditorApp.tsx`) extracts headings from BlockNote
+blocks (`type === "heading"`, `props.level ∈ {1,2,3}`, joined text
+fragments, anchor = block id with slug fallback), emits once
+synchronously on every markdown `note_open` and on raw → rich
+flip, sends an empty list on raw `note_open` and rich → raw, and
+debounces document changes at `HEADINGS_DEBOUNCE_MS = 300` ms via
+`editor.onChange`.  New crate `crates/toc_panel` mirrors
+`ai_panel`'s right-dock shape: `TocPanel::set_headings(items, cx)`
+short-circuits when the new list is byte-identical (avoids spurious
+re-renders from the workspace's `cx.observe(&right_dock, …)`
+cascade), `DockPosition::Right`, `default_size = px(300.0)`,
+`starts_open = true` (the action handler is the actual gate).
+`note_item` plumbing: `Outcome::EmitHeadings(Headings)` carries the
+wire payload verbatim; `install_dispatch_task` emits
+`HeadingsUpdatedEvent { headings: payload.items }` to workspace
+subscribers.  `workspace::TolariaWorkspace` gains `attach_right_dock`
++ `toggle_right_dock` + `is_right_dock_open` + `has_right_dock_panel`
+(with a new `Dock::has_panel()` to distinguish Empty from
+Closed-but-attached); the workspace `cx.observe(&right_dock, …)` now
+matches the left-dock observer so attach / toggle re-renders the
+shell.  `ToggleTableOfContents` handler in
+`crates/tolaria/src/main.rs` attaches a fresh `TocPanel` on first
+dispatch (via `has_right_dock_panel == false`) and toggles thereafter;
+a shared `Rc<RefCell<Option<Entity<TocPanel>>>>` slot lets the
+`HeadingsUpdatedEvent` subscriber write through without re-resolving
+the workspace.  Note-toolbar's `note-toolbar-toc` cell upgrades from
+`stub_cell` to `toolbar_cell` dispatching the action (glyph stays
+`IconName::Menu`).
+
+**Deferred to a `9.2.6-followup`:** (1) heading-click body
+navigation — no `ToHost::ScrollToAnchor` envelope yet; the row's
+`on_click` logs the anchor but doesn't emit, and `TocHeadingClicked`
+is wired as the `EventEmitter` payload so the followup can hang the
+scroll dispatch off it; (2) ToC button active-state colour treatment
+on the toolbar (would need workspace-state plumbing back into
+`note_item`, which would couple the toolbar to the dock — the dock
+toggle already gives the user feedback by the panel appearing /
+disappearing, so the cell stays untreated).  9.2.8 (Inspector Panel
+outline section) consumes the same `FromHost::Headings` envelope
+when it lands; no further bridge work needed there.
 
 #### 9.2.7
 

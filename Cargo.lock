@@ -8074,6 +8074,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "toc_panel"
+version = "0.1.0"
+dependencies = [
+ "actions",
+ "editor_bridge",
+ "gpui",
+ "gpui-component",
+ "gpui_platform",
+ "log",
+ "workspace",
+]
+
+[[package]]
 name = "tokio"
 version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8142,6 +8155,7 @@ dependencies = [
  "settings_store",
  "sidebar_panel",
  "theme",
+ "toc_panel",
  "ui",
  "vault",
  "workspace",

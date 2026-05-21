@@ -8,7 +8,7 @@ import { SuggestionMenuController } from "@blocknote/react";
 // against Raw threw `Cannot read properties of undefined (reading
 // 'Button')` on the first mousemove (worklist 1.2 → 2.24).
 import { BlockNoteView } from "@blocknote/shadcn";
-import { onReceive, send, type ThemeMode, type ToHost } from "./bridge.ts";
+import { onReceive, send, type Heading, type ThemeMode, type ToHost } from "./bridge.ts";
 import { createEditor } from "./setupEditor.ts";
 import { blocksToMarkdown, markdownToBlocks, replaceDocument } from "./richEditorMarkdown.ts";
 import { splitFrontmatter } from "./frontmatter.ts";
@@ -143,6 +143,77 @@ function buildMarkdownSaveBody(
 }
 
 /**
+ * Phase 9 worklist 9.2.6 — extract the heading outline from a
+ * BlockNote document for the native ToC panel.
+ *
+ * Walks the top-level blocks and produces a flat list of
+ * `{ level, text, anchor }` triples in document order.  Limits the
+ * level range to BlockNote's `1..=3` (matches React's
+ * `tableOfContentsModel.ts::isTocLevel`) so the wire payload stays in
+ * sync with the chrome side's clamp.  Returns an empty array when the
+ * document has no headings — the bridge's `Headings { items: [] }`
+ * envelope signals that explicitly so the panel can show its empty
+ * placeholder.
+ *
+ * Exported for `EditorApp.headings.test.ts` — keep the logic pure
+ * (input → output) so the test doesn't need a DOM.
+ */
+export interface BlockNoteHeadingBlock {
+    type: string;
+    id?: string;
+    props?: { level?: number };
+    content?: Array<{ type?: string; text?: string }>;
+}
+
+export function extractHeadings(blocks: BlockNoteHeadingBlock[]): Heading[] {
+    const out: Heading[] = [];
+    for (const block of blocks) {
+        if (block.type !== "heading") continue;
+        const level = block.props?.level;
+        if (typeof level !== "number" || level < 1 || level > 3) continue;
+        const text = (block.content ?? [])
+            .filter((item) => item.type === "text")
+            .map((item) => item.text ?? "")
+            .join("")
+            .trim();
+        if (text === "") continue;
+        const anchor = block.id ?? slugify(text);
+        out.push({ level, text, anchor });
+    }
+    return out;
+}
+
+/**
+ * Stable URL-shape slug for a heading text.  Used as the anchor when
+ * BlockNote hasn't assigned a block id yet (e.g. during initial parse
+ * before the editor mounts).  Mirrors the spirit of GitHub's
+ * heading-anchor algorithm: lowercase, swap non-word characters for
+ * `-`, collapse runs.  The native side treats the value as opaque, so
+ * the exact algorithm only needs to be **stable** for a given text —
+ * not human-recognisable.
+ */
+function slugify(text: string): string {
+    const lowered = text.toLowerCase();
+    const normalised = lowered
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+    return normalised === "" ? "heading" : normalised;
+}
+
+/**
+ * Push a freshly-extracted heading outline up through the bridge.
+ * No-op when the editor is empty or the active id is null (the
+ * dispatcher would route a stale id to a foreign note).
+ *
+ * Factored into a tiny helper so both the `note_open` branch and the
+ * debounced `onChange` path push exactly the same envelope shape.
+ */
+function sendHeadings(editor: BlockNoteEditor): void {
+    const items = extractHeadings(editor.document as BlockNoteHeadingBlock[]);
+    send({ k: "headings", v: { items } });
+}
+
+/**
  * Dispatch a single [`ToHost`] envelope onto the editor + side-effect
  * sinks.  Exhaustive `switch` over the envelope discriminants — the
  * TypeScript compiler treats a future variant as a type error here, so
@@ -172,6 +243,11 @@ export function dispatchToHost(
                     path: msg.v.path,
                     body: msg.v.body,
                 });
+                // Worklist 9.2.6 — raw notes carry no rich outline.
+                // Emit an empty Headings envelope so the native panel
+                // clears its list rather than showing the previous
+                // markdown note's headings against the raw body.
+                send({ k: "headings", v: { items: [] } });
             } else {
                 handlers.setRawNote(null);
                 // Peel YAML frontmatter off before handing the body to
@@ -210,6 +286,13 @@ export function dispatchToHost(
                 );
                 const parsed = markdownToBlocks(editor, trimmed);
                 replaceDocument(editor, parsed);
+                // Worklist 9.2.6 — push the freshly-loaded outline up
+                // to the native ToC panel.  Doing this inside the
+                // dispatcher (rather than relying on the debounced
+                // `onChange` path) makes the first paint of a new
+                // note land an outline immediately, with no delay
+                // proportional to the debounce window.
+                sendHeadings(editor);
             }
             break;
         }
@@ -277,6 +360,10 @@ export function dispatchToHost(
                 // the raw editor.
                 const body = buildMarkdownSaveBody(editor, handlers);
                 handlers.setRawNote({ id, path, body });
+                // Worklist 9.2.6 — raw mode has no outline; clear the
+                // panel so it doesn't keep showing the rich-mode list
+                // against the raw buffer.
+                send({ k: "headings", v: { items: [] } });
             } else {
                 // raw → rich: flush the live CodeMirror buffer back
                 // through BlockNote.  Mirrors the markdown branch of
@@ -301,6 +388,10 @@ export function dispatchToHost(
                 );
                 const parsed = markdownToBlocks(editor, trimmed);
                 replaceDocument(editor, parsed);
+                // Worklist 9.2.6 — back into rich mode; re-emit the
+                // outline so the native panel populates with the
+                // freshly-parsed heading blocks.
+                sendHeadings(editor);
             }
             break;
         }
@@ -315,6 +406,17 @@ export function dispatchToHost(
  *  auto-save debounce; tight enough that the status bar lights up
  *  responsively, loose enough that fast typists don't spam IPC. */
 const DIRTY_DEBOUNCE_MS = 150;
+
+/**
+ * Debounce window for `Headings` notifications (worklist 9.2.6).
+ * Slightly larger than the dirty window because the headings payload
+ * is a list-walk + array build per send, and the panel update is
+ * idempotent — the user doesn't perceive a 300 ms lag in a side
+ * panel.  React's `TableOfContentsPanel` uses
+ * `TOC_BUILD_DEBOUNCE_MS = 250`; we round up so the WebView's IPC
+ * cost doesn't trip the throughput budget on hot typing.
+ */
+const HEADINGS_DEBOUNCE_MS = 300;
 
 /**
  * Top-level React component for the editor host.
@@ -363,6 +465,10 @@ export function EditorApp() {
     const activePathRef = useRef<string | null>(null);
     const dirtyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const dirtyAnnouncedForIdRef = useRef<number | null>(null);
+    // Worklist 9.2.6 — single shared timer for the debounced
+    // `headings` IPC send.  Mirrors the dirty-timer shape so the two
+    // signals share a lifecycle pattern (`cancelDirty` + cleanup).
+    const headingsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const editorMountedRef = useRef(true);
     // Raw-mode latest-content mirror.  The CodeMirror view updates this
@@ -402,6 +508,13 @@ export function EditorApp() {
         if (dirtyTimerRef.current !== null) {
             clearTimeout(dirtyTimerRef.current);
             dirtyTimerRef.current = null;
+        }
+    };
+
+    const cancelHeadings = (): void => {
+        if (headingsTimerRef.current !== null) {
+            clearTimeout(headingsTimerRef.current);
+            headingsTimerRef.current = null;
         }
     };
 
@@ -624,9 +737,26 @@ export function EditorApp() {
                 dirtyAnnouncedForIdRef.current = id;
                 send({ k: "dirty", v: { id } });
             }, DIRTY_DEBOUNCE_MS);
+
+            // Worklist 9.2.6 — debounce the heading-outline send so a
+            // typist editing a heading row doesn't flood the IPC
+            // channel.  Raw notes have no rich outline, so the raw
+            // branch (the `if (!rawNote)` guard above) does the
+            // markdown auto-save but we skip the headings send here —
+            // raw mode has already pushed an empty list via the
+            // `set_raw_mode` / `note_open` raw branches.
+            if (!rawNote) {
+                cancelHeadings();
+                headingsTimerRef.current = setTimeout(() => {
+                    headingsTimerRef.current = null;
+                    if (activeIdRef.current !== id) return;
+                    sendHeadings(editor);
+                }, HEADINGS_DEBOUNCE_MS);
+            }
         });
         return () => {
             cancelDirty();
+            cancelHeadings();
             unsubscribe?.();
         };
     }, [editor, rawNote, saveLifecycle]);

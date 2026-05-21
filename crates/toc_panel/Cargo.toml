@@ -1,0 +1,19 @@
+[package]
+name = "toc_panel"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Table-of-contents panel for Tolaria (ADR-0115 Phase 9 worklist 9.2.6)."
+
+[dependencies]
+gpui.workspace = true
+gpui-component.workspace = true
+editor_bridge = { path = "../editor_bridge" }
+workspace = { path = "../workspace" }
+actions = { path = "../actions" }
+log.workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }

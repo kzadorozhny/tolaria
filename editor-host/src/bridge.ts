@@ -31,13 +31,30 @@ export interface Mods {
     shift?: boolean;
 }
 
+/**
+ * One heading entry shared with the native `editor_bridge::Heading`
+ * struct.  The native ToC panel uses `level` for indentation and
+ * `anchor` for click navigation; `text` is the visible label.
+ *
+ * `anchor` is the BlockNote block id when one is available; otherwise
+ * a slug derived from `text`.  The native side treats the value as
+ * opaque — it must only stay stable for a given heading so a click
+ * always resolves to the same point in the editor body.
+ */
+export interface Heading {
+    level: number;
+    text: string;
+    anchor: string;
+}
+
 export type FromHost =
     | { k: "ready" }
     | { k: "dirty"; v: { id: number } }
     | { k: "save"; v: { id: number; body: string } }
     | { k: "saved"; v: { id: number } }
     | { k: "link_click"; v: { target: string } }
-    | { k: "keydown"; v: { key: string; mods: Mods } };
+    | { k: "keydown"; v: { key: string; mods: Mods } }
+    | { k: "headings"; v: { items: Heading[] } };
 
 // ---------------------------------------------------------------------------
 // IPC plumbing

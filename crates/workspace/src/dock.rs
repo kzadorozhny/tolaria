@@ -112,6 +112,16 @@ impl Dock {
             _ => None,
         }
     }
+
+    /// Whether any panel has been attached to this dock (open or
+    /// closed).  Phase 9 worklist 9.2.6 — chrome handlers use this to
+    /// distinguish "first-ever attach" from "toggle existing".  The
+    /// public [`Self::active_panel`] only returns `Some` when the
+    /// dock is open, so a closed-but-attached dock would otherwise be
+    /// indistinguishable from a truly empty one.
+    pub fn has_panel(&self) -> bool {
+        !matches!(self.state, DockState::Empty)
+    }
 }
 
 impl Render for Dock {

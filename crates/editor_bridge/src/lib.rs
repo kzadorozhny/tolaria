@@ -141,6 +141,18 @@ pub enum FromHost {
     /// the `WKWebView` dispatches the `Save` action, satisfying
     /// ADR-0115 §6 re-evaluation trigger #4.
     Keydown(Keydown),
+
+    /// Editor extracted the heading outline from its current document
+    /// and is pushing it up to the native shell (Phase 9 worklist
+    /// 9.2.6).  The native `toc_panel` consumes this to render the
+    /// table of contents in the workspace's right dock.  Emitted on
+    /// every document change (debounced) plus once on every
+    /// `note_open` so the panel always reflects the active buffer.
+    ///
+    /// The annotation in the worklist points at `ToHost::*` — the
+    /// editor is the *sender* here, so the variant lives on
+    /// `FromHost` instead.
+    Headings(Headings),
 }
 
 /// Reference to a note by ID, used by stateless [`FromHost`] events.
@@ -200,6 +212,39 @@ pub struct Keydown {
     /// Active modifier set at keydown time.
     #[serde(default)]
     pub mods: Mods,
+}
+
+/// One heading entry shared between [`FromHost::Headings`] and the
+/// native `toc_panel` view (Phase 9 worklist 9.2.6).
+///
+/// `level` is the markdown heading depth (`#` → `1`, `##` → `2`, …);
+/// `text` is the trimmed heading title; `anchor` is a stable
+/// identifier the native side uses for click navigation.  When the
+/// editor host has a real BlockNote block id, it ships that string
+/// verbatim — otherwise it falls back to a slug derived from `text`
+/// (mirrors React's `resolveTocItemBlockId` fallback).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Heading {
+    /// Markdown heading depth, `1` for `#`, `2` for `##`, etc.  The
+    /// editor host clamps to BlockNote's `1..=3` range, but native
+    /// consumers must tolerate any positive value defensively.
+    pub level: u8,
+    /// Trimmed heading title (no leading `#`s, no trailing
+    /// whitespace).
+    pub text: String,
+    /// Stable id used by the native ToC panel for click navigation.
+    /// BlockNote block id when one is available; otherwise a slug of
+    /// `text`.
+    pub anchor: String,
+}
+
+/// Payload for [`FromHost::Headings`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Headings {
+    /// Ordered list of headings as they appear in the document.  An
+    /// empty list signals the editor has no headings (the panel
+    /// renders a placeholder).
+    pub items: Vec<Heading>,
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +492,46 @@ mod tests {
     }
 
     #[test]
+    fn from_host_headings_roundtrip() {
+        // Worklist 9.2.6 — the editor extracts the heading outline and
+        // pushes it through this envelope on every document change.
+        // Pin the wire shape so the TypeScript side and the native
+        // toc_panel can't drift independently.
+        let msg = FromHost::Headings(Headings {
+            items: vec![
+                Heading {
+                    level: 1,
+                    text: "Introduction".into(),
+                    anchor: "block-1".into(),
+                },
+                Heading {
+                    level: 2,
+                    text: "Details".into(),
+                    anchor: "block-2".into(),
+                },
+            ],
+        });
+        let json = encode_from_host(&msg).unwrap();
+        assert!(json.contains(r#""k":"headings""#), "envelope kind tag");
+        assert!(json.contains(r#""level":1"#));
+        assert!(json.contains(r#""text":"Introduction""#));
+        assert!(json.contains(r#""anchor":"block-1""#));
+        assert_eq!(decode_from_host(&json).unwrap(), msg);
+    }
+
+    #[test]
+    fn from_host_headings_empty_list_roundtrips() {
+        // The empty-list case is load-bearing — the panel uses it to
+        // distinguish "no headings yet" from "panel not subscribed",
+        // so the serde defaulting must not collapse `items: []` into
+        // an omitted field.
+        let msg = FromHost::Headings(Headings { items: Vec::new() });
+        let json = encode_from_host(&msg).unwrap();
+        assert_eq!(json, r#"{"k":"headings","v":{"items":[]}}"#);
+        assert_eq!(decode_from_host(&json).unwrap(), msg);
+    }
+
+    #[test]
     fn bridge_error_preserves_source_chain() {
         // The `#[source]` attribute on BridgeError::Decode keeps the
         // inner serde_json::Error available via Error::source(), which
@@ -521,6 +606,10 @@ mod tests {
                     mods: Mods::default(),
                 }),
                 "keydown",
+            ),
+            (
+                FromHost::Headings(Headings { items: Vec::new() }),
+                "headings",
             ),
         ];
         for (msg, want) in cases {

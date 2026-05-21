@@ -36,8 +36,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-pub use editor_bridge::ThemeMode;
-use editor_bridge::{encode_to_host, FromHost, Mods, NoteOpen, SetRawMode, ToHost};
+use editor_bridge::{encode_to_host, FromHost, Headings, Mods, NoteOpen, SetRawMode, ToHost};
+pub use editor_bridge::{Heading, ThemeMode};
 use gpui::{
     div, App, Context, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled,
     Task, Window,
@@ -220,6 +220,17 @@ pub struct KeydownEvent {
     pub mods: Mods,
 }
 
+/// Emitted by [`NoteItem`] when the embedded editor pushes up a new
+/// heading outline via [`editor_bridge::FromHost::Headings`] (Phase 9
+/// worklist 9.2.6).  Workspace subscribers route this to the
+/// `toc_panel::TocPanel`'s `set_headings` so the right-dock list
+/// stays in sync with the active note's body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadingsUpdatedEvent {
+    /// Ordered headings as they appear in the document.
+    pub headings: Vec<Heading>,
+}
+
 /// Classified link target from [`Outcome::NavigateLink`].  Lets the
 /// caller dispatch into `vault::search_titles` (for wikilinks) or
 /// `cx.open_url` (for external URLs) without re-parsing the string.
@@ -283,6 +294,14 @@ pub enum Outcome {
     /// pure-logic state machine instead of leaving the dispatch loop
     /// to poll for it on every message.
     DeliverPending(NoteOpen),
+    /// Editor pushed a fresh heading outline via
+    /// [`FromHost::Headings`] (Phase 9 worklist 9.2.6).  The dispatch
+    /// loop emits a [`HeadingsUpdatedEvent`] so the workspace's
+    /// `toc_panel` subscriber can mirror the headings into the
+    /// right-dock list.  Carries the wire payload verbatim — the
+    /// dispatch task does not unpack `items` here so future wire
+    /// fields (e.g. an active-heading id) land naturally.
+    EmitHeadings(Headings),
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +413,15 @@ impl NoteItem {
                 key: SharedString::from(k.key),
                 mods: k.mods,
             }),
+            // Worklist 9.2.6 — headings flow straight through to the
+            // workspace via a typed event.  The pure-logic handler
+            // doesn't gate on note id: the editor host only sends
+            // headings for the currently-mounted document, and the
+            // panel renders whatever lands most recently.  If a stale
+            // envelope ever arrives (e.g. mid-tab-swap) the workspace
+            // subscriber can debounce; today the simplest contract
+            // wins.
+            FromHost::Headings(h) => Outcome::EmitHeadings(h),
         }
     }
 
@@ -675,6 +703,15 @@ impl NoteItem {
                         cx.emit(LinkClickEvent { target });
                     }
                     Outcome::DispatchKeydown(keydown) => cx.emit(keydown),
+                    Outcome::EmitHeadings(payload) => {
+                        // Worklist 9.2.6 — forward straight to
+                        // workspace subscribers (the `toc_panel`
+                        // entity hangs its `set_headings` call off
+                        // this event).
+                        cx.emit(HeadingsUpdatedEvent {
+                            headings: payload.items,
+                        });
+                    }
                     Outcome::None => {}
                 });
             }
@@ -685,6 +722,7 @@ impl NoteItem {
 
 impl EventEmitter<LinkClickEvent> for NoteItem {}
 impl EventEmitter<KeydownEvent> for NoteItem {}
+impl EventEmitter<HeadingsUpdatedEvent> for NoteItem {}
 
 impl Item for NoteItem {
     fn tab_content_text(&self, _cx: &App) -> SharedString {
@@ -1113,7 +1151,7 @@ mod macos {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use editor_bridge::{Keydown, LinkClick, NoteRef, NoteSave};
+    use editor_bridge::{Headings, Keydown, LinkClick, NoteRef, NoteSave};
     use std::path::PathBuf;
 
     fn fresh_note(id: u64) -> Note {
@@ -1570,6 +1608,82 @@ mod tests {
         assert_eq!(got.len(), 1, "dispatch task must emit a KeydownEvent");
         assert_eq!(got[0].key.as_ref(), "s");
         assert!(got[0].mods.meta);
+    }
+
+    /// Worklist 9.2.6 — `FromHost::Headings` arriving on the channel
+    /// must surface as `HeadingsUpdatedEvent` carrying the same items
+    /// list.  Locks the `EmitHeadings` arm of `apply_from_host` end-to-end
+    /// so a future refactor that drops the Outcome variant trips here.
+    #[gpui::test]
+    fn dispatch_task_emits_headings_event(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let entity = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(fresh_note(1))));
+        let (tx, rx) = flume::unbounded::<FromHost>();
+        cx.update(|cx| NoteItem::install_dispatch_task(entity.downgrade(), rx, cx));
+
+        let received: Rc<RefCell<Vec<HeadingsUpdatedEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        cx.update(|cx| {
+            let recv = received.clone();
+            cx.subscribe(
+                &entity,
+                move |_entity, event: &HeadingsUpdatedEvent, _cx| {
+                    recv.borrow_mut().push(event.clone());
+                },
+            )
+            .detach();
+        });
+        cx.run_until_parked();
+
+        let payload = vec![
+            Heading {
+                level: 1,
+                text: "Top".into(),
+                anchor: "block-1".into(),
+            },
+            Heading {
+                level: 2,
+                text: "Sub".into(),
+                anchor: "block-2".into(),
+            },
+        ];
+        tx.send(FromHost::Headings(Headings {
+            items: payload.clone(),
+        }))
+        .unwrap();
+        cx.run_until_parked();
+
+        let got = received.borrow().clone();
+        assert_eq!(
+            got.len(),
+            1,
+            "dispatch task must emit exactly one HeadingsUpdatedEvent"
+        );
+        assert_eq!(got[0].headings, payload);
+    }
+
+    /// Worklist 9.2.6 — the pure-logic handler maps
+    /// `FromHost::Headings` to [`Outcome::EmitHeadings`] without
+    /// touching anything else on the item.  Pin the no-side-effect
+    /// contract so a future refactor doesn't accidentally couple the
+    /// outline to dirty / editor_ready state.
+    #[test]
+    fn apply_from_host_headings_emits_outcome() {
+        let mut item = NoteItem::new_for_tests(fresh_note(7));
+        let payload = Headings {
+            items: vec![Heading {
+                level: 1,
+                text: "First".into(),
+                anchor: "a".into(),
+            }],
+        };
+        let outcome = item.apply_from_host(FromHost::Headings(payload.clone()));
+        assert_eq!(outcome, Outcome::EmitHeadings(payload));
+        // Side-effect-free: the item's other fields stay untouched.
+        assert!(!item.is_dirty());
+        assert!(!item.editor_ready);
     }
 
     /// Phase 8 worklist 1.2 — the rendered toolbar must span the full

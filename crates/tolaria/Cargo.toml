@@ -30,6 +30,7 @@ note_item = { path = "../note_item" }
 note_list_pane = { path = "../note_list_pane" }
 settings_store = { path = "../settings_store" }
 sidebar_panel = { path = "../sidebar_panel" }
+toc_panel = { path = "../toc_panel" }
 theme = { path = "../theme" }
 paths = { path = "../paths" }
 ui = { path = "../ui" }

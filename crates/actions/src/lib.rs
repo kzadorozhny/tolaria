@@ -57,6 +57,17 @@ gpui::actions!(
         /// React parity (the React `BreadcrumbBar.tsx` `RawToggleButton`
         /// is mouse-only); users can map one via the user keymap.
         ToggleRawEditor,
+        /// Attach (or close) the table-of-contents panel in the
+        /// workspace's right dock (Phase 9 worklist 9.2.6).
+        ///
+        /// Chrome owns the dock state; the action handler in
+        /// `tolaria/src/main.rs` resolves the active workspace and
+        /// either attaches a fresh `toc_panel::TocPanel` or toggles
+        /// the existing one closed.  Dispatched from the note-toolbar
+        /// `note-toolbar-toc` cell (worklist 9.2.6); no default
+        /// keybinding (React parity — the React
+        /// `BreadcrumbBar.tsx::TableOfContentsAction` is mouse-only).
+        ToggleTableOfContents,
         CloseTab,
         /// Phase 8.13 — dismiss the active modal in `TolariaWorkspace`'s
         /// `ModalLayer`.  Bound to `escape` in the modal-active context

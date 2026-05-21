@@ -114,6 +114,14 @@ impl TolariaWorkspace {
         // vec skip the left-dock entry entirely when `is_open()` is
         // false, collapsing the column.
         cx.observe(&left_dock, |_, _, cx| cx.notify()).detach();
+        // Mirror the left-dock observer for the right dock: Phase 9
+        // worklist 9.2.6 needs the workspace to re-render whenever the
+        // ToC / inspector right-dock panels attach or toggle so the
+        // outer panels vec re-evaluates `right_dock.is_some()` and the
+        // column appears / disappears in lockstep.  Without this the
+        // Dock's own `cx.notify()` only re-runs its inner `render`,
+        // never the workspace shell.
+        cx.observe(&right_dock, |_, _, cx| cx.notify()).detach();
 
         Self {
             title_bar,
@@ -206,6 +214,39 @@ impl TolariaWorkspace {
     /// from outside the workspace crate.
     pub fn is_sidebar_open(&self, cx: &App) -> bool {
         self.left_dock.read(cx).is_open()
+    }
+
+    /// Attach a [`Panel`][crate::panel::Panel] to the workspace's
+    /// right [`Dock`].  Phase 9 worklist 9.2.6 — the table-of-contents
+    /// panel uses this seam; future inspector / AI dock work
+    /// (`9.2.5`, `9.2.8`) replaces or composes with the same call.
+    pub fn attach_right_dock<P: crate::panel::Panel>(&self, panel: gpui::Entity<P>, cx: &mut App) {
+        self.right_dock
+            .update(cx, |dock, cx| dock.set_panel(panel, cx));
+    }
+
+    /// Flip the right [`Dock`] between `Open` and `Closed`.  No-op
+    /// when nothing is attached.  Phase 9 worklist 9.2.6 — the ToC
+    /// toolbar cell dispatches through this method via
+    /// `actions::ToggleTableOfContents`.
+    pub fn toggle_right_dock(&self, cx: &mut App) {
+        self.right_dock.update(cx, |dock, cx| dock.toggle(cx));
+    }
+
+    /// Whether the right [`Dock`] is currently open.  Read-only
+    /// companion to [`Self::toggle_right_dock`] — chrome handlers use
+    /// it to decide between "attach a fresh panel" and "toggle the
+    /// existing one closed".
+    pub fn is_right_dock_open(&self, cx: &App) -> bool {
+        self.right_dock.read(cx).is_open()
+    }
+
+    /// Whether the right [`Dock`] has any panel attached (open or
+    /// closed).  Lets chrome handlers distinguish "first-ever attach"
+    /// from "toggle existing" without poking into the dock's typed
+    /// state from outside the workspace crate.
+    pub fn has_right_dock_panel(&self, cx: &App) -> bool {
+        self.right_dock.read(cx).has_panel()
     }
 
     /// Close the active item in the center pane group's active pane.

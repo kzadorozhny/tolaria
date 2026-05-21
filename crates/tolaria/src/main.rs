@@ -673,6 +673,45 @@ mod macos {
                     }
                 });
 
+                // Worklist 9.2.6 — `ToggleTableOfContents` attaches the
+                // `toc_panel::TocPanel` to the workspace's right dock on
+                // first dispatch and toggles it open / closed
+                // thereafter.  Mirrors `ToggleSidebar` (left dock) — the
+                // shared `dispatch_to_workspace` helper threads the
+                // active workspace through, and the inner closure
+                // resolves the dock state in place.
+                //
+                // The panel entity is held in a slot identical in shape
+                // to `ActiveNoteItemSlot` so the
+                // `HeadingsUpdatedEvent` subscriber set up below can
+                // write through to the panel without re-resolving the
+                // workspace.  This is also the seam future right-dock
+                // panels (9.2.5 AI, 9.2.8 Inspector) attach through —
+                // they'll get their own slot, and the swap logic in
+                // the handler decides which to attach.
+                let toc_panel_slot: std::rc::Rc<
+                    std::cell::RefCell<Option<gpui::Entity<toc_panel::TocPanel>>>,
+                > = std::rc::Rc::new(std::cell::RefCell::new(None));
+                let toc_slot_for_action = toc_panel_slot.clone();
+                cx.on_action(move |_: &actions::ToggleTableOfContents, cx| {
+                    let slot = toc_slot_for_action.clone();
+                    dispatch_to_workspace("ToggleTableOfContents", cx, move |ws, _window, cx| {
+                        // First dispatch: create + attach the panel.
+                        // The Dock's `set_panel` reads `starts_open`
+                        // (TocPanel returns `true`) so the user sees
+                        // the panel immediately on the first click.
+                        // Subsequent dispatches flip the dock through
+                        // its open / closed states.
+                        if !ws.has_right_dock_panel(cx) {
+                            let panel = cx.new(|_| toc_panel::TocPanel::new());
+                            ws.attach_right_dock(panel.clone(), cx);
+                            *slot.borrow_mut() = Some(panel);
+                        } else {
+                            ws.toggle_right_dock(cx);
+                        }
+                    });
+                });
+
                 // 10. Open root window.  Copy f32 size values out before passing cx
                 //    to Bounds::centered so the borrow of SettingsStore is released.
                 //    CLI `--width` / `--height` override the persisted settings —
@@ -796,6 +835,45 @@ mod macos {
                             model_cx,
                         ) {
                             log::error!("preload_blank_webview failed: {e:#}");
+                        }
+                        // Worklist 9.2.6 — subscribe to the preloaded
+                        // `NoteItem`'s `HeadingsUpdatedEvent` so every
+                        // `FromHost::Headings` envelope flows into the
+                        // right-dock `TocPanel`.  The slot holds the same
+                        // entity for the lifetime of the window
+                        // (`open_in_webview` swaps state in place rather
+                        // than constructing a new entity), so a single
+                        // subscription registered here covers every note
+                        // the user opens.  When the panel hasn't been
+                        // attached yet (user never clicked the toolbar
+                        // cell), the headings payload is dropped — the
+                        // panel reads the in-memory state via
+                        // `set_headings` on the next attach so no
+                        // headings are lost.
+                        if let Some(blank_item) = active_note_item.borrow().as_ref().cloned() {
+                            let headings_panel_slot = toc_panel_slot.clone();
+                            model_cx
+                                .subscribe(
+                                    &blank_item,
+                                    move |_ws,
+                                          _item,
+                                          event: &note_item::HeadingsUpdatedEvent,
+                                          cx| {
+                                        let Some(panel) =
+                                            headings_panel_slot.borrow().as_ref().cloned()
+                                        else {
+                                            log::debug!(
+                                                "HeadingsUpdated dropped: TocPanel not attached"
+                                            );
+                                            return;
+                                        };
+                                        let headings = event.headings.clone();
+                                        panel.update(cx, |panel, cx| {
+                                            panel.set_headings(headings, cx);
+                                        });
+                                    },
+                                )
+                                .detach();
                         }
                         // Subscribe inside the workspace's Context so the
                         // subscription lifetime tracks the workspace entity.
