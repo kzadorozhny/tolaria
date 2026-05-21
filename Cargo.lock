@@ -7268,9 +7268,11 @@ name = "sidebar_panel"
 version = "0.1.0"
 dependencies = [
  "actions",
+ "flume",
  "gpui",
  "gpui-component",
  "gpui_platform",
+ "log",
  "mock_fixtures",
  "tempfile",
  "ui",

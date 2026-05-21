@@ -9,8 +9,10 @@ description = "Left-dock sidebar panel chrome view for Tolaria (ADR-0115 Phase 2
 
 [dependencies]
 actions = { path = "../actions" }
+flume.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+log.workspace = true
 mock_fixtures = { path = "../mock_fixtures" }
 ui = { path = "../ui" }
 vault = { path = "../vault" }

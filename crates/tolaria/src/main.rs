@@ -936,13 +936,44 @@ pub(crate) mod macos {
                     // `watch_events` is an inert receiver), so the
                     // task installs but never fires — cheap enough to
                     // skip the branch guard here.
+                    //
+                    // Worklist 9.2.12 reopened-2 — a single fan-out
+                    // task drains the receiver and refreshes both the
+                    // `NoteListPane` (visible Inbox rows) and the
+                    // `SidebarPanel` (Inbox count badge) on every
+                    // event.  Two separate `install_vault_watch_task`
+                    // calls would *compete* for messages because
+                    // `Vault::watch_events` returns clones of one
+                    // `flume::Receiver` — flume's MPMC work-stealing
+                    // semantics mean two siblings alternate consumers
+                    // rather than both seeing every event.  Fan-out
+                    // here keeps the single-receiver discipline
+                    // intact while still keeping both views in sync.
                     if let Some(vault) = cx.try_global::<vault::Vault>() {
                         let rx = vault.watch_events();
-                        NoteListPane::install_vault_watch_task(
-                            note_list.downgrade(),
-                            rx,
-                            cx,
-                        );
+                        let note_list_weak = note_list.downgrade();
+                        let sidebar_weak = sidebar.downgrade();
+                        cx.spawn(async move |cx| {
+                            while let Ok(_change) = rx.recv_async().await {
+                                let mut still_live = false;
+                                if let Some(pane) = note_list_weak.upgrade() {
+                                    still_live = true;
+                                    pane.update(cx, NoteListPane::refresh_from_vault);
+                                }
+                                if let Some(panel) = sidebar_weak.upgrade() {
+                                    still_live = true;
+                                    panel.update(cx, SidebarPanel::refresh_from_vault);
+                                }
+                                if !still_live {
+                                    // Both downgraded handles dropped — the
+                                    // workspace is gone, exit so the task
+                                    // doesn't hold the receiver alive past
+                                    // both entities' lifetimes.
+                                    break;
+                                }
+                            }
+                        })
+                        .detach();
                     }
 
                     // Worklist 2.19 — Cmd+N (and any future palette /

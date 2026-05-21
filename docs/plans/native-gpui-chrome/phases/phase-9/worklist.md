@@ -32,7 +32,7 @@
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
-9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
+9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
 9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 
 ## 3. Low Priority
@@ -790,6 +790,45 @@ doesn't subscribe to the same `VaultChanged::FrontmatterChanged`
 events `note_list_pane` consumes.  Fix path: mirror the
 `install_vault_watch_task` pattern in `sidebar_panel` so the
 sidebar's section counts refresh on every frontmatter change.
+
+**Re-closure-2 (commit `<this-commit>`).**  Three seams:
+
+(1) **`inbox_count` now reflects `!is_organized`.**
+`SidebarPanel::build_from_samples` previously assigned
+`inbox_count = total_count` — every note counted as "in the inbox"
+regardless of frontmatter, so the badge disagreed with
+`note_list_pane`'s `scope_matches` predicate from the moment
+9.2.12's first closure landed.  The sample tuple was extended to a
+named `SidebarSample { kind, path, is_organized }` struct;
+`from_vault` reads `Note::is_organized()` per note, `from_mock`
+seeds `false` (MockVault has no triage state).
+`build_from_samples` filters the sample list to count only the
+unorganized entries.  `inbox_count_excludes_organized_samples`
+pins the predicate so a future refactor that drops it fails CI.
+
+(2) **`SidebarPanel::refresh_from_vault` +
+`install_vault_watch_task`.** Mirror of
+`note_list_pane`'s shape (`refresh_from_vault` rebuilds the
+derived state in place; `install_vault_watch_task` drains the
+`flume::Receiver` and calls `refresh_from_vault` on every
+event).  The user-driven state (`selected` row,
+`collapsed` per-section state, dock `position`) is preserved
+across refreshes so a vault tick can't bounce the user off
+whichever row they had highlighted.
+
+(3) **Fan-out the vault receiver in `tolaria/main.rs`.**
+`Vault::watch_events` returns clones of one
+`flume::Receiver` — flume's MPMC work-stealing semantics mean
+two `install_vault_watch_task` siblings would *compete* for
+messages, not both fire.  The workspace-open path now drains the
+receiver in one task and calls both `NoteListPane::refresh_from_vault`
+and `SidebarPanel::refresh_from_vault` per event, so the centre
+list and the sidebar badge stay in lockstep.  The
+`install_vault_watch_task` helpers on each pane remain public for
+test scaffolding (the
+`inbox_count_refreshes_after_chrome_initiated_organized_toggle`
+test wires its own task per-entity), but the production path
+takes the fan-out shape.
 
 #### 9.2.13
 

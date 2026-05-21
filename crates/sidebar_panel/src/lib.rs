@@ -209,6 +209,26 @@ pub struct FolderEntry {
     pub depth: u8,
 }
 
+/// Internal sample tuple carried from the vault loaders
+/// ([`SidebarPanel::from_vault`] / [`SidebarPanel::from_mock`]) into
+/// [`SidebarPanel::build_from_samples`].  Worklist 9.2.12 reopened-2 —
+/// the Inbox count depends on `_organized` frontmatter, so the
+/// per-note read needs to flow through `build_from_samples` alongside
+/// the existing `kind` + `path` so the count + the type-aggregation +
+/// the folder tree all stay in lockstep.
+#[derive(Debug, Clone)]
+struct SidebarSample {
+    /// Note classification — markdown, asset, folder.  Drives the
+    /// type-row aggregation.
+    kind: NoteKind,
+    /// On-disk path of the note (or directory for `Folder`).  Drives
+    /// the type-label inference and the folder-tree extraction.
+    path: PathBuf,
+    /// Frontmatter `_organized` flag — `false` means "still in the
+    /// inbox" and counts toward [`SidebarPanel::inbox_count`].
+    is_organized: bool,
+}
+
 // ---------------------------------------------------------------------------
 // SidebarPanel view
 // ---------------------------------------------------------------------------
@@ -317,7 +337,12 @@ impl SidebarPanel {
         let mut samples = Vec::with_capacity(note_ids.len());
         for id in note_ids {
             if let Some(note) = executor.block_on(vault.note(id)) {
-                samples.push((note.kind, note.path));
+                let is_organized = note.is_organized();
+                samples.push(SidebarSample {
+                    kind: note.kind,
+                    path: note.path,
+                    is_organized,
+                });
             }
         }
         Self::build_from_samples(samples, root)
@@ -332,10 +357,81 @@ impl SidebarPanel {
         let mut samples = Vec::with_capacity(note_ids.len());
         for id in note_ids {
             if let Some(note) = executor.block_on(vault.note(id)) {
-                samples.push((note.kind, note.path));
+                // Mock notes have no triage state — count every mock
+                // note as "in the inbox" so the badge tracks the
+                // mock's `total_count` exactly.  When `vault::Vault`
+                // is real (and the rescan / watch task fires) the
+                // `from_vault` path picks up the real flag.
+                samples.push(SidebarSample {
+                    kind: note.kind,
+                    path: note.path,
+                    is_organized: false,
+                });
             }
         }
         Self::build_from_samples(samples, None)
+    }
+
+    /// Refresh the live counts and folder tree from the real
+    /// [`Vault`] global.  Mirrors `note_list_pane::refresh_from_vault`:
+    /// the entire derived state (`inbox_count` / `total_count` /
+    /// `archive_count` / `types` / `folders`) is rebuilt in place so a
+    /// chrome-initiated `Vault::set_frontmatter_bool` toggle (or any
+    /// other vault change pumped through `VaultChanged`) propagates
+    /// to the next render.  No-op (with a `debug` log) when the
+    /// `Vault` global is absent — keeps mock-launch paths safe.
+    ///
+    /// Preserves the currently-selected row and section-collapse
+    /// state so a count refresh doesn't bounce the user off Inbox
+    /// / All Notes / a folder selection.  The visual outcome is just
+    /// "the count next to Inbox jumped from 7 to 6" with no other
+    /// side effects.
+    pub fn refresh_from_vault(&mut self, cx: &mut Context<Self>) {
+        if !cx.has_global::<Vault>() {
+            log::debug!("sidebar_panel: refresh_from_vault skipped — no Vault global");
+            return;
+        }
+        let fresh = Self::from_vault(cx);
+        // Carry over the user-driven state — selection, collapse,
+        // dock position — so an asynchronous vault tick doesn't
+        // bounce the user off whichever row they had highlighted.
+        self.inbox_count = fresh.inbox_count;
+        self.total_count = fresh.total_count;
+        self.archive_count = fresh.archive_count;
+        self.types = fresh.types;
+        self.views = fresh.views;
+        self.folders = fresh.folders;
+        cx.notify();
+    }
+
+    /// Spawn a background task that drains `vault.watch_events()` and
+    /// invalidates the panel's cached counts / folder tree whenever
+    /// the vault signals a change.  Mirrors
+    /// `note_list_pane::install_vault_watch_task` and
+    /// `note_item::install_dispatch_task` — `WeakEntity` upgrade +
+    /// `entity.update(|this, cx| …)`, loop terminates when the entity
+    /// drops or the channel closes.
+    ///
+    /// Worklist 9.2.12 (reopened-2) — without this subscription the
+    /// `inbox_count` captured at construction time stays stale after a
+    /// chrome-initiated `Vault::set_frontmatter_bool` toggle: the
+    /// note-list-pane already refreshes (via its own watch task), so
+    /// the user sees the row disappear from the centre list but the
+    /// sidebar's count badge keeps showing the pre-toggle number.
+    pub fn install_vault_watch_task(
+        entity: gpui::WeakEntity<Self>,
+        rx: flume::Receiver<vault::VaultChanged>,
+        cx: &mut App,
+    ) {
+        cx.spawn(async move |cx| {
+            while let Ok(_change) = rx.recv_async().await {
+                let Some(this) = entity.upgrade() else {
+                    break;
+                };
+                this.update(cx, SidebarPanel::refresh_from_vault);
+            }
+        })
+        .detach();
     }
 
     /// Common post-processing for both [`from_mock`] and [`from_vault`].
@@ -345,15 +441,22 @@ impl SidebarPanel {
     /// folder rows are indented relative to the vault root rather than
     /// the filesystem root — see issue 002 in
     /// `docs/plans/native-gpui-chrome/phases/phase-7/worklist.md`.
-    fn build_from_samples(samples: Vec<(NoteKind, PathBuf)>, vault_root: Option<PathBuf>) -> Self {
+    fn build_from_samples(samples: Vec<SidebarSample>, vault_root: Option<PathBuf>) -> Self {
         let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
         // Set of relative paths from the vault root.  `""` is the
         // root itself.  Notes that live in the root are recorded as
         // belonging to the root folder so the root row always exists.
         let mut folder_rels: BTreeSet<String> = BTreeSet::new();
         let total_count = samples.len();
+        // Worklist 9.2.12 reopened-2 — Inbox shows notes the user
+        // hasn't triaged yet, i.e. those with `_organized = false`.
+        // `note_list_pane`'s `scope_matches` already filters the
+        // visible list on the same predicate (`!entry.is_organized`);
+        // the sidebar's count badge must agree so the user doesn't
+        // see "7 in the inbox" while the list shows 5.
+        let inbox_count = samples.iter().filter(|s| !s.is_organized).count();
 
-        for (kind, path) in samples {
+        for SidebarSample { kind, path, .. } in samples {
             let label = match kind {
                 NoteKind::Markdown => type_label_for(&path),
                 NoteKind::Asset => "Assets",
@@ -455,7 +558,7 @@ impl SidebarPanel {
             .collect();
 
         Self {
-            inbox_count: total_count,
+            inbox_count,
             total_count,
             archive_count: 0,
             types,
@@ -1681,13 +1784,24 @@ mod tests {
         }
     }
 
+    /// Helper: build a `SidebarSample` with `is_organized = false`
+    /// so existing tests that didn't carry triage state keep counting
+    /// every note in the inbox (matching the pre-9.2.12 behaviour).
+    fn unorganized_sample(kind: NoteKind, path: PathBuf) -> SidebarSample {
+        SidebarSample {
+            kind,
+            path,
+            is_organized: false,
+        }
+    }
+
     #[test]
     fn build_from_samples_groups_by_filename_prefix() {
         let samples = vec![
-            (NoteKind::Markdown, PathBuf::from("area-x.md")),
-            (NoteKind::Markdown, PathBuf::from("area-y.md")),
-            (NoteKind::Markdown, PathBuf::from("event-launch.md")),
-            (NoteKind::Markdown, PathBuf::from("untyped.md")),
+            unorganized_sample(NoteKind::Markdown, PathBuf::from("area-x.md")),
+            unorganized_sample(NoteKind::Markdown, PathBuf::from("area-y.md")),
+            unorganized_sample(NoteKind::Markdown, PathBuf::from("event-launch.md")),
+            unorganized_sample(NoteKind::Markdown, PathBuf::from("untyped.md")),
         ];
         let panel = SidebarPanel::build_from_samples(samples, None);
         let pairs: Vec<(&str, usize)> = panel
@@ -2080,5 +2194,115 @@ mod tests {
 
         let got = received.borrow().clone();
         assert_eq!(got, vec![SidebarSelection::Favorite(7)]);
+    }
+
+    /// Worklist 9.2.12 reopened-2 — when a note is flagged
+    /// `_organized: true` through the vault, the sidebar's Inbox row
+    /// count must drop on the next `VaultChanged` event.  Mirrors the
+    /// `inbox_refreshes_after_chrome_initiated_organized_toggle`
+    /// regression in `note_list_pane` so the centre list and the
+    /// sidebar badge agree.
+    #[gpui::test]
+    fn inbox_count_refreshes_after_chrome_initiated_organized_toggle(cx: &mut TestAppContext) {
+        use std::fs;
+        install_theme(cx);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Two fresh notes, both in the Inbox at startup.
+        fs::write(dir.path().join("a.md"), "---\ntype: Note\n---\nbody\n").unwrap();
+        fs::write(dir.path().join("b.md"), "---\ntype: Note\n---\nbody\n").unwrap();
+
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        cx.update(|cx| cx.set_global(vault));
+
+        // Build the panel inside a window so the entity outlives the
+        // subscription task — mirrors the workspace-open path that
+        // installs the watch task immediately after construction.
+        let window = cx.add_window(|_window, cx| SidebarPanel::from_vault(cx));
+        let panel = window.root(cx).expect("root entity");
+        cx.update(|cx| {
+            let rx = cx.global::<vault::Vault>().watch_events();
+            SidebarPanel::install_vault_watch_task(panel.downgrade(), rx, cx);
+        });
+
+        // Sanity: both notes are in the Inbox count (neither is
+        // organized yet).
+        window
+            .update(cx, |panel, _window, _cx| {
+                assert_eq!(
+                    panel.inbox_count, 2,
+                    "both unorganized notes must contribute to inbox_count",
+                );
+            })
+            .unwrap();
+
+        // Pick the first note's id, flip `_organized: true` through
+        // the vault, then drive the executor until the watch task
+        // processes the event.  This is the exact production path
+        // the chrome's star/organized toolbar cells walk via
+        // `toggle_frontmatter_flag`.
+        let target_id = cx.update(|cx| {
+            let ids = cx
+                .foreground_executor()
+                .block_on(cx.global::<vault::Vault>().notes());
+            ids.into_iter().next().expect("at least one note id")
+        });
+        cx.update(|cx| {
+            cx.global_mut::<vault::Vault>()
+                .set_frontmatter_bool(target_id, "_organized", true)
+                .detach();
+        });
+        cx.run_until_parked();
+
+        // Load-bearing assertion: the Inbox count must drop to 1.
+        // Without the subscription this would still report 2
+        // (`inbox_count` captured at build time, never refreshed).
+        window
+            .update(cx, |panel, _window, _cx| {
+                assert_eq!(
+                    panel.inbox_count, 1,
+                    "inbox_count must drop after the freshly-organized note's vault event",
+                );
+                assert_eq!(
+                    panel.total_count, 2,
+                    "total_count must NOT change — the note is still in the vault",
+                );
+            })
+            .unwrap();
+    }
+
+    /// Worklist 9.2.12 reopened-2 — `inbox_count` at build time must
+    /// equal the count of `!is_organized` samples, not the total
+    /// sample count.  Pins the per-sample filter so a future refactor
+    /// that drops the `is_organized` predicate fails CI even when the
+    /// `install_vault_watch_task` plumbing stays intact.
+    #[test]
+    fn inbox_count_excludes_organized_samples() {
+        let samples = vec![
+            SidebarSample {
+                kind: NoteKind::Markdown,
+                path: PathBuf::from("a.md"),
+                is_organized: false,
+            },
+            SidebarSample {
+                kind: NoteKind::Markdown,
+                path: PathBuf::from("b.md"),
+                is_organized: true,
+            },
+            SidebarSample {
+                kind: NoteKind::Markdown,
+                path: PathBuf::from("c.md"),
+                is_organized: false,
+            },
+        ];
+        let panel = SidebarPanel::build_from_samples(samples, None);
+        assert_eq!(
+            panel.inbox_count, 2,
+            "only the two unorganized samples contribute to inbox_count",
+        );
+        assert_eq!(
+            panel.total_count, 3,
+            "total_count counts every sample, organized or not",
+        );
     }
 }
