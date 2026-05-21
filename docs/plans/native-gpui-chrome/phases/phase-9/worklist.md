@@ -23,7 +23,7 @@
 
 9.2.1. ✅ Star toggle → favourite frontmatter + sidebar favourites section
 9.2.2. ✅ Organised toggle → inbox-advance frontmatter
-9.2.3. Neighbourhood action → backlink filter in note-list
+9.2.3. ⏳ Neighbourhood action → backlink filter in note-list
 9.2.4. ✅ Raw-mode toggle → editor-host raw bridge
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
 9.2.6. ✅ ToC action → new `toc_panel` crate + headings bridge
