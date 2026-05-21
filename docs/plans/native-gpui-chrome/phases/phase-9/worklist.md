@@ -27,7 +27,7 @@
 9.2.4. ✅ Raw-mode toggle → editor-host raw bridge
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
 9.2.6. ✅ ToC action → new `toc_panel` crate + headings bridge
-9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
+9.2.7. ⏳ More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. ✅ Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
