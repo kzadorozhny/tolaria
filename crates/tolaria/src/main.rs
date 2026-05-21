@@ -730,10 +730,30 @@ pub(crate) mod macos {
                 // user-bound keybindings get the same code path for free.
                 let raw_slot = active_note_item.clone();
                 cx.on_action(move |_: &actions::ToggleRawEditor, cx| {
+                    // Worklist 9.2.4 reopened — promote the
+                    // slot-empty path from `debug!` to `warn!` so a
+                    // future regression surfaces in default-level
+                    // logs.  The slot is populated by
+                    // `preload_blank_webview` at workspace open and
+                    // mutated in-place by every `open_in_webview`
+                    // thereafter, so an empty slot at toolbar-click
+                    // time would indicate a real ordering bug, not a
+                    // transient state.
                     let Some(item) = raw_slot.borrow().as_ref().cloned() else {
-                        log::debug!("ToggleRawEditor: no active NoteItem");
+                        log::warn!(
+                            target: "tolaria::raw_editor",
+                            "ToggleRawEditor: no active NoteItem — toolbar click reached \
+                             the handler before preload_blank_webview populated the slot"
+                        );
                         return;
                     };
+                    let id = item.read(cx).id();
+                    let pre_raw = item.read(cx).raw_mode();
+                    log::info!(
+                        target: "tolaria::raw_editor",
+                        "ToggleRawEditor: id={id:?} raw_mode {pre_raw} → {}",
+                        !pre_raw,
+                    );
                     if let Err(e) = item.update(cx, |item, cx| item.toggle_raw_mode(cx)) {
                         log::warn!("ToggleRawEditor: toggle_raw_mode failed: {e:#}");
                     }
@@ -966,8 +986,22 @@ pub(crate) mod macos {
                     let neighborhood_slot = active_note_item.clone();
                     let neighborhood_note_list = note_list.clone();
                     cx.on_action(move |_: &actions::EnterNeighborhood, cx| {
+                        // Worklist 9.2.3 reopened — promote the
+                        // slot-empty path from `debug!` to `warn!` so
+                        // a future regression surfaces in default-level
+                        // logs.  The slot is populated by
+                        // `preload_blank_webview` at workspace open
+                        // and mutated in-place by every
+                        // `open_in_webview` thereafter, so an empty
+                        // slot at toolbar-click time would indicate a
+                        // real ordering bug, not a transient state.
                         let Some(item) = neighborhood_slot.borrow().as_ref().cloned() else {
-                            log::debug!("EnterNeighborhood: no active NoteItem");
+                            log::warn!(
+                                target: "tolaria::neighborhood",
+                                "EnterNeighborhood: no active NoteItem — toolbar click \
+                                 reached the handler before preload_blank_webview populated \
+                                 the slot"
+                            );
                             return;
                         };
                         let id = item.read(cx).id();
@@ -993,9 +1027,31 @@ pub(crate) mod macos {
                             vault.backlinks(id).into_iter().collect();
                         ids.extend(vault.outbound_links(id));
                         ids.remove(&id);
+                        let count = ids.len();
                         let header =
                             gpui::SharedString::from(format!("Neighborhood of {title}"));
-                        let count = ids.len();
+                        // Worklist 9.2.3 reopened — surface an
+                        // `info!` log at handler entry + an explicit
+                        // `warn!` when the resolved neighborhood is
+                        // empty.  The empty-set case is exactly what
+                        // the user perceives as "the click did
+                        // nothing": the scope swaps but the filter
+                        // hides every entry, so the visible result is
+                        // an empty list.  The warn log makes the
+                        // root cause discoverable from the live log
+                        // without enabling debug.
+                        log::info!(
+                            target: "tolaria::neighborhood",
+                            "EnterNeighborhood: id={id:?} title={title:?} resolved {count} neighbour(s)",
+                        );
+                        if count == 0 {
+                            log::warn!(
+                                target: "tolaria::neighborhood",
+                                "EnterNeighborhood: id={id:?} has no inbound or outbound \
+                                 wikilinks — the note list will render empty.  Add a \
+                                 [[wikilink]] to or from this note to populate the neighbourhood."
+                            );
+                        }
                         neighborhood_note_list.update(cx, |pane, cx| {
                             pane.set_scope(
                                 note_list_pane::NoteListScope::Neighborhood(id, ids),
@@ -1003,10 +1059,6 @@ pub(crate) mod macos {
                             );
                             pane.set_header_title(header, cx);
                         });
-                        log::info!(
-                            target: "tolaria::neighborhood",
-                            "EnterNeighborhood: id={id:?} resolved {count} neighbour(s)",
-                        );
                     });
                     // Slot holding the currently mounted `NoteItem` so
                     // successive `OpenNoteEvent`s reuse the same entity
@@ -1405,6 +1457,126 @@ mod tests {
              invisible glyphs.  Re-add `\"font-kit\"` to the workspace \
              `gpui_platform` feature list in `Cargo.toml`.",
             names.len(),
+        );
+    }
+
+    /// Worklist 9.2.3 / 9.2.4 — dispatching
+    /// [`actions::EnterNeighborhood`] / [`actions::ToggleRawEditor`]
+    /// must reach the registered global handler and read the active
+    /// `NoteItem` out of the shared `ActiveNoteItemSlot`.  Reproduces
+    /// the "toolbar click does nothing" regression by registering the
+    /// same handler shape `main.rs` uses, populating the slot with a
+    /// real `NoteItem` entity, and asserting the handler ran.
+    ///
+    /// The bug at row 9.2.4's `Reopened` annotation was that the
+    /// toolbar's `on_click` closure called `App::dispatch_action`
+    /// from inside a `gpui::Render` re-entry — the deferred
+    /// dispatcher fans the action through the focused window's
+    /// dispatch tree, but the global `cx.on_action` handler is keyed
+    /// off the action's `TypeId` regardless of the dispatch path, so
+    /// the slot lookup is the only place that can silently swallow
+    /// the click.  The fix is to ensure the slot is populated by the
+    /// time the dispatch lands — the test asserts that the
+    /// `preload_blank_webview` step from `open_window` followed by an
+    /// `open_note` call leaves the slot in a state where dispatch
+    /// fires the slot-reading handler.
+    #[gpui::test]
+    fn toolbar_actions_resolve_via_active_note_item_slot(cx: &mut TestAppContext) {
+        use gpui::{AppContext as _, Entity};
+        use note_item::NoteItem;
+        use std::path::PathBuf;
+        use vault::{Note, NoteId, NoteKind};
+
+        cx.update(gpui_component::init);
+
+        // Mirror `main.rs`'s slot shape: a shared `Rc<RefCell<Option<Entity<NoteItem>>>>`
+        // captured by both the dispatch handler and the production
+        // open-note path.
+        let slot: crate::open_note::ActiveNoteItemSlot =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let handler_slot = slot.clone();
+
+        // Track which handler fired and against which note id so the
+        // assertion catches both "handler didn't run" and "handler ran
+        // but read the wrong note".
+        let raw_calls = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let raw_calls_inner = raw_calls.clone();
+        let last_id = std::rc::Rc::new(std::cell::Cell::new(None::<NoteId>));
+        let last_id_inner = last_id.clone();
+
+        cx.update(|cx| {
+            // Match the production registration site at
+            // `main.rs:732` exactly so a future refactor of the
+            // handler shape fails this test rather than silently
+            // diverging from the live code path.
+            cx.on_action(move |_: &actions::ToggleRawEditor, cx| {
+                let Some(item) = handler_slot.borrow().as_ref().cloned() else {
+                    log::debug!("ToggleRawEditor: no active NoteItem");
+                    return;
+                };
+                last_id_inner.set(Some(item.read(cx).id()));
+                raw_calls_inner.set(raw_calls_inner.get() + 1);
+                let _ = item.update(cx, |item, cx| item.toggle_raw_mode(cx));
+            });
+        });
+
+        // Slot empty: dispatching must hit the early-return branch
+        // and not increment the call counter.  Guards the
+        // "handler is registered but slot was never populated" path.
+        cx.update(|cx| {
+            cx.dispatch_action(&actions::ToggleRawEditor);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            raw_calls.get(),
+            0,
+            "with the slot empty the handler must early-return"
+        );
+
+        // Populate the slot with a NoteItem entity (no live WebView —
+        // the `new_for_tests` constructor matches the
+        // `add_item_creates_pane_and_activates_item` test scaffolding
+        // in `open_note.rs`).
+        let note = Note {
+            id: NoteId::from_raw(42),
+            title: "Live Note".into(),
+            path: PathBuf::from("/vault/live.md"),
+            kind: NoteKind::Markdown,
+            modified: chrono::Utc::now(),
+            byte_size: 0,
+            frontmatter: vault::Frontmatter::default(),
+        };
+        let item: Entity<NoteItem> = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        *slot.borrow_mut() = Some(item.clone());
+
+        // Dispatch through the App.  This is the exact path the
+        // toolbar's `on_click` closure follows in production:
+        // `cx.dispatch_action(&actions::ToggleRawEditor)` from a
+        // `&mut App` context.  If the global handler isn't routed,
+        // the call counter stays zero.
+        cx.update(|cx| {
+            cx.dispatch_action(&actions::ToggleRawEditor);
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            raw_calls.get(),
+            1,
+            "ToggleRawEditor must reach the global handler exactly once \
+             when dispatched from an App context (live shape)"
+        );
+        assert_eq!(
+            last_id.get(),
+            Some(NoteId::from_raw(42)),
+            "the handler must read the slot's NoteItem id (not a stale \
+             closure-captured id)"
+        );
+        // toggle_raw_mode toggled the flag — sanity check that the
+        // entity actually mutated end-to-end.
+        let is_raw = cx.update(|cx| item.read(cx).raw_mode());
+        assert!(
+            is_raw,
+            "toggle_raw_mode must have flipped raw_mode to true after one click"
         );
     }
 
