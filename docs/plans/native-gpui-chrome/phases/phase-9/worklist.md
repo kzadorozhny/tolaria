@@ -129,7 +129,7 @@ wikilinks of one note; (3) shared selection history with the future
 Phase 10 `nav_history` crate — stub locally inside `note_item` if
 `nav_history` hasn't landed yet.  **Size:** large.
 
-**Closure (commit `<this-commit>`).**  Vault gained two read-only
+**Closure (commit `13bbc646`).**  Vault gained two read-only
 queries: `Vault::backlinks(id) -> Vec<NoteId>` (notes whose body
 contains `[[…]]` resolving to `id`) at `crates/vault/src/lib.rs:814`,
 and `Vault::outbound_links(id) -> Vec<NoteId>` at `:863`.  Both
