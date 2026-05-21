@@ -478,9 +478,22 @@ impl Vault {
         };
         let new_contents = frontmatter::set_bool_in_raw(&raw, key, value);
         // Fast path: the on-disk bytes already match the requested
-        // state.  Skip both the in-memory mutation and the write so
-        // identical toggles don't churn the fs-watcher.
+        // state.  Skip the write — but still re-sync the in-memory
+        // `Note::frontmatter` (and `byte_size` / `modified`) from
+        // the disk bytes we just read.  Without this refresh an
+        // external edit can silently desync the toolbar (worklist
+        // 9.2.9): the toolbar's render-time read returns the stale
+        // in-memory state, the closure dispatches the same value
+        // disk already has, this branch returns `Ok(())`, and the
+        // next render still sees the stale state — the user
+        // perceives the star / organized toggle as broken.  By
+        // mirroring disk into memory here, the next render sees the
+        // truth and the closure captures the right value on the
+        // following click.
         if new_contents == raw {
+            if let Some(note) = self.notes.get_mut(&id) {
+                sync_in_memory_from_disk(note, &raw, &path);
+            }
             return Task::ready(Ok(()));
         }
         // Update the in-memory frontmatter map BEFORE queueing the
@@ -785,6 +798,32 @@ fn write_to_disk(path: &Path, body: &str) -> Result<(), VaultError> {
         path: path.to_path_buf(),
         source,
     })
+}
+
+/// Re-parse `raw` (the bytes just read from disk) into the given
+/// note's [`Frontmatter`] and refresh its `byte_size` / `modified`
+/// fields from `path`.
+///
+/// Extracted from [`Vault::set_frontmatter_bool`] so its fast-path
+/// branch can re-sync the in-memory map without duplicating the
+/// metadata-refresh boilerplate from `save_sync` (worklist 9.2.9).
+/// Pure free function — takes a borrowed `&mut Note` so the caller
+/// owns the `notes.get_mut(&id)` lookup and we don't allocate a
+/// fresh `Option` borrow inside the helper.
+///
+/// `std::fs::metadata` failures are non-fatal: the frontmatter
+/// refresh is the load-bearing invariant (it drives the toolbar's
+/// `is_favorite` / `is_organized` glyph), while `byte_size` /
+/// `modified` are decoration that the next `rescan` or `save` will
+/// refresh.
+fn sync_in_memory_from_disk(note: &mut Note, raw: &str, path: &Path) {
+    note.frontmatter = frontmatter::parse(raw).0;
+    if let Ok(meta) = std::fs::metadata(path) {
+        note.byte_size = meta.len();
+        if let Ok(t) = meta.modified() {
+            note.modified = DateTime::<Utc>::from(t);
+        }
+    }
 }
 
 /// Result of one [`walk_vault`] pass — keeps the three sibling lists
@@ -1359,6 +1398,167 @@ mod tests {
         assert!(
             matches!(err, VaultError::NotFound(NoteId(99))),
             "expected NotFound(99), got {err:?}",
+        );
+    }
+
+    /// Worklist 9.2.9 — the in-memory `Note::frontmatter` must
+    /// re-sync from disk whenever `set_frontmatter_bool` hits its
+    /// "disk already matches" fast path.  Without that refresh the
+    /// toolbar's star/organized glyph stays stale after an external
+    /// edit, every subsequent click trips the same fast path, and the
+    /// button looks broken to the user.
+    ///
+    /// Production scenario (matching the user's report):
+    /// 1. Toolbar shows the star UN-set.  In-memory + disk = absent.
+    /// 2. Some external write (editor save, `git checkout`, …)
+    ///    flips `_favorite` to `true` on disk.  Nothing reloads the
+    ///    vault — the chrome doesn't yet subscribe to fs-watcher
+    ///    events (Phase 9.6).
+    /// 3. The user clicks the star expecting a toggle (visually: "OFF
+    ///    → ON", because the toolbar still shows the stale UN-set
+    ///    glyph).  The closure dispatches `set_frontmatter_bool(id,
+    ///    "_favorite", true)`.
+    /// 4. Disk fresh = `_favorite: true` already → fast path returns
+    ///    `Ok(())` and skips the in-memory mutation.
+    /// 5. The toolbar re-reads `is_favorite()` on the next render and
+    ///    *still* sees the stale `false` in memory, because the fast
+    ///    path didn't refresh it.  Visually the click does nothing.
+    /// 6. Subsequent clicks repeat steps 3-5 forever.
+    ///
+    /// The fix: the fast path must mirror the disk state back into
+    /// the in-memory `Note::frontmatter` (and `byte_size` /
+    /// `modified`) before returning, so the next render sees the
+    /// truth and the closure captures the right value.
+    #[gpui::test]
+    async fn star_toggle_resyncs_in_memory_when_disk_already_matches(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let dir = tempdir().unwrap();
+        let path = write(dir.path(), "n.md", "---\ntype: Note\n---\nbody\n");
+        let root = dir.path().to_path_buf();
+        let mut vault = cx
+            .update(|cx| Vault::open_at_async(root, cx))
+            .await
+            .expect("async open must succeed");
+        let id = vault.note_ids_sync()[0];
+
+        // Sanity: in-memory + disk both say `false` at the start.
+        assert!(!vault.note_sync(id).unwrap().is_favorite());
+
+        // External write — disk now says `true`, in-memory still says
+        // `false`.  Nothing has called `rescan` (production chrome
+        // doesn't subscribe to fs-watcher events yet).
+        fs::write(&path, "---\ntype: Note\n_favorite: true\n---\nbody\n").unwrap();
+        assert!(
+            !vault.note_sync(id).unwrap().is_favorite(),
+            "sanity: external write must not magically update in-memory state",
+        );
+
+        // The toolbar's render-time read still saw `false`, so the
+        // click closure dispatches `set_frontmatter_bool(id,
+        // "_favorite", !false)` = `true` — the same value disk
+        // already has.  Without the 9.2.9 fix this is the
+        // fast-path no-op that silently desyncs the UI.
+        vault
+            .set_frontmatter_bool(id, "_favorite", true)
+            .await
+            .expect("fast-path call must still return Ok");
+
+        // Load-bearing assertion: after the call, in-memory must
+        // reflect the disk state.  Before the fix this fails because
+        // the fast path returned early without touching
+        // `notes[id].frontmatter`.
+        assert!(
+            vault.note_sync(id).unwrap().is_favorite(),
+            "fast path must re-sync in-memory frontmatter from disk so the next \
+             render of the toolbar sees the truth",
+        );
+    }
+
+    /// Worklist 9.2.9 — `set_frontmatter_bool` must keep working after
+    /// the note is rewritten outside the UI (external editor, `git
+    /// checkout`, anything that drives a [`Vault::rescan`]).  The user
+    /// scenario:
+    ///
+    /// 1. Toggle `_favorite` on through the toolbar (vault writes
+    ///    `_favorite: true` to disk + in-memory).
+    /// 2. An external editor rewrites the file on disk — `_favorite`
+    ///    flips back to absent (= false).
+    /// 3. The chrome calls `Vault::rescan` (Phase 9.6 will do this
+    ///    automatically from the fs-watcher; this test drives it
+    ///    directly).
+    /// 4. The user clicks the star a second time, expecting an
+    ///    advance from disk's `false` state to `true`.
+    ///
+    /// The second toggle must (a) succeed (no `NotFound`), (b) update
+    /// the on-disk bytes to reflect the new value, AND (c) leave the
+    /// in-memory `Note::is_favorite()` accessor returning the new
+    /// value so the next render of the toolbar shows the right glyph.
+    #[gpui::test]
+    async fn star_toggle_survives_external_edit_plus_rescan(cx: &mut gpui::TestAppContext) {
+        let dir = tempdir().unwrap();
+        let path = write(dir.path(), "n.md", "---\ntype: Note\n---\nbody\n");
+        let root = dir.path().to_path_buf();
+        let mut vault = cx
+            .update(|cx| Vault::open_at_async(root, cx))
+            .await
+            .expect("async open must succeed");
+        let id = vault.note_ids_sync()[0];
+
+        // Step 1 — toolbar-equivalent: toggle ON via the public API.
+        vault
+            .set_frontmatter_bool(id, "_favorite", true)
+            .await
+            .expect("initial toggle-on must succeed");
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("_favorite: true"),
+            "step 1: disk must reflect the toggle"
+        );
+        assert!(
+            vault.note_sync(id).unwrap().is_favorite(),
+            "step 1: in-memory must reflect the toggle",
+        );
+
+        // Step 2 — external write.  Simulates an editor's atomic-save
+        // (write tempfile + rename), or a `git checkout` that drops the
+        // `_favorite` line.  Bypasses every vault API on purpose.
+        fs::write(&path, "---\ntype: Note\n---\nbody-was-edited\n").unwrap();
+
+        // Step 3 — `Vault::rescan` (in production driven by the
+        // fs-watcher, Phase 9.6).  Must preserve the existing
+        // `NoteId` for this path and refresh in-memory state from
+        // disk.
+        vault.rescan().expect("rescan must succeed");
+        assert!(
+            !vault.note_sync(id).unwrap().is_favorite(),
+            "step 3: rescan must pull `_favorite` back to false from disk",
+        );
+
+        // Step 4 — second toggle.  This is the load-bearing assertion
+        // — without the 9.2.9 fix, the toolbar's captured
+        // `is_favorite` was stale (still `true`), so the click
+        // dispatched `set_frontmatter_bool(id, "_favorite", false)`
+        // and the fast path short-circuited because disk already said
+        // `false`.  The fix routes the click through whatever it has
+        // to so the second toggle observes the up-to-date state.
+        let current = vault.note_sync(id).unwrap().is_favorite();
+        let want = !current;
+        vault
+            .set_frontmatter_bool(id, "_favorite", want)
+            .await
+            .expect("second toggle must succeed (NotFound = id-stability regression)");
+        let on_disk = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            on_disk.contains("_favorite: true"),
+            want,
+            "step 4: disk must reflect the second toggle (want={want}, got={on_disk:?})",
+        );
+        assert_eq!(
+            vault.note_sync(id).unwrap().is_favorite(),
+            want,
+            "step 4: in-memory frontmatter must mirror disk after the second toggle",
         );
     }
 

@@ -29,7 +29,7 @@
 9.2.6. ToC action → new `toc_panel` crate + headings bridge
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. Note Inspector Panel content — backlinks, references, type instances, outline
-9.2.9. ⏳ Star action stops working when the note is updated outside the UI
+9.2.9. ✅ Star action stops working when the note is updated outside the UI
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
@@ -323,6 +323,49 @@ user redirects.  9.2.1 stays at ✅ for now — the regression is a
 post-shipping bug rather than a 9.2.1 implementation defect, so it
 gets its own row per the `[high]` syntax the user used.
 
+**Closure (commit `<this-commit>`).**  Root cause was the
+`set_frontmatter_bool` fast path (`crates/vault/src/lib.rs:493`):
+when the disk bytes already matched the requested state (because an
+external edit got there first), the fast path returned `Ok(())`
+WITHOUT refreshing the in-memory `Note::frontmatter` from the bytes
+it had just read.  Combined with the chrome's lack of a
+fs-watcher subscriber (Phase 9.6 future work), the in-memory state
+stayed permanently stale: the toolbar's render-time read returned
+the stale value, every subsequent click dispatched the same
+"matches disk" payload, the fast path bailed again, and the user
+perceived the star as inert.
+
+Fix has two seams:
+1. **Vault layer** — the fast-path branch now calls a new
+   `sync_in_memory_from_disk(note, raw, path)` free function that
+   re-parses the just-read bytes into `Note::frontmatter` and
+   refreshes `byte_size` / `modified` from `fs::metadata`.  The
+   slow-path optimistic mutation is unchanged.  Two
+   `#[gpui::test]`s pin the behaviour: one drives the exact
+   production scenario (external edit, click dispatches the
+   already-disk-true value, fast-path is taken, in-memory state
+   must mirror disk after the call); the other layers a `rescan`
+   into the sequence so the Phase 9.6 future-readiness path is
+   also covered.
+2. **Toolbar layer** — `toggle_frontmatter_flag` now calls
+   `cx.refresh_windows()` after the dispatch.  The vault is a GPUI
+   `Global`, so mutating it doesn't notify any entity; without the
+   nudge the toolbar would keep showing the pre-click glyph until
+   something else triggered a re-render.  A
+   `toggle_helper_resyncs_in_memory_after_external_edit`
+   `#[gpui::test]` exercises the toolbar-layer path end-to-end.
+
+Out of the three candidate causes named in the annotation above:
+**(2)** (optimistic-in-memory desync — really, here, "non-optimistic
+in-memory staleness on the fast path") was the load-bearing
+defect.  Candidate (1) (stale `NoteId`) was a red herring — the
+`rescan_preserves_ids_for_unchanged_paths` invariant holds; the
+external write reuses the same path under macOS atomic-save, so the
+id stays mapped.  Candidate (3) (toolbar not subscribed) is real
+but the user only noticed it because (2) made the click feel
+broken; the toolbar wrapper now compensates with
+`cx.refresh_windows`.
+
 #### 9.2.10
 
 **Source:** user-reported visual regression on 9.2.2 (organized
@@ -393,7 +436,7 @@ Surface: `crates/note_list_pane/src/lib.rs` filter logic + a
 regression test asserting an organized note doesn't appear in
 Inbox.  **Size:** small.
 
-**Closure (commit `<this-commit>`).**  `NoteEntry` gained an
+**Closure (commit `8ee5fa33`).**  `NoteEntry` gained an
 `is_organized: bool` field populated from `Note::is_organized()` in
 `collect_vault_entries` (and seeded `false` for the `MockVault`
 branch, which has no triage state).  `scope_matches` flips the

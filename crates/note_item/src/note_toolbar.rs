@@ -467,6 +467,16 @@ fn toggle_frontmatter_flag(id: NoteId, key: &str, value: bool, cx: &mut App) {
     cx.global_mut::<Vault>()
         .set_frontmatter_bool(id, key, value)
         .detach();
+    // Force a redraw so the toolbar's next render observes the
+    // freshly-mutated in-memory frontmatter (worklist 9.2.9).  The
+    // vault is a GPUI `Global`, so mutating it does NOT notify any
+    // entity — without this nudge the toolbar would keep showing the
+    // pre-click glyph until something else triggered a re-render
+    // (sidebar selection, window focus, …) and the user would
+    // perceive the click as a no-op.  `refresh_windows` is idempotent
+    // within an update cycle, so dispatching it once per toggle is
+    // cheap.
+    cx.refresh_windows();
     log::info!(
         target: "note_item::toolbar",
         "{key} toggle dispatched: id={id:?} value={value}",
@@ -673,6 +683,55 @@ mod tests {
             // Sanity: no `Vault` global is installed by default.
             assert!(!cx.has_global::<vault::Vault>());
             toggle_frontmatter_flag(NoteId::from_raw(7), "_favorite", true, cx);
+        });
+    }
+
+    /// Worklist 9.2.9 — the toolbar-layer regression that paired with
+    /// the vault-layer fix.  Reproduces the exact production click
+    /// path: render-time read, external edit, click again with the
+    /// stale captured value.  Without the fix the in-memory state
+    /// would stay desynced from disk and the user would perceive the
+    /// star as inert.
+    #[gpui::test]
+    fn toggle_helper_resyncs_in_memory_after_external_edit(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let note_path = dir.path().join("n.md");
+        std::fs::write(&note_path, "---\ntype: Note\n---\nbody\n").unwrap();
+        let vault = vault::Vault::open_at(dir.path()).expect("open vault");
+        let id = cx.update(|cx| cx.foreground_executor().block_on(vault.notes())[0]);
+        cx.update(|cx| cx.set_global(vault));
+
+        // Render-time read: the toolbar saw `false` and captured it.
+        let captured_is_favorite = cx.update(|cx| {
+            cx.global::<vault::Vault>()
+                .note_sync(id)
+                .unwrap()
+                .is_favorite()
+        });
+        assert!(!captured_is_favorite);
+
+        // External edit — disk now says `_favorite: true`, in-memory
+        // still says `false`.
+        std::fs::write(&note_path, "---\ntype: Note\n_favorite: true\n---\nbody\n").unwrap();
+
+        // User click — the closure captured `is_favorite = false`,
+        // so it dispatches `!false = true` (the value disk already
+        // has).  With the 9.2.9 fix the fast path re-syncs in-memory
+        // state from disk; without it the toolbar would stay
+        // permanently desynced.
+        cx.update(|cx| toggle_frontmatter_flag(id, "_favorite", !captured_is_favorite, cx));
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let after = cx
+                .global::<vault::Vault>()
+                .note_sync(id)
+                .unwrap()
+                .is_favorite();
+            assert!(
+                after,
+                "fast-path call must re-sync in-memory frontmatter from disk",
+            );
         });
     }
 
