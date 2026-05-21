@@ -30,9 +30,9 @@
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. ✅ Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
-9.2.10. ⏳ Organized toolbar cell needs green-checked colour treatment
+9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
-9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
+9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
 9.2.13. Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 
 ## 3. Low Priority
@@ -569,6 +569,17 @@ check icon overlaid.  The Star branch's `StarFill` icon already
 gives the desired filled-glyph effect — match that pattern for
 parity.  Original broken-closure commit sha remains `e1d61a32`.
 
+**Re-closure (commit `d3f5971e`).**  Took the "background fill +
+overlay icon" path: introduced an `ActiveStyle` enum in
+`note_toolbar.rs` with three variants — `Tint` (raw-mode subtle
+bg), `GlyphColor(Hsla)` (star icon stroke colour), `Fill(Hsla)`
+(organized green disk).  The cell helper paints the cell
+background with the fill colour and forces the glyph to
+`gpui::white()` when in `Fill` mode.  Inactive state stays as the
+outlined `CircleCheck` in muted foreground.  `organized_icon_for(active)`
+is a tiny helper extraction so the test path calls the same render
+function the production path uses — no test-vs-production drift.
+
 #### 9.2.11
 
 **Source:** user-reported visual regression on 9.2.1 (star toggle),
@@ -636,6 +647,17 @@ reads the stale `entries` slice.  Fix: emit a vault-side signal
 (extension of `VaultChanged` or a new event) when
 `set_frontmatter_bool` lands, and subscribe `note_list_pane` to it.
 Original commit sha for the broken closure remains `8ee5fa33`.
+
+**Re-closure (commit `d3f5971e`).**  `Vault::set_frontmatter_bool`
+now emits a `VaultChanged::FrontmatterChanged` event over the
+existing `watch_tx` channel after the in-memory + disk update lands.
+`note_list_pane` subscribes via `install_vault_watch_task`
+(mirroring `note_item::install_dispatch_task`) and calls
+`refresh_from_vault` on every event so the cached `entries` slice
+tracks chrome-initiated changes.  Regression test opens a real
+on-disk vault via `tempfile::TempDir`, drives the executor through
+the event, and asserts an organized note disappears from the Inbox
+visible list.
 
 #### 9.2.13
 
