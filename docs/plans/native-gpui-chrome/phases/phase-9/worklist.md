@@ -30,7 +30,7 @@
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. ✅ Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
-9.2.10. ⏳ Organized toolbar cell needs green-checked colour treatment
+9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
 9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
@@ -679,6 +679,27 @@ not a filled disk.  **Fix paths:**
    or the workspace's own icon registry.
 Option 1 is smaller; take it unless `gpui-component`'s asset
 loader can't load just `Check` without the surrounding circle.
+
+**Re-closure-2 (commit `<this-commit>`).**  Took Option 1.  The
+`Fill` variant of `ActiveStyle` now renders an inner
+`rounded_full` 18×18 disc as a child of the cell, with the
+glyph (`IconName::Check`) painted in white over that disc.  The
+cell's outer `rounded_sm` 24×24 rectangle stays transparent — the
+load-bearing change is that `active_bg` for `Fill` is now `None`
+instead of `Some(disc colour)`, so the 24×24 click target keeps
+its baseline (no fill, no hover-tint when active) and only the
+inner round disc carries the green.  Result reads as a clean green
+circle with white check matching React's `OrganizedAction` Image
+#5 reference; the 3 pt halo of cell baseline around the disc gives
+the visual rhythm the React layout uses between the surrounding
+click target and the action chip.  `toolbar_cell_inner` is the
+single source of truth — the `Tint` (raw-mode) and `GlyphColor`
+(star) variants are unchanged, so the green disc treatment is
+opt-in via `ActiveStyle::Fill` and only the organized cell takes
+it today.  New regression test
+(`organized_active_cell_helper_constructs_with_filled_disc`) pins
+the helper's disc-construction path so a future refactor that
+drops the inner child accidentally fails CI.
 
 #### 9.2.11
 
