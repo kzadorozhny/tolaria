@@ -27,9 +27,6 @@ fn main() {
 }
 
 #[cfg(target_os = "macos")]
-mod inspector;
-
-#[cfg(target_os = "macos")]
 mod menus;
 
 #[cfg(target_os = "macos")]
@@ -198,21 +195,28 @@ mod macos {
     where
         F: FnOnce(
                 &mut workspace::TolariaWorkspace,
+                &mut gpui::Window,
                 &mut gpui::Context<workspace::TolariaWorkspace>,
             ) + 'static,
     {
-        // Defer for the same re-entrancy reason as `dispatch_to_any_window`:
-        // when an action is dispatched from inside the window's own
-        // dispatch tree (menu click, keybinding routed through the
-        // element tree), the window slot in `App::windows` is already
-        // taken by the current update.  `cx.defer` queues the inner
-        // `handle.update` for after the current update unwinds.
+        // Defer for re-entrancy: when an action is dispatched from
+        // inside the window's own dispatch tree (menu click, keybinding
+        // routed through the element tree), the window slot in
+        // `App::windows` is already taken by the current update.
+        // `cx.defer` queues the inner `handle.update` for after the
+        // current update unwinds, so the follow-up borrow succeeds.
+        //
+        // The inner `workspace.update_in` (rather than plain `update`)
+        // threads the active `Window` through to `f` so callers like
+        // `rebuild_menus_with_workspace` can read window-bound state
+        // (e.g. `Window::is_inspector_picking`) without re-entering
+        // `handle.update` against an already-taken window slot.
         cx.defer(move |cx| {
             let Some(handle) = cx.active_window() else {
                 log::debug!("{label}: no active window");
                 return;
             };
-            if let Err(err) = handle.update(cx, |root, _window, app_cx| {
+            if let Err(err) = handle.update(cx, |root, window, app_cx| {
                 let Ok(root_entity) = root.downcast::<gpui_component::Root>() else {
                     log::debug!("{label}: window root is not gpui_component::Root");
                     return;
@@ -222,7 +226,11 @@ mod macos {
                     log::debug!("{label}: Root inner view is not TolariaWorkspace");
                     return;
                 };
-                workspace.update(app_cx, f);
+                // Plain `Entity::update` plus captured `window` is the
+                // synchronous equivalent of `Entity::update_in` (which
+                // requires a `VisualContext`, only available in async /
+                // test contexts).
+                workspace.update(app_cx, |ws, cx| f(ws, window, cx));
             }) {
                 log::error!("{label} dispatch failed: {err:#}");
             }
@@ -234,16 +242,33 @@ mod macos {
     ///
     /// Worklist 3.2 — the View menu's two toggle entries flip between
     /// `"Show …"` and `"Hide …"` based on the workspace's left-dock
-    /// state and the inspector slot.  Action handlers that already run
-    /// inside `dispatch_to_workspace` call this so the rebuild
-    /// observes the *post-toggle* state.
+    /// state and GPUI's inspector overlay.  Action handlers that
+    /// already run inside `dispatch_to_workspace` call this so the
+    /// rebuild observes the *post-toggle* state.
+    ///
+    /// `inspector_picking` is sourced from
+    /// [`gpui::Window::is_inspector_picking`] — the only public GPUI
+    /// API that exposes any part of the inspector overlay state.  It
+    /// returns `true` during the mouse-pick step (a strict subset of
+    /// "overlay is visible"), so the menu label flips precisely while
+    /// the user is hovering elements with the picker active.  If a
+    /// future gpui release exposes a broader `has_inspector()`
+    /// predicate, swap the right-hand side here without touching the
+    /// rest of the menu rebuild path.
+    ///
+    /// Reads the [`gpui::Window`] threaded through by
+    /// [`dispatch_to_workspace`] rather than re-entering `handle.update`
+    /// on the active-window handle — `handle.update` cannot be nested
+    /// against the same window because GPUI takes the window slot for
+    /// the duration of the outer update.
     fn rebuild_menus_with_workspace(
         workspace: &workspace::TolariaWorkspace,
+        window: &mut gpui::Window,
         cx: &mut gpui::Context<workspace::TolariaWorkspace>,
     ) {
         let state = menus::MenuState {
             sidebar_open: workspace.is_sidebar_open(cx),
-            inspector_open: crate::inspector::is_inspector_open(),
+            inspector_picking: window.is_inspector_picking(cx),
         };
         cx.set_menus(menus::app_menus(state));
     }
@@ -260,57 +285,8 @@ mod macos {
     /// which leaves the previously-set labels in place — matching the
     /// `"Show …"` default we lay down before window open.
     fn rebuild_menus(cx: &mut App) {
-        dispatch_to_workspace("rebuild_menus", cx, |ws, cx| {
-            rebuild_menus_with_workspace(ws, cx);
-        });
-    }
-
-    /// Run `f` against any live Tolaria window — deferred to the
-    /// next event-loop tick so the current update has fully unwound
-    /// before the window-update borrow is acquired.
-    ///
-    /// Root cause of the "ToggleInspector dispatch failed: window not
-    /// found" reports: when an action fires from inside a window's
-    /// dispatch tree (menu click, keybinding routed through the
-    /// element tree), the action handler runs while the window's
-    /// `Option<Box<Window>>` slot in `App::windows` is already taken
-    /// by the current update.  `gpui::AnyWindowHandle::update` then
-    /// hits the `cx.windows.get_mut(id)?.take()?` branch with `None`
-    /// on the `.take()`, surfacing as `anyhow!("window not found")`.
-    ///
-    /// `cx.defer` queues the closure to run after the current update
-    /// completes — by that point the window slot is restored, so the
-    /// follow-up `handle.update` succeeds.  Picks the window handle
-    /// at dispatch time (deferred), not at registration time, so the
-    /// path is also safe to call from cold start-up contexts where
-    /// no window exists yet.
-    ///
-    /// Gated by `cfg(debug_assertions)` because the only current
-    /// caller (`ToggleElementInspector`) is itself debug-only — gpui's
-    /// `Window::toggle_inspector` is gated by
-    /// `cfg(any(feature = "inspector", debug_assertions))`.  Un-gate
-    /// the helper if a release-path action handler needs it later.
-    #[cfg(debug_assertions)]
-    fn dispatch_to_any_window<F>(label: &'static str, cx: &mut App, f: F)
-    where
-        F: FnOnce(gpui::AnyView, &mut gpui::Window, &mut App) + 'static,
-    {
-        cx.defer(move |cx| {
-            // Prefer the live-window registry over `active_window()` —
-            // both are checked at deferred-dispatch time so a stale
-            // focus handle can't slip through.
-            let handle = cx
-                .windows()
-                .into_iter()
-                .next()
-                .or_else(|| cx.active_window());
-            let Some(handle) = handle else {
-                log::debug!("{label}: no live window available");
-                return;
-            };
-            if let Err(err) = handle.update(cx, f) {
-                log::error!("{label} dispatch failed: {err:#}");
-            }
+        dispatch_to_workspace("rebuild_menus", cx, |ws, window, cx| {
+            rebuild_menus_with_workspace(ws, window, cx);
         });
     }
 
@@ -406,9 +382,9 @@ mod macos {
                 // so calling `rebuild_menus(cx)` after it at the
                 // outer scope would land before the toggle executes.
                 cx.on_action(|_: &actions::ToggleSidebar, cx| {
-                    dispatch_to_workspace("ToggleSidebar", cx, |ws, cx| {
+                    dispatch_to_workspace("ToggleSidebar", cx, |ws, window, cx| {
                         ws.toggle_left_dock(cx);
-                        rebuild_menus_with_workspace(ws, cx);
+                        rebuild_menus_with_workspace(ws, window, cx);
                     });
                 });
 
@@ -416,7 +392,9 @@ mod macos {
                 // pane group's active pane.  No-op when nothing is
                 // open.
                 cx.on_action(|_: &actions::CloseTab, cx| {
-                    dispatch_to_workspace("CloseTab", cx, |ws, cx| ws.close_active_tab(cx));
+                    dispatch_to_workspace("CloseTab", cx, |ws, _window, cx| {
+                        ws.close_active_tab(cx)
+                    });
                 });
 
                 // Dismiss — close the active modal (Phase 8.13).
@@ -426,7 +404,9 @@ mod macos {
                 // workspace's `dismiss_active_modal` gates on
                 // `has_active_modal` before touching the modal layer.
                 cx.on_action(|_: &actions::Dismiss, cx| {
-                    dispatch_to_workspace("Dismiss", cx, |ws, cx| ws.dismiss_active_modal(cx));
+                    dispatch_to_workspace("Dismiss", cx, |ws, _window, cx| {
+                        ws.dismiss_active_modal(cx)
+                    });
                 });
 
                 // Save / NewNote / QuickOpen / CommandPalette stay as
@@ -503,62 +483,47 @@ mod macos {
                     "ReportIssue",
                     "Phase 9.x will open the GitHub issue tracker via open::that",
                 );
-                // Worklist 3.1 — `ToggleInspector` opens (or closes) a
-                // separate macOS `NSWindow` that hosts
-                // `inspector_panel::InspectorPanel`.  The user-facing
-                // verb (toolbar button + `View → Toggle Inspector`)
-                // dispatches this; the GPUI debug element-picker moves
-                // to `ToggleElementInspector` below so the `Cmd+Alt+I`
-                // muscle memory still works in debug builds.
+                // `ToggleInspector` toggles GPUI's built-in
+                // element-picker inspector overlay on the active
+                // window — a floating dev-tool surface composited
+                // over the workspace window (not a docked side
+                // panel).  Dispatched from the note-toolbar Inspector
+                // button (worklist 2.18) and `View → Toggle
+                // Inspector` (`menus.rs`).
                 //
-                // Lifecycle plumbing lives in `crate::inspector` so the
-                // process-global slot is the single source of truth for
-                // worklist 3.2 (dynamic menu labels).
+                // `Window::toggle_inspector` is only compiled when
+                // gpui's `inspector` feature is on, which our
+                // workspace gets implicitly from `debug_assertions` —
+                // present in debug builds, absent in release.  Gate
+                // the call with the same predicate so the handler
+                // still compiles in release; in release it logs and
+                // no-ops rather than failing the build.
+                //
+                // Worklist 3.2 — `rebuild_menus(cx)` is deferred
+                // through `dispatch_to_workspace`, so it observes the
+                // post-toggle state of `Window::is_inspector_picking`
+                // when the deferred closure actually runs.
                 cx.on_action(|_: &actions::ToggleInspector, cx| {
-                    if crate::inspector::is_inspector_open() {
-                        crate::inspector::close_inspector_window(cx);
-                    } else {
-                        crate::inspector::open_inspector_window(cx);
-                    }
-                    // Worklist 3.2 — keep the View menu's inspector
-                    // entry label (`"Show Inspector"` ↔ `"Hide
-                    // Inspector"`) in sync with the slot state.
-                    rebuild_menus(cx);
-                });
-
-                // `Cmd+Alt+I` toggles GPUI's built-in element-picker
-                // inspector (always available in debug builds; in release
-                // builds gpui must be compiled with its `inspector` feature
-                // — see `~/.cargo/git/checkouts/zed-…/crates/gpui/Cargo.toml`).
-                //
-                // Robust dispatch: try `cx.active_window()` first, but
-                // fall back to iterating `cx.windows()` when the active
-                // handle no longer resolves.  Closing-and-reopening a
-                // window leaves `active_window()` briefly pointing at a
-                // stale handle that returns `Err("window not found")` on
-                // `handle.update`, which is what produced the spurious
-                // error reports.  Iterating the live window list bypasses
-                // the staleness window without depending on AppKit's
-                // focus tracking.
-                cx.on_action(|_: &actions::ToggleElementInspector, cx| {
-                    // `Window::toggle_inspector` is only compiled when
-                    // gpui's `inspector` feature is on, which our
-                    // workspace gets implicitly from `debug_assertions`
-                    // — present in debug builds, absent in release.
-                    // Gate the call with the same predicate so the
-                    // action handler still compiles in release; in
-                    // release it logs and no-ops rather than failing
-                    // the build.
                     #[cfg(debug_assertions)]
-                    dispatch_to_any_window("ToggleElementInspector", cx, |_, window, app_cx| {
-                        window.toggle_inspector(app_cx);
-                    });
+                    {
+                        let Some(handle) = cx.active_window() else {
+                            log::warn!("ToggleInspector: no active window");
+                            return;
+                        };
+                        if let Err(err) =
+                            handle.update(cx, |_, window, app_cx| window.toggle_inspector(app_cx))
+                        {
+                            log::error!("ToggleInspector update failed: {err:#}");
+                            return;
+                        }
+                        rebuild_menus(cx);
+                    }
                     #[cfg(not(debug_assertions))]
                     {
                         let _ = cx;
                         log::debug!(
-                            "ToggleElementInspector: gpui inspector is not available in \
-                             release builds (debug_assertions disabled)"
+                            "ToggleInspector: gpui inspector is not available in release \
+                             builds (debug_assertions disabled)"
                         );
                     }
                 });

@@ -30,14 +30,24 @@ use gpui::{Menu, MenuItem, OsAction};
 /// of the static `"Toggle …"` verbs.  Passed by value because both
 /// fields are `bool` and the struct lives only for the duration of one
 /// `cx.set_menus(...)` call — `MenuState` is intentionally not a
-/// `gpui::Global` (the workspace already owns sidebar state and the
-/// inspector slot already owns inspector state; this is derived).
+/// `gpui::Global`; the workspace owns sidebar state and the inspector
+/// state is read from the active window via
+/// [`gpui::Window::is_inspector_picking`] inside
+/// `main.rs::rebuild_menus_with_workspace`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MenuState {
     /// Whether the workspace's left dock (sidebar) is currently open.
     pub sidebar_open: bool,
-    /// Whether the inspector window is currently tracked as open.
-    pub inspector_open: bool,
+    /// Whether GPUI's inspector overlay is currently in its
+    /// element-picking sub-state on the workspace window.  Sourced
+    /// from [`gpui::Window::is_inspector_picking`], which returns
+    /// `true` while the user is hovering elements with the picker
+    /// active — a strict subset of "overlay visible".  The field is
+    /// named after the proxy (not after "is the inspector open") so
+    /// the menu label honestly reflects what the public GPUI API can
+    /// answer today; swap to a broader predicate without renaming if
+    /// gpui exposes one.
+    pub inspector_picking: bool,
 }
 
 /// Build the application menu bar.
@@ -130,14 +140,16 @@ fn edit_menu() -> Menu {
 /// action handler, inspector action handler in `main.rs`) rebuild the
 /// whole menu via `cx.set_menus(app_menus(...))` so the label tracks
 /// state across every dispatch vector (menu click, Cmd accelerator,
-/// title-bar / note-toolbar buttons).
+/// title-bar / note-toolbar buttons).  The inspector axis is a proxy
+/// over `Window::is_inspector_picking`; see [`MenuState::inspector_picking`]
+/// for the caveat about picking-vs-overlay-open state.
 fn view_menu(state: MenuState) -> Menu {
     let sidebar_label = if state.sidebar_open {
         "Hide Sidebar"
     } else {
         "Show Sidebar"
     };
-    let inspector_label = if state.inspector_open {
+    let inspector_label = if state.inspector_picking {
         "Hide Inspector"
     } else {
         "Show Inspector"
@@ -309,13 +321,14 @@ mod tests {
     /// View menu (both open): labels flip to "Hide Sidebar" / "Hide
     /// Inspector".  Worklist 3.2 — the menu rebuild driven from the
     /// action handlers in `main.rs` is what keeps these in sync with
-    /// the workspace + inspector slot state.
+    /// the workspace state and the active window's inspector
+    /// element-picking state.
     #[test]
     fn view_menu_shows_hide_labels_when_state_open() {
         assert_menu_schema(
             &view_menu(MenuState {
                 sidebar_open: true,
-                inspector_open: true,
+                inspector_picking: true,
             }),
             "View",
             &[
@@ -336,7 +349,7 @@ mod tests {
     fn view_menu_labels_track_each_axis_independently() {
         let menu = view_menu(MenuState {
             sidebar_open: true,
-            inspector_open: false,
+            inspector_picking: false,
         });
         assert_menu_schema(
             &menu,
