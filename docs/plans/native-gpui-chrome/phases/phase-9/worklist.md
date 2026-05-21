@@ -33,7 +33,7 @@
 9.2.10. ⏳ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
-9.2.13. ⏳ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
+9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 
 ## 3. Low Priority
 
@@ -795,6 +795,37 @@ fixed array).  Could also be a missing `Cargo.toml` propagation
 of the `chrono` runtime promotion if some downstream feature gate
 needs adjusting.  Fix path: run the app, click the inspector
 toggle, capture the panic or log to localise the failure.
+
+**Re-closure-2 (commit `<this-commit>`).**  Root cause was not the
+`Info` variant: `actions::ToggleInspector` (`tolaria/src/main.rs:528`)
+was still routed to GPUI's debug element-picker overlay
+(`Window::toggle_inspector`), so clicking the toolbar inspector cell
+flipped the dev-tool overlay (often invisible without a renderer
+match) instead of attaching the application's
+`inspector_panel::InspectorPanel`.  The 9.2.8 closure (`8897ab93`)
+introduced an `inspector_panel_slot` but explicitly left the mount
+to a "follow-up row"; this is that follow-up.  Fix has four seams:
+(1) `actions::ToggleInspector` is now the product action that
+attaches the `InspectorPanel` to the workspace's right dock; a new
+`actions::ToggleElementInspector` carries the developer
+element-picker overlay (`Cmd+Alt+I` keymap entry moved with it).
+(2) A new `toggle_or_swap_right_dock_panel` helper in `main.rs`
+encodes the three right-dock states (already-mounted-toggle,
+sibling-swap, fresh-attach) so the ToC and Inspector handlers stay
+symmetric — the `panel_key` of the currently attached panel
+(via the new `Dock::panel_key` + `TolariaWorkspace::right_dock_panel_key`
+accessors) is the source of truth for which branch fires.  (3) The
+slot re-uses the same `InspectorPanel` entity across swaps, so the
+existing `HeadingsUpdated` / `OpenNote` subscribers (already wired in
+`8897ab93`) keep tracking the same panel without re-resolving the
+workspace.  (4) `menus.rs` MenuState's `inspector_picking` field now
+reflects right-dock visibility for the `"inspector"` key instead of
+`Window::is_inspector_picking`, so View → Hide / Show Inspector
+flips against the actual panel.  Tests added: workspace's
+`right_dock_panel_key_tracks_attached_panel` (empty → toc → swap to
+inspector) and tolaria's `toggle_inspector_attaches_panel_and_swaps_with_toc`
+exercises the open/close/swap state machine end-to-end against the
+live helper.
 
 - **Shared infrastructure.** Rows `9.2.3` (neighbourhood) and `9.2.8`
   (inspector backlinks) both consume `vault::Vault::backlinks(id)` —

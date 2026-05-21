@@ -30,23 +30,18 @@ use gpui::{Menu, MenuItem, OsAction};
 /// of the static `"Toggle …"` verbs.  Passed by value because both
 /// fields are `bool` and the struct lives only for the duration of one
 /// `cx.set_menus(...)` call — `MenuState` is intentionally not a
-/// `gpui::Global`; the workspace owns sidebar state and the inspector
-/// state is read from the active window via
-/// [`gpui::Window::is_inspector_picking`] inside
-/// `main.rs::rebuild_menus_with_workspace`.
+/// `gpui::Global`; the workspace owns sidebar / right-dock state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MenuState {
     /// Whether the workspace's left dock (sidebar) is currently open.
     pub sidebar_open: bool,
-    /// Whether GPUI's inspector overlay is currently in its
-    /// element-picking sub-state on the workspace window.  Sourced
-    /// from [`gpui::Window::is_inspector_picking`], which returns
-    /// `true` while the user is hovering elements with the picker
-    /// active — a strict subset of "overlay visible".  The field is
-    /// named after the proxy (not after "is the inspector open") so
-    /// the menu label honestly reflects what the public GPUI API can
-    /// answer today; swap to a broader predicate without renaming if
-    /// gpui exposes one.
+    /// Whether the product [`inspector_panel::InspectorPanel`] is
+    /// currently visible in the workspace's right dock.  Worklist
+    /// 9.2.13 — the View → Inspector entry now toggles the panel,
+    /// not GPUI's element-picker overlay, so the label tracks the
+    /// dock's visible-and-showing-inspector state.  Computed by
+    /// `main.rs::rebuild_menus_with_workspace` as
+    /// `right_dock_panel_key() == Some("inspector") && is_right_dock_open()`.
     pub inspector_picking: bool,
 }
 

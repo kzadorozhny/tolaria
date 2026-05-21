@@ -34,16 +34,28 @@ gpui::actions!(
         QuickOpen,
         CommandPalette,
         ToggleSidebar,
+        /// Toggle the application's [`inspector_panel::InspectorPanel`]
+        /// in the workspace's right dock (Phase 9 worklist 9.2.13).
+        ///
+        /// Chrome owns the dock state; the action handler in
+        /// `tolaria/src/main.rs` resolves the active workspace and
+        /// either attaches a fresh `InspectorPanel` or toggles an
+        /// already-attached one.  Dispatched from the note-toolbar
+        /// `note-toolbar-inspector` cell (worklist 2.18) and from
+        /// `View → Show / Hide Inspector` (`menus.rs`).  No default
+        /// keybinding — React parity (the React `BreadcrumbBar`
+        /// inspector button is mouse-only).
+        ToggleInspector,
         /// Toggle GPUI's built-in debug element-picker inspector
         /// overlay on the active window — the floating dev-tool
         /// surface ADR-0115 wired up.  Bound to `Cmd+Alt+I` (see
         /// `crates/actions/assets/default.json`).  Only meaningful in
         /// debug builds — gpui's `Window::toggle_inspector` is gated
         /// on `cfg(any(feature = "inspector", debug_assertions))`.
-        /// Also dispatched from the note-toolbar Inspector button
-        /// (worklist 2.18) and from `View → Toggle Inspector`
-        /// (`menus.rs`).
-        ToggleInspector,
+        /// Distinct from [`ToggleInspector`] (the product Inspector
+        /// panel); this action surfaces only via the keymap so the
+        /// developer overlay stays out of the user-facing menu.
+        ToggleElementInspector,
         /// Flip the active `NoteItem` between BlockNote (rich) and
         /// CodeMirror raw markdown (Phase 9 worklist 9.2.4).
         ///

@@ -87,6 +87,56 @@ mod tests {
                 position: DockPosition::Left,
             }
         }
+
+        /// A right-dock variant identified by a custom `panel_key`.
+        /// Worklist 9.2.13 — used by the right-dock swap regression
+        /// tests so multiple right-dock mocks can be distinguished by
+        /// `right_dock_panel_key`.
+        fn right_with_key(key: &'static str) -> RightKeyedMockPanel {
+            RightKeyedMockPanel { key }
+        }
+    }
+
+    /// Right-dock mock panel with a caller-chosen `panel_key`.
+    /// Worklist 9.2.13 — pairs with the `right_dock_panel_key`
+    /// accessor tests so swap behaviour can be exercised between two
+    /// distinct keys.
+    struct RightKeyedMockPanel {
+        key: &'static str,
+    }
+
+    impl Render for RightKeyedMockPanel {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            gpui::div().child("right-panel")
+        }
+    }
+
+    impl crate::panel::Panel for RightKeyedMockPanel {
+        fn persistent_name(&self) -> &str {
+            "RightKeyedMockPanel"
+        }
+
+        fn panel_key(&self) -> &str {
+            self.key
+        }
+
+        fn position(&self, _cx: &App) -> DockPosition {
+            DockPosition::Right
+        }
+
+        fn set_position(&mut self, _position: DockPosition, _cx: &mut Context<Self>) {}
+
+        fn default_size(&self, _cx: &App) -> Pixels {
+            px(240.0)
+        }
+
+        fn toggle_action(&self) -> Box<dyn gpui::Action> {
+            Box::new(actions::ToggleInspector)
+        }
+
+        fn starts_open(&self, _cx: &App) -> bool {
+            true
+        }
     }
 
     impl Render for MockPanel {
@@ -349,6 +399,62 @@ mod tests {
         assert!(
             open_after_second_toggle,
             "second toggle must reopen the sidebar"
+        );
+    }
+
+    /// Worklist 9.2.13 — `right_dock_panel_key` returns `None` when
+    /// the right dock is empty, the panel's `panel_key` when attached,
+    /// and reflects a swap when a sibling panel replaces the first.
+    /// The tolaria-side toggle handlers (`ToggleInspector` /
+    /// `ToggleTableOfContents`) read this accessor to decide between
+    /// open/close, swap, and fresh-attach.
+    #[gpui::test]
+    fn right_dock_panel_key_tracks_attached_panel(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let window = cx.add_window(TolariaWorkspace::empty);
+
+        // Empty dock — no panel attached.
+        let empty_key = window
+            .update(cx, |ws, _window, cx| ws.right_dock_panel_key(cx))
+            .unwrap();
+        assert!(
+            empty_key.is_none(),
+            "right dock with no panel must report None"
+        );
+
+        // Attach `toc` — the panel's `panel_key` must surface through
+        // the accessor so chrome handlers know which entity is mounted.
+        window
+            .update(cx, |ws, _window, cx| {
+                let panel = cx.new(|_| MockPanel::right_with_key("toc"));
+                ws.attach_right_dock(panel, cx);
+            })
+            .unwrap();
+        let toc_key = window
+            .update(cx, |ws, _window, cx| ws.right_dock_panel_key(cx))
+            .unwrap();
+        assert_eq!(
+            toc_key.as_deref(),
+            Some("toc"),
+            "after attaching the toc mock the dock must report `toc`"
+        );
+
+        // Swap to `inspector` — the accessor flips so the inspector
+        // toggle handler can distinguish "already mine, just close"
+        // from "sibling is up, swap me in".
+        window
+            .update(cx, |ws, _window, cx| {
+                let panel = cx.new(|_| MockPanel::right_with_key("inspector"));
+                ws.attach_right_dock(panel, cx);
+            })
+            .unwrap();
+        let inspector_key = window
+            .update(cx, |ws, _window, cx| ws.right_dock_panel_key(cx))
+            .unwrap();
+        assert_eq!(
+            inspector_key.as_deref(),
+            Some("inspector"),
+            "after swapping in the inspector mock the dock must report `inspector`"
         );
     }
 

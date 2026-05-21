@@ -44,6 +44,14 @@ pub struct Dock {
     /// Cached `default_size` from the attached panel.
     panel_size: Pixels,
     state: DockState,
+    /// Cached [`Panel::panel_key`] for the attached panel.  Lets
+    /// chrome handlers distinguish "the dock is showing my panel"
+    /// from "it's showing a sibling panel" without downcasting the
+    /// [`AnyView`].  Worklist 9.2.13 — the right dock now hosts both
+    /// the ToC (`"toc"`) and the InspectorPanel (`"inspector"`); each
+    /// toggle handler reads this key to decide between
+    /// open/close/swap.
+    panel_key: Option<String>,
 }
 
 impl Dock {
@@ -57,6 +65,7 @@ impl Dock {
             position,
             panel_size: DEFAULT_PANEL_SIZE,
             state: DockState::Empty,
+            panel_key: None,
         }
     }
 
@@ -64,8 +73,14 @@ impl Dock {
     /// `starts_open` to initialise the dock state.
     pub fn set_panel<P: Panel>(&mut self, panel: Entity<P>, cx: &mut Context<Self>) {
         // Read metadata before consuming `panel` via `into()`.
-        let size = panel.read(cx).default_size(cx);
-        let open = panel.read(cx).starts_open(cx);
+        let (size, open, key) = {
+            let read = panel.read(cx);
+            (
+                read.default_size(cx),
+                read.starts_open(cx),
+                read.panel_key().to_string(),
+            )
+        };
         self.panel_size = if size > px(0.0) {
             size
         } else {
@@ -77,7 +92,16 @@ impl Dock {
         } else {
             DockState::Closed(view)
         };
+        self.panel_key = Some(key);
         cx.notify();
+    }
+
+    /// The [`Panel::panel_key`] of the currently attached panel, if
+    /// any.  `None` when the dock is empty.  Worklist 9.2.13 lets the
+    /// right-dock toggle handlers (`ToggleInspector` /
+    /// `ToggleTableOfContents`) decide between open/close/swap.
+    pub fn panel_key(&self) -> Option<&str> {
+        self.panel_key.as_deref()
     }
 
     /// Toggle the dock between open and closed.

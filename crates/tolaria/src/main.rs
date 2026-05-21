@@ -47,7 +47,7 @@ fn main() {
 }
 
 #[cfg(target_os = "macos")]
-mod macos {
+pub(crate) mod macos {
     use std::path::PathBuf;
 
     use gpui::{
@@ -272,12 +272,19 @@ mod macos {
     /// the duration of the outer update.
     fn rebuild_menus_with_workspace(
         workspace: &workspace::TolariaWorkspace,
-        window: &mut gpui::Window,
+        _window: &mut gpui::Window,
         cx: &mut gpui::Context<workspace::TolariaWorkspace>,
     ) {
+        // Worklist 9.2.13 — the View → Inspector entry now toggles the
+        // application's `InspectorPanel` in the right dock (the
+        // GPUI element-picker overlay moved to `ToggleElementInspector`),
+        // so the menu label tracks the right dock's mounted-panel
+        // state rather than `Window::is_inspector_picking`.
+        let inspector_visible = workspace.is_right_dock_open(cx)
+            && workspace.right_dock_panel_key(cx).as_deref() == Some("inspector");
         let state = menus::MenuState {
             sidebar_open: workspace.is_sidebar_open(cx),
-            inspector_picking: window.is_inspector_picking(cx),
+            inspector_picking: inspector_visible,
         };
         cx.set_menus(menus::app_menus(state));
     }
@@ -297,6 +304,63 @@ mod macos {
         dispatch_to_workspace("rebuild_menus", cx, |ws, window, cx| {
             rebuild_menus_with_workspace(ws, window, cx);
         });
+    }
+
+    /// Shared open/close/swap logic for the two right-dock toggle
+    /// actions (Worklist 9.2.13).  Three states per dock + slot:
+    ///
+    /// 1. **Dock is showing this same panel** — flip its open/closed
+    ///    state via [`workspace::TolariaWorkspace::toggle_right_dock`].
+    ///    The slot already holds the entity; nothing else to do.
+    /// 2. **Dock is showing the sibling panel** — re-attach this one
+    ///    (replacing the sibling's `AnyView` in the dock state).
+    ///    Re-use the slot's existing entity when present so
+    ///    `HeadingsUpdated` / `OpenNote` subscribers stay live across
+    ///    swaps; only construct a fresh entity when the slot is empty.
+    /// 3. **Dock is empty** — construct + attach a fresh entity via
+    ///    `factory`, and populate the slot so subsequent dispatches
+    ///    land in case (1) or (2).
+    ///
+    /// `target_key` is the [`workspace::Panel::panel_key`] of the
+    /// panel this handler owns (`"toc"` or `"inspector"`).  `slot` is
+    /// the shared `Rc<RefCell<Option<Entity<P>>>>` the
+    /// `HeadingsUpdatedEvent` / `OpenNoteEvent` subscribers also read
+    /// — keeping the entity alive across swaps means a panel that was
+    /// previously closed reappears with whatever state was last
+    /// pushed in by the subscribers.
+    pub(crate) fn toggle_or_swap_right_dock_panel<P>(
+        ws: &mut workspace::TolariaWorkspace,
+        cx: &mut gpui::Context<workspace::TolariaWorkspace>,
+        target_key: &'static str,
+        slot: &std::rc::Rc<std::cell::RefCell<Option<gpui::Entity<P>>>>,
+        factory: impl FnOnce(&mut gpui::Context<workspace::TolariaWorkspace>) -> gpui::Entity<P>,
+    ) where
+        P: workspace::Panel,
+    {
+        let current_key = ws.right_dock_panel_key(cx);
+        let already_target = current_key.as_deref() == Some(target_key);
+        if already_target {
+            // Case 1: open/close toggle on the same panel.
+            ws.toggle_right_dock(cx);
+            return;
+        }
+        // Case 2 (sibling) or case 3 (empty) — both want a fresh
+        // `set_panel` call on this target.  Re-use the slot's entity
+        // when populated so subscriber state survives a swap; fresh
+        // entity otherwise.  Read-then-mutate is split into two
+        // `RefCell` borrows to keep the `borrow_mut` from racing the
+        // outer `borrow` — a single `borrow().clone().unwrap_or_else`
+        // would panic because the closure's `borrow_mut` runs while
+        // the outer immutable borrow is still alive.
+        let existing = slot.borrow().clone();
+        let panel = if let Some(p) = existing {
+            p
+        } else {
+            let p = factory(cx);
+            *slot.borrow_mut() = Some(p.clone());
+            p
+        };
+        ws.attach_right_dock(panel, cx);
     }
 
     pub fn run() {
@@ -505,13 +569,15 @@ mod macos {
                     crate::inspector_renderer::render_tolaria_inspector,
                 ));
 
-                // `ToggleInspector` toggles GPUI's built-in
+                // `ToggleElementInspector` toggles GPUI's built-in
                 // element-picker inspector overlay on the active
                 // window — a floating dev-tool surface composited
                 // over the workspace window (not a docked side
-                // panel).  Dispatched from the note-toolbar Inspector
-                // button (worklist 2.18) and `View → Toggle
-                // Inspector` (`menus.rs`).
+                // panel).  Bound to `Cmd+Alt+I` in the default
+                // keymap; the note-toolbar Inspector button now
+                // routes through `ToggleInspector` (worklist 9.2.13)
+                // for the product Inspector Panel instead of this
+                // developer overlay.
                 //
                 // `Window::toggle_inspector` is only compiled when
                 // gpui's `inspector` feature is on, which our
@@ -525,17 +591,17 @@ mod macos {
                 // through `dispatch_to_workspace`, so it observes the
                 // post-toggle state of `Window::is_inspector_picking`
                 // when the deferred closure actually runs.
-                cx.on_action(|_: &actions::ToggleInspector, cx| {
+                cx.on_action(|_: &actions::ToggleElementInspector, cx| {
                     #[cfg(debug_assertions)]
                     {
                         let Some(handle) = cx.active_window() else {
-                            log::warn!("ToggleInspector: no active window");
+                            log::warn!("ToggleElementInspector: no active window");
                             return;
                         };
                         if let Err(err) =
                             handle.update(cx, |_, window, app_cx| window.toggle_inspector(app_cx))
                         {
-                            log::error!("ToggleInspector update failed: {err:#}");
+                            log::error!("ToggleElementInspector update failed: {err:#}");
                             return;
                         }
                         rebuild_menus(cx);
@@ -544,8 +610,8 @@ mod macos {
                     {
                         let _ = cx;
                         log::debug!(
-                            "ToggleInspector: gpui inspector is not available in release \
-                             builds (debug_assertions disabled)"
+                            "ToggleElementInspector: gpui inspector is not available in \
+                             release builds (debug_assertions disabled)"
                         );
                     }
                 });
@@ -692,43 +758,63 @@ mod macos {
                 let toc_panel_slot: std::rc::Rc<
                     std::cell::RefCell<Option<gpui::Entity<toc_panel::TocPanel>>>,
                 > = std::rc::Rc::new(std::cell::RefCell::new(None));
+
+                // Worklist 9.2.13 — sibling slot for the InspectorPanel,
+                // promoted to a real mount: the toolbar's
+                // `note-toolbar-inspector` cell now dispatches the
+                // application's `ToggleInspector` and lands here
+                // (the previous GPUI debug element-picker moved to
+                // `ToggleElementInspector`, bound to `Cmd+Alt+I`).
+                // The slot keeps the entity alive across right-dock
+                // swaps with the ToC panel so the subscribers below
+                // (HeadingsUpdated / OpenNote) can continue writing
+                // through to the same panel without re-resolving the
+                // workspace.
+                let inspector_panel_slot: std::rc::Rc<
+                    std::cell::RefCell<Option<gpui::Entity<inspector_panel::InspectorPanel>>>,
+                > = std::rc::Rc::new(std::cell::RefCell::new(None));
+
+                // Worklist 9.2.6 / 9.2.13 — right-dock toggle handler
+                // for the ToC panel.  Shape mirrors `ToggleInspector`
+                // below: open/close when the dock is already showing
+                // this panel, swap when it's showing the sibling
+                // (Inspector), fresh-attach otherwise.  The dock's
+                // [`Panel::panel_key`] (`"toc"`) is the source of truth
+                // for "which panel is mounted right now".
                 let toc_slot_for_action = toc_panel_slot.clone();
                 cx.on_action(move |_: &actions::ToggleTableOfContents, cx| {
                     let slot = toc_slot_for_action.clone();
                     dispatch_to_workspace("ToggleTableOfContents", cx, move |ws, _window, cx| {
-                        // First dispatch: create + attach the panel.
-                        // The Dock's `set_panel` reads `starts_open`
-                        // (TocPanel returns `true`) so the user sees
-                        // the panel immediately on the first click.
-                        // Subsequent dispatches flip the dock through
-                        // its open / closed states.
-                        if !ws.has_right_dock_panel(cx) {
-                            let panel = cx.new(|_| toc_panel::TocPanel::new());
-                            ws.attach_right_dock(panel.clone(), cx);
-                            *slot.borrow_mut() = Some(panel);
-                        } else {
-                            ws.toggle_right_dock(cx);
-                        }
+                        toggle_or_swap_right_dock_panel(
+                            ws,
+                            cx,
+                            "toc",
+                            &slot,
+                            |cx| cx.new(|_| toc_panel::TocPanel::new()),
+                        );
                     });
                 });
 
-                // Worklist 9.2.8 — sibling slot for the InspectorPanel.
-                // Stays `None` until the inspector mount lands (the
-                // `ToggleInspector` action currently routes to GPUI's
-                // built-in element-picker; a follow-up row will swap
-                // the mount target).  The slot is declared here so the
-                // workspace subscribers below (HeadingsUpdated /
-                // OpenNote / InspectorOpenNoteEvent) can write through
-                // to the panel the moment a mount appears, with no
-                // additional plumbing required at that point.  The
-                // inspector_panel crate already owns the data-source
-                // wiring (vault::backlinks / outbound_links /
-                // type-instance filter / editor-bridge headings); this
-                // slot provides the seam from the live workspace into
-                // those methods.
-                let inspector_panel_slot: std::rc::Rc<
-                    std::cell::RefCell<Option<gpui::Entity<inspector_panel::InspectorPanel>>>,
-                > = std::rc::Rc::new(std::cell::RefCell::new(None));
+                // Worklist 9.2.13 — `ToggleInspector` now attaches the
+                // [`inspector_panel::InspectorPanel`] to the workspace's
+                // right dock, swapping it in when the dock currently
+                // shows the ToC panel.  Same shape as the ToC handler
+                // above; both share `toggle_or_swap_right_dock_panel`
+                // so the open/close/swap semantics stay consistent
+                // across the right dock's two panels.
+                let inspector_slot_for_action = inspector_panel_slot.clone();
+                cx.on_action(move |_: &actions::ToggleInspector, cx| {
+                    let slot = inspector_slot_for_action.clone();
+                    dispatch_to_workspace("ToggleInspector", cx, move |ws, _window, cx| {
+                        toggle_or_swap_right_dock_panel(
+                            ws,
+                            cx,
+                            "inspector",
+                            &slot,
+                            |cx| cx.new(|cx| inspector_panel::InspectorPanel::from_or_empty(cx)),
+                        );
+                    });
+                });
 
                 // 10. Open root window.  Copy f32 size values out before passing cx
                 //    to Bounds::centered so the borrow of SettingsStore is released.
@@ -1319,6 +1405,165 @@ mod tests {
              invisible glyphs.  Re-add `\"font-kit\"` to the workspace \
              `gpui_platform` feature list in `Cargo.toml`.",
             names.len(),
+        );
+    }
+
+    /// Worklist 9.2.13 — clicking the inspector toolbar button (or
+    /// dispatching [`actions::ToggleInspector`]) must attach the
+    /// product `InspectorPanel` to the workspace's right dock, then
+    /// toggle it open/closed on subsequent dispatches, and swap to
+    /// the inspector when the dock is currently showing the ToC
+    /// panel.  Mirrors the `cx.open_window` wiring in `macos::run`:
+    /// the shared `toggle_or_swap_right_dock_panel` helper is the
+    /// single source of truth so this test exercises the live code
+    /// path directly.
+    #[gpui::test]
+    fn toggle_inspector_attaches_panel_and_swaps_with_toc(cx: &mut TestAppContext) {
+        use gpui::AppContext as _;
+        use workspace::TolariaWorkspace;
+
+        cx.update(gpui_component::init);
+
+        let window = cx.add_window(TolariaWorkspace::empty);
+
+        // Empty right dock to start — both accessors report nothing.
+        let starts_empty = window
+            .update(cx, |ws, _window, cx| {
+                (ws.has_right_dock_panel(cx), ws.right_dock_panel_key(cx))
+            })
+            .unwrap();
+        assert!(!starts_empty.0, "right dock must start empty");
+        assert!(
+            starts_empty.1.is_none(),
+            "empty right dock must report no panel key"
+        );
+
+        // First dispatch: attach the InspectorPanel fresh.  Slot is
+        // empty so the factory runs.
+        let inspector_slot: std::rc::Rc<
+            std::cell::RefCell<Option<gpui::Entity<inspector_panel::InspectorPanel>>>,
+        > = std::rc::Rc::new(std::cell::RefCell::new(None));
+        window
+            .update(cx, |ws, _window, cx| {
+                crate::macos::toggle_or_swap_right_dock_panel(
+                    ws,
+                    cx,
+                    "inspector",
+                    &inspector_slot,
+                    |cx| cx.new(|_| inspector_panel::InspectorPanel::new()),
+                );
+            })
+            .unwrap();
+        let after_first = window
+            .update(cx, |ws, _window, cx| {
+                (
+                    ws.right_dock_panel_key(cx),
+                    ws.is_right_dock_open(cx),
+                    inspector_slot.borrow().is_some(),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            after_first.0.as_deref(),
+            Some("inspector"),
+            "first dispatch must mount the InspectorPanel on the right dock"
+        );
+        assert!(
+            after_first.1,
+            "InspectorPanel reports starts_open=true, so the dock must be open after attach"
+        );
+        assert!(
+            after_first.2,
+            "first dispatch must populate the slot so subsequent toggles re-use it"
+        );
+
+        // Second dispatch: same panel — toggle closed.
+        window
+            .update(cx, |ws, _window, cx| {
+                crate::macos::toggle_or_swap_right_dock_panel(
+                    ws,
+                    cx,
+                    "inspector",
+                    &inspector_slot,
+                    |cx| cx.new(|_| inspector_panel::InspectorPanel::new()),
+                );
+            })
+            .unwrap();
+        let closed_state = window
+            .update(cx, |ws, _window, cx| {
+                (ws.right_dock_panel_key(cx), ws.is_right_dock_open(cx))
+            })
+            .unwrap();
+        assert_eq!(
+            closed_state.0.as_deref(),
+            Some("inspector"),
+            "the dock must keep the inspector key after the close toggle"
+        );
+        assert!(!closed_state.1, "second dispatch must close the right dock");
+
+        // Third dispatch: a sibling toc panel arrives.  The toc slot
+        // is fresh so the factory runs there; the inspector slot stays
+        // populated so a subsequent inspector dispatch swaps back in
+        // without reconstructing.
+        let toc_slot: std::rc::Rc<std::cell::RefCell<Option<gpui::Entity<toc_panel::TocPanel>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        window
+            .update(cx, |ws, _window, cx| {
+                crate::macos::toggle_or_swap_right_dock_panel(ws, cx, "toc", &toc_slot, |cx| {
+                    cx.new(|_| toc_panel::TocPanel::new())
+                });
+            })
+            .unwrap();
+        let toc_state = window
+            .update(cx, |ws, _window, cx| {
+                (ws.right_dock_panel_key(cx), ws.is_right_dock_open(cx))
+            })
+            .unwrap();
+        assert_eq!(
+            toc_state.0.as_deref(),
+            Some("toc"),
+            "toc dispatch must swap the right-dock panel to the toc key"
+        );
+        assert!(toc_state.1, "toc panel reports starts_open=true");
+
+        // Fourth dispatch: swap back to inspector.  The slot is still
+        // populated from the first dispatch — the factory must NOT
+        // run a second time.  Track that by capturing how many times
+        // the closure is called.
+        let factory_calls = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let factory_calls_inner = factory_calls.clone();
+        window
+            .update(cx, |ws, _window, cx| {
+                crate::macos::toggle_or_swap_right_dock_panel(
+                    ws,
+                    cx,
+                    "inspector",
+                    &inspector_slot,
+                    |cx| {
+                        factory_calls_inner.set(factory_calls_inner.get() + 1);
+                        cx.new(|_| inspector_panel::InspectorPanel::new())
+                    },
+                );
+            })
+            .unwrap();
+        let swapped = window
+            .update(cx, |ws, _window, cx| {
+                (ws.right_dock_panel_key(cx), ws.is_right_dock_open(cx))
+            })
+            .unwrap();
+        assert_eq!(
+            swapped.0.as_deref(),
+            Some("inspector"),
+            "swap back to inspector must restore the inspector key"
+        );
+        assert!(
+            swapped.1,
+            "swap-in always attaches the panel with starts_open semantics"
+        );
+        assert_eq!(
+            factory_calls.get(),
+            0,
+            "slot was populated, so the factory must not run again on swap-back"
         );
     }
 

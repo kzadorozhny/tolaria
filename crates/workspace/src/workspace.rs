@@ -249,6 +249,19 @@ impl TolariaWorkspace {
         self.right_dock.read(cx).has_panel()
     }
 
+    /// The [`Panel::panel_key`] of the panel currently attached to the
+    /// right [`Dock`], if any.  Worklist 9.2.13 — chrome handlers use
+    /// this to decide between "open my panel", "close my panel", and
+    /// "swap from a sibling panel".  Returns an owned `String` so the
+    /// caller doesn't have to hold the borrow across an
+    /// `attach_right_dock` call (which mutates the same dock).
+    pub fn right_dock_panel_key(&self, cx: &App) -> Option<String> {
+        self.right_dock
+            .read(cx)
+            .panel_key()
+            .map(std::string::ToString::to_string)
+    }
+
     /// Close the active item in the center pane group's active pane.
     /// Phase 8.8 `actions::CloseTab` dispatches through this method so
     /// the keymap-driven shortcut and any future tab-strip context
