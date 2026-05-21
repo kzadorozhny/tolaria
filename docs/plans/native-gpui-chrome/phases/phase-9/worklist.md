@@ -24,10 +24,12 @@
 9.2.1. ✅ Star toggle → favourite frontmatter + sidebar favourites section
 9.2.2. ✅ Organised toggle → inbox-advance frontmatter
 9.2.3. Neighbourhood action → backlink filter in note-list
-9.2.4. Raw-mode toggle → editor-host raw bridge
-9.2.5. AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
+9.2.4. ⏳ Raw-mode toggle → editor-host raw bridge
+9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
 9.2.6. ToC action → new `toc_panel` crate + headings bridge
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
+9.2.8. Note Inspector Panel content — backlinks, references, type instances, outline
+9.2.9. Star action stops working when the note is updated outside the UI
 
 ## 3. Low Priority
 
@@ -156,6 +158,15 @@ the actual LLM-provider plumbing (Phase 11.4 `cli_agents` under the
 renumbered roadmap) stays stubbed for now.  **Size:** medium —
 chrome wiring only; provider integration deferred.
 
+**Deferred (2026-05-21)** ➡️ — moved out of Phase 9 active scope at
+user direction.  Rationale: the chrome attach is cheap, but landing
+it without the provider story (Phase 11.4 `cli_agents`) means the
+panel opens into a stubbed AI experience that we'd have to revisit
+anyway.  Holding until Phase 10 (or whenever `cli_agents` lands) so
+the right-dock attach + `ToggleAiPanel` action + real provider
+plumbing can ship as a cohesive AI-mode milestone.  Carry across to
+the next phase's worklist when that phase opens.
+
 #### 9.2.6
 
 **Source row:** Phase 8 `8.2.14` (➡️).  **React reference:**
@@ -190,8 +201,97 @@ the overflow / responsive collapse behaviour reuses the `9.2.3`,
 `9.2.4`, `9.2.6` dispatchers — wire those first.  **Size:** medium —
 blocked on `9.2.3`, `9.2.4`, `9.2.6` shipping real handlers.
 
+#### 9.2.8
+
+**Source row:** Added mid-phase 2026-05-21 at user direction.  The
+toolbar's inspector button (Phase 8 `8.2.18` ✅) dispatches
+`actions::ToggleInspector`, which opens a separate macOS window
+hosting `inspector_panel::InspectorPanel` (Phase 8 `8.3.1` ✅).
+That window currently renders the Strand A 8.4 placeholder content
+shape — the "Phase 3 wires…" sections were replaced with concrete
+sections in `b830c42d`, but the per-section data sources for the
+**active note** are sparse: backlinks resolver returns mock seeds,
+type-instances list is empty, references column is unwired, and the
+outline parser hasn't ingested the live `editor_bridge` headings yet.
+
+**Scope:** flesh out the InspectorPanel's note-context surfaces so
+clicking the toolbar inspector button on a real note shows actual
+data:
+- **Backlinks** — every other note in the vault whose body links to
+  the active note (parse `[[wikilink]]` syntax on vault scan;
+  expose via `vault::Vault::backlinks(id)` — same query 9.2.3
+  needs, so coordinate landing order with 9.2.3).
+- **Type instances** — when the active note IS a type definition
+  (filename starts with `type-`), list every note whose filename
+  prefix matches.  Filter pre-computed during `Vault::scan`.
+- **References** — outbound wikilinks from the active note, parsed
+  from body on note-open and cached on the `Note`.
+- **Outline** — headings extracted from the WKWebView body via a
+  `ToHost::Headings` bridge variant (shared design with 9.2.6; land
+  the variant once, consume in both panels).
+
+**Deps:** (1) `vault::Vault::backlinks(id)` + outbound-link cache
+(shared with 9.2.3); (2) `ToHost::Headings` bridge variant (shared
+with 9.2.6); (3) `inspector_panel::InspectorPanel` data-source
+wiring — replace the mock-fixture seeds with vault-driven reads;
+(4) selection plumbing so the panel knows which note is active
+(use the existing `note_item::NoteOpenEvent` listener or pull from
+the workspace's `active_item()`).  **Size:** large — depends on
+9.2.3 and 9.2.6 for shared infrastructure but its UI shape is
+independent; can land in parallel once those primitives exist.
+
+#### 9.2.9
+
+**Source:** user-reported regression on 9.2.1 (star toggle, shipped
+in `9a3839c9`), filed 2026-05-21.  Symptom: the star button no-ops
+after the active note is modified outside the UI — e.g. an external
+editor save, a `git checkout`, or any path that drives the Phase
+8.11.4 fs-watcher rescan.
+
+**Likely causes (to be confirmed by the implementing subagent):**
+1. **Stale `NoteId` in the toolbar closure.**  `note_toolbar::render`
+   captures `self.id` at render time; `Vault::rescan_internal`
+   preserves IDs for paths that survive (`rescan_preserves_ids_for_unchanged_paths`
+   test), but a delete + re-create cycle (atomic-save editors do
+   exactly this — write to tempfile then rename over) drops the old
+   id and assigns a new one.  The captured `NoteId` then misses
+   `vault.notes`, and `set_frontmatter_bool` returns `NotFound`
+   silently (the toolbar swallows the `Task` per the optimistic
+   pattern).
+2. **Optimistic-in-memory desync.**  9.2.1 mutates the in-memory
+   `Note.frontmatter` BEFORE the disk write completes.  If the
+   watcher's rescan runs between the write and the next render, the
+   rescan re-reads disk and replaces the in-memory frontmatter with
+   whatever's on disk — overwriting our optimistic mutation if the
+   write hasn't flushed yet.
+3. **Toolbar render not subscribed to vault changes.**  The toolbar
+   reads `is_favorite()` once per render; if nothing triggers a
+   re-render after the external edit lands, the glyph shows stale
+   state even when vault is correct.  Subsequent clicks toggle from
+   the stale state, which the write path then no-ops because
+   `set_frontmatter_bool` short-circuits when new == current on disk
+   (see `crates/vault/src/lib.rs:480-485` fast path).
+
+**Scope of the fix:** identify which of the above is the real cause
+(or whether it's a combination), add a `#[gpui::test]` that drives
+an external-edit → toggle sequence and asserts the second toggle
+lands, then ship the fix.  Likely surface: `crates/vault/src/lib.rs`
+write path + `crates/note_item/src/note_toolbar.rs` render path
++ `crates/note_item/src/lib.rs` rescan subscription.  **Size:** small
+to medium depending on which root cause is real.
+
+**Order:** ships AFTER 9.2.4 (raw-mode toggle) lands, unless the
+user redirects.  9.2.1 stays at ✅ for now — the regression is a
+post-shipping bug rather than a 9.2.1 implementation defect, so it
+gets its own row per the `[high]` syntax the user used.
+
 ### Cross-row notes
 
+- **Shared infrastructure.** Rows `9.2.3` (neighbourhood) and `9.2.8`
+  (inspector backlinks) both consume `vault::Vault::backlinks(id)` —
+  land the query once on whichever row ships first.  Rows `9.2.6`
+  (ToC) and `9.2.8` (inspector outline) both consume the new
+  `ToHost::Headings` bridge variant — same one-and-done pattern.
 - **Shared write path.** Rows `9.2.1` (star) and `9.2.2` (organised)
   both write a single boolean to `vault::Frontmatter`; landing them
   in a single commit pair amortises the new `set_frontmatter_bool` /

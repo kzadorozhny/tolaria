@@ -80,15 +80,30 @@ path — schedule its removal under Phase 7 close-out.
 
 ### Phase 9 — note-toolbar product features
 
-Phase 9 wires the seven note-toolbar slots that Phase 8 close-out
+Phase 9 wires the six active note-toolbar slots that Phase 8 close-out
 deferred (`note-toolbar-star`, `-organized`, `-neighborhood`, `-raw`,
-`-ai`, `-toc`, `-more`) and accumulates any new regression rows
-reported during dogfood.  Each is net-new product work — not a
-regression — so it carries the full feature shape from the React
-`BreadcrumbBar`: new frontmatter fields, new panels, new actions,
-new bridge variants where needed.  Worklist lives at
-[`phases/phase-9/worklist.md`](phases/phase-9/worklist.md); the
-seven rows landed as `9.2.1`–`9.2.7` with per-row scope notes.
+`-toc`, `-more`) plus an inspector-panel content row, and accumulates
+any new regression rows reported during dogfood.  Each is net-new
+product work — not a regression — so it carries the full feature
+shape from the React `BreadcrumbBar`: new frontmatter fields, new
+panels, new actions, new bridge variants where needed.  Worklist
+lives at [`phases/phase-9/worklist.md`](phases/phase-9/worklist.md);
+rows live at `9.2.1`–`9.2.9` plus the regression `9.2.9` filed mid-phase.
+
+**Scope adjustments mid-phase (2026-05-21):**
+
+- `9.2.5` AI button — **deferred** ➡️ to Phase 10 (or later); the
+  chrome attach is cheap but the underlying provider plumbing
+  (Phase 11.4 `cli_agents`) isn't here yet, and shipping the dock
+  without the provider story buys little.
+- `9.2.8` Note Inspector Panel content — **added** as a paired
+  follow-up to Phase 8 `8.2.18`; the toolbar button is wired but
+  the panel content (backlinks, references, type instances,
+  outline) is sparse.  Shares `vault::Vault::backlinks(id)` with
+  9.2.3 and a future `ToHost::Headings` bridge variant with 9.2.6.
+- `9.2.9` Star toggle external-edit regression — **filed** at user
+  report; tracked separately from 9.2.1 (which stays ✅) because
+  the bug is post-shipping rather than an implementation defect.
 
 Behavioral-layer crate extraction (`command_registry`, `nav_history`,
 `multi_select`, `dialog_stack`, `auto_git`, `vault_lifecycle`,

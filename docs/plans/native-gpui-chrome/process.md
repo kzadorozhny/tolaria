@@ -86,7 +86,7 @@ When appending a new row to section 2 of Phase 9, the next available ID is `9.2.
 - *(no emoji)* — **pending**.  Row exists but work hasn't started.  Every new row enters in this state, whether it was appended inline during a sweep or pre-loaded during phase scoping.
 - `⏳` — **in progress**.  Applied when the orchestrator commits to driving the row (dispatches the first subagent, opens the file, claims the task).  For inline user-reports during an active sweep this happens in the same step as appending the row; for phase scoping it happens later when the row is picked up.
 - `✅` — **resolved**.  User has verified live in the running app.
-- `➡️` — **deferred to next phase**.  Only applied at close-out.
+- `➡️` — **deferred to next phase**.  Applied at close-out for rows that didn't ship in time, OR mid-phase when the user explicitly removes a row from the active scope (e.g. "push 9.2.5 to Phase 10").  Mid-phase deferral writes a `**Deferred (YYYY-MM-DD)** ➡️` note inside the row's `#### N.<sev>.<n>` annotation explaining what's blocking the deferred row and which phase will pick it up.
 - `❌` — **won't fix**.  Reason goes to the row's `#### N.<sev>.<n>` annotation, never to the row line.
 
 The leading status emoji is the **only** in-place edit ever applied to an existing row.  Everything else stays frozen.

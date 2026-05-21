@@ -41,7 +41,7 @@ spec lives in [`components.md`](components.md).
 | 8.x — Behavioral fidelity pass (Strand C — editor-host body parity) | ✅ done (7 of 7) | `4c7998e7` (8.24), `fa1aae40` (8.25), `0d871de4` (8.26), `7afa7072` (8.27), `48cddd2b` (8.28), `63c79224` (8.29), `1e1f77ac` (8.30) | (folded into 271+; vitest 0 → 271) | BlockNote + CodeMirror carry-over from `src/components/blockNote*.ts` / `src/extensions/*` / `src/components/useEditor*.ts` into `editor-host/`, replacing the Phase-4b `<textarea>` MVP.  Bundle 3.95 kB → 2.26 MiB (~580× — see [Bundle-size record](#bundle-size-record-phase-8-close-out) below).  Two bridge gaps stubbed for Phase 10/11 follow-up — see [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md#bridge-gaps).  Zero new `ToHost` / `FromHost` variants this phase. |
 | **✅ Phase 8 complete** | shipped at `1e1f77ac` (Strand C tail) + `6190d076` (Strand B tail) + `aad8dbbb` (Strand A tail) | 271+ | All 30 rows landed across Strand A (14), Strand B (8), Strand C (7), plus Strand A 8.13 modal subset and 8.14 scaffold.  Editor-host vitest suite grew from 0 → 271 over Strand C; workspace + crate tests grew from ~261 → ~271+ over Strand A.  Two bridge-envelope gaps logged for Phase 10/11 follow-up.  Phase 8 visual issues catalogued in [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md). |
 | **✅ Phase 8 closed** | closed 2026-05-21 at `1a96c20a` | 402+ | Manual regression sweep: 29/29 in-scope rows resolved; 7 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9.  Architectural deltas: Angle-C2 transparent base layer + WKWebView z-order reversal, byte-identical YAML frontmatter round-trip, GPUI element-picker inspector renderer wired, dynamic native menu labels.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the full ledger. |
-| 9.x — Note-toolbar product features | ⏳ scoped | — | — | Wires the seven Phase 8 deferrals (star, organized, neighborhood, raw, ai, toc, more) to real frontmatter / panels / actions.  Worklist at [`phases/phase-9/worklist.md`](phases/phase-9/worklist.md) — rows `9.2.1`–`9.2.7`. |
+| 9.x — Note-toolbar product features | ⏳ in flight | `9a3839c9` (9.2.1+9.2.2), `0bea15a3` (sha/clippy/9.3.1) | +14 (~427) | Wires the Phase 8 toolbar deferrals (star, organized, neighborhood, raw, toc, more) plus an inspector-panel content row to real frontmatter / panels / actions.  Worklist at [`phases/phase-9/worklist.md`](phases/phase-9/worklist.md) — rows `9.2.1`–`9.2.9`.  Mid-phase scope adjustments (2026-05-21): `9.2.5` AI ➡️ deferred to Phase 10 (awaiting `cli_agents` provider plumbing); `9.2.8` Note Inspector Panel content added (paired with 8.2.18); `9.2.9` star external-edit regression filed. |
 | 10.x — Behavioral layers (renumbered) | ⏳ planned | — | — | `command_registry`, `nav_history`, `multi_select`, `dialog_stack`, `auto_git`, `vault_lifecycle`, `telemetry_pipeline` (10.1–10.7).  Originally numbered Phase 9 — see [`roadmap.md`](roadmap.md) Phase 10 §Note for the renumber rationale. |
 | 11.x — Service expansion | ⏳ planned | — | — | `git_provider`, `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`, `vault_registry`, `window_state`, `native_text_assistance`, `settings_panel` persistence. |
 | 12.x — Modal chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` (one task per crate). |
@@ -701,20 +701,30 @@ downstream phase shifted by one: Service expansion → Phase 11,
 Modal chrome → Phase 12, Parity hardening → Phase 13.  See
 [`roadmap.md`](roadmap.md) Phase 10 §Note for the rationale.
 
-**Suggested implementation order** (from worklist cross-row notes):
+**Suggested implementation order** (updated 2026-05-21 after the
+mid-phase scope adjustments):
 
-1. `9.2.1` + `9.2.2` together — both write the same `vault::Frontmatter`
-   boolean (`_favorite` + `_organized`); landing the new write path in
-   one commit pair amortises the shared work.
-2. `9.2.5` — chrome-only attach of `ai_panel` to the right dock plus
-   a real `ToggleAiPanel` action; provider plumbing stays stubbed.
-3. `9.2.4` — raw-mode bridge variant + chrome `raw_editor` wiring.
-4. `9.2.6` — new `toc_panel` crate + `ToHost::Headings` bridge variant.
-5. `9.2.3` — neighbourhood selection mode (largest row; depends on
-   `vault::backlinks(id)` and a new sidebar / note-list selection
-   shape).
-6. `9.2.7` — overflow menu last, once `9.2.3` / `9.2.4` / `9.2.6` have
-   real dispatchers it can route to.
+1. ✅ `9.2.1` + `9.2.2` shipped together at `9a3839c9` — shared
+   `vault::Frontmatter` boolean write path (`_favorite` +
+   `_organized`).
+2. `9.2.4` — raw-mode bridge variant + chrome `raw_editor` wiring.
+3. `9.2.9` — star external-edit regression fix.  Lands after `9.2.4`
+   unless the user redirects; small-to-medium scope (root-cause
+   diagnosis first, then targeted fix in `vault` write path +
+   `note_item` render path).
+4. `9.2.6` — new `toc_panel` crate + `ToHost::Headings` bridge
+   variant.  Variant is shared with `9.2.8`.
+5. `9.2.8` — Note Inspector Panel content (backlinks, references,
+   type instances, outline).  Lands `ToHost::Headings` if `9.2.6`
+   hasn't shipped it yet; shares `vault::backlinks(id)` with `9.2.3`.
+6. `9.2.3` — neighbourhood selection mode.  Largest row; depends on
+   `vault::backlinks(id)` (shared with `9.2.8`) and a new sidebar /
+   note-list selection shape.
+7. `9.2.7` — overflow menu last, once `9.2.3` / `9.2.4` / `9.2.6`
+   have real dispatchers it can route to.
+
+**Deferred from this phase:** `9.2.5` AI button (➡️ Phase 10 or later
+— awaiting `cli_agents` provider plumbing).
 
 Tracked as a single live phase with row-driven verification per
 [`process.md`](process.md); orchestrator dispatches subagents, user
