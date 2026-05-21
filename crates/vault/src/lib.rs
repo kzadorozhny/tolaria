@@ -1326,8 +1326,10 @@ mod tests {
         let mut v = Vault::open_at(dir.path()).unwrap();
         let id = v.note_ids_sync()[0];
         let original_size = std::fs::metadata(&path).unwrap().len();
-        // No background executor installed → Task::ready inline.
-        let _ = v.set_frontmatter_bool(id, "_favorite", true);
+        // No background executor installed → the write runs inline
+        // before `Task::ready` wraps the result; dropping the task is
+        // enough to assert the disk-side effect occurred.
+        drop(v.set_frontmatter_bool(id, "_favorite", true));
         let on_disk = fs::read_to_string(&path).unwrap();
         assert_eq!(on_disk, "---\ntype: Note\n_favorite: true\n---\nbody\n");
         let new_size = std::fs::metadata(&path).unwrap().len();

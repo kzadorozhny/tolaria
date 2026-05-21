@@ -31,6 +31,8 @@
 
 ## 3. Low Priority
 
+9.3.1. Block editor drag handles do not Cary React side styling
+
 ---
 
 ### Annotations and details
@@ -55,7 +57,7 @@ Favorites section reading the vault-wide favourites list; (3) the
 star glyph on the toolbar reflects the read.  No bridge variant
 required.  **Size:** small.
 
-**Closure (commit `<this-commit>`).**  Landed the shared write path
+**Closure (commit `9a3839c9`).**  Landed the shared write path
 as `Vault::set_frontmatter_bool` (`crates/vault/src/lib.rs:460`),
 backed by a byte-identical YAML rewriter
 (`crates/vault/src/frontmatter.rs::set_bool_in_raw`) that splits the
@@ -91,7 +93,7 @@ additionally consumes a `explicit_organization_enabled` boolean on
 `settings_store`.  **Size:** small.  **Implementation note:** batch
 with `9.2.1` for shared write-path landing.
 
-**Closure (commit `<this-commit>`).**  Shipped alongside `9.2.1` on
+**Closure (commit `9a3839c9`).**  Shipped alongside `9.2.1` on
 the shared `Vault::set_frontmatter_bool` write path
 (`crates/vault/src/lib.rs:460`); the organized toolbar cell now
 dispatches `toggle_frontmatter_flag(id, "_organized", …)` via the same
