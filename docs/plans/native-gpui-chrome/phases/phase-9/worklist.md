@@ -23,16 +23,16 @@
 
 9.2.1. ✅ Star toggle → favourite frontmatter + sidebar favourites section
 9.2.2. ✅ Organised toggle → inbox-advance frontmatter
-9.2.3. ✅ Neighbourhood action → backlink filter in note-list
-9.2.4. ✅ Raw-mode toggle → editor-host raw bridge
+9.2.3. ⏳ Neighbourhood action → backlink filter in note-list
+9.2.4. ⏳ Raw-mode toggle → editor-host raw bridge
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
 9.2.6. ✅ ToC action → new `toc_panel` crate + headings bridge
 9.2.7. More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. ✅ Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
-9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
+9.2.10. ⏳ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
-9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
+9.2.12. ⏳ Inbox sidebar view must exclude notes with `_organized: true`
 9.2.13. ⏳ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 
 ## 3. Low Priority
@@ -164,6 +164,21 @@ with the proper shape.  Heading-click → body-anchor navigation
 whitespace, pipe alias, 3-note vault, self-link, dedup, unknown
 id), +tests in other crates covering the scope shape and handler.
 
+**Reopened (2026-05-21)** ⏳ — user reports clicking the
+neighborhood toolbar button "does nothing".  Original commit sha
+remains `13bbc646`.  Handler is registered at `tolaria/src/main.rs:882`
+with the standard `active_note_item.borrow().as_ref().cloned()`
+slot read; if `None`, logs `EnterNeighborhood: no active NoteItem`
+at `debug` and returns silently.  Diagnosis path: enable debug
+log, click button, see whether the log line fires.  If it does →
+slot isn't populated when the user expects (look at `open_note`
+mutation timing).  If it doesn't → either the action isn't
+registered at the right context level, or `cx.dispatch_action`
+from inside the toolbar `on_click` closure doesn't reach the App
+handler.  Either way, fix path is: add a `#[gpui::test]` that
+simulates a toolbar click on a vault-backed note and asserts the
+handler runs; the test should reproduce the failure.
+
 #### 9.2.4
 
 **Source row:** Phase 8 `8.2.12` (➡️).  **React reference:**
@@ -214,6 +229,14 @@ existing CodeMirror raw editor and updates the toolbar glyph
 treatment, which the brief's minimum-viable acceptance criteria
 require.  The mode chip + find bar are net-new UI work on top of
 the existing raw editor, not a regression of an existing surface.
+
+**Reopened (2026-05-21)** ⏳ — user reports clicking the raw-mode
+toolbar button "does nothing".  Original commit sha remains
+`45b6622d`.  Same shape of bug as `9.2.3`'s regression: handler at
+`tolaria/src/main.rs:666` checks `raw_slot.borrow().as_ref().cloned()`
+and silently no-ops when `None`.  Could share a root cause with
+`9.2.3` (handler not reached, slot empty, or both).  Diagnose with
+the same `#[gpui::test]` approach + debug logging.
 
 #### 9.2.5
 
@@ -580,6 +603,28 @@ outlined `CircleCheck` in muted foreground.  `organized_icon_for(active)`
 is a tiny helper extraction so the test path calls the same render
 function the production path uses — no test-vs-production drift.
 
+**Reopened-2 (2026-05-21)** ⏳ — user reports the rendered glyph
+is still the **outlined `CircleCheck` icon** drawn on top of a
+green-square cell background, not a single filled-circle icon.
+React reference (user-attached Image #5) is a clean green circle
+with a white check inside — round shape, not the rounded-square
+cell `.rounded_sm()` paints.  Root cause: gpui-component only ships
+`circle-check.svg` (outlined Lucide); no filled-circle-check
+variant exists.  Current implementation paints the cell rectangle
+green and overlays the outline `CircleCheck` icon — the result
+reads as a rounded-square with an outlined check shape inside,
+not a filled disk.  **Fix paths:**
+1. Use `IconName::Check` (just the checkmark, no surrounding
+   circle outline) overlaid on a `.rounded_full()` green-filled
+   circular `div` sized 18-20pt.  Avoid the cell `rounded_sm()`
+   inheriting through.
+2. Add a project-owned `circle-check-fill.svg` asset and a
+   `LocalIconName::CircleCheckFill` variant that points at it.
+   Requires plumbing through `gpui-component`'s `IconNamed` trait
+   or the workspace's own icon registry.
+Option 1 is smaller; take it unless `gpui-component`'s asset
+loader can't load just `Check` without the surrounding circle.
+
 #### 9.2.11
 
 **Source:** user-reported visual regression on 9.2.1 (star toggle),
@@ -659,6 +704,17 @@ on-disk vault via `tempfile::TempDir`, drives the executor through
 the event, and asserts an organized note disappears from the Inbox
 visible list.
 
+**Reopened-2 (2026-05-21)** ⏳ — user reports the Inbox sidebar
+**note count** is incorrect.  Distinct from the list-visible
+filter (which now refreshes after the previous fix): the sidebar
+section header shows a count badge / number that doesn't update
+when notes get toggled organized.  Likely surface: `sidebar_panel`
+renders an Inbox row with a count derived from vault state, but
+doesn't subscribe to the same `VaultChanged::FrontmatterChanged`
+events `note_list_pane` consumes.  Fix path: mirror the
+`install_vault_watch_task` pattern in `sidebar_panel` so the
+sidebar's section counts refresh on every frontmatter change.
+
 #### 9.2.13
 
 **Source:** user-shared React reference screenshot (2026-05-21)
@@ -728,7 +784,17 @@ inverse-relation split of `Referenced From` into one group per
 inverse key (`9.2.13e`); header dock-toggle + close `X` chrome
 buttons (polish, `9.2.13f`).
 
-### Cross-row notes
+**Regression (2026-05-21)** ⏳ — user reports the **inspector
+panel does not open** after the `5a61722e` ship.  Clicking the
+note-toolbar inspector button no longer surfaces a panel.  Most
+likely culprit: the new `InspectorSection::Info` variant breaks
+either the panel's `cx.open_window`/dock-attach path or a section-
+iteration site that wasn't updated (the dispatch match might miss
+the new variant or the section count calculation might overflow a
+fixed array).  Could also be a missing `Cargo.toml` propagation
+of the `chrono` runtime promotion if some downstream feature gate
+needs adjusting.  Fix path: run the app, click the inspector
+toggle, capture the panic or log to localise the failure.
 
 - **Shared infrastructure.** Rows `9.2.3` (neighbourhood) and `9.2.8`
   (inspector backlinks) both consume `vault::Vault::backlinks(id)` —
