@@ -41,7 +41,7 @@
 
 ## 3. Low Priority
 
-3.1. ✅ Inspector view should be opened in a separate windows, not a pannel
+3.1. ✅ Inspector view should be opened in a separate windows, not a pannel — restored to original 5cd51756 semantic: ToggleInspector → `window.toggle_inspector(app_cx)` (GPUI element-picker overlay), 6c14e83c misinterpretation reverted (62d64673)
 3.2. ✅ System window menu should display Show Sidebar|Hide Sidebar, Show Inspector|Hide Inspector depending on the current state
 
 ---
