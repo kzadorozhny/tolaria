@@ -697,7 +697,7 @@ layers) depending on ordering.  Out of `9.2.8`'s scope; tracked
 here because the user-shared reference makes the parity target
 explicit.
 
-**Closure of sub-scope 9.2.13a (commit `<this-commit>`).**
+**Closure of sub-scope 9.2.13a (commit `5a61722e`).**
 First read-only display pass: the `Properties` body now reads the
 active note's frontmatter via `vault::Note::frontmatter()` and
 renders one row per `(key, FrontmatterValue)` pair in sorted
