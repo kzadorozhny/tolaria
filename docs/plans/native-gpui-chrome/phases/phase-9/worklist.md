@@ -186,7 +186,7 @@ handler.  Either way, fix path is: add a `#[gpui::test]` that
 simulates a toolbar click on a vault-backed note and asserts the
 handler runs; the test should reproduce the failure.
 
-**Re-closure-2 (commit `<this-commit>`).**  Investigation: the
+**Re-closure-2 (commit `43a9fcab`).**  Investigation: the
 `#[gpui::test]` reproduction
 (`tolaria::tests::toolbar_actions_resolve_via_active_note_item_slot`)
 exercises the exact production wiring shape — register the global
@@ -233,7 +233,7 @@ note-list still shows the old scope, the regression is in
 Possible cause: the note-list pane is observing the wrong event
 type, or the scope-swap doesn't trigger `cx.notify()`.
 
-**Re-closure-3 (commit `<this-commit>`).**  Root cause turned out to
+**Re-closure-3 (commit `43a9fcab`).**  Root cause turned out to
 be shared across all four `Reopened-2` rows (`9.2.3` + `9.2.4` +
 `9.2.6` + `9.2.13`): every affected toolbar cell called
 `cx.dispatch_action(&actions::EnterNeighborhood)`
@@ -322,7 +322,7 @@ and silently no-ops when `None`.  Could share a root cause with
 `9.2.3` (handler not reached, slot empty, or both).  Diagnose with
 the same `#[gpui::test]` approach + debug logging.
 
-**Re-closure-2 (commit `<this-commit>`).**  Shares the same fix
+**Re-closure-2 (commit `43a9fcab`).**  Shares the same fix
 shape as `9.2.3`'s re-closure-2: the regression test
 (`tolaria::tests::toolbar_actions_resolve_via_active_note_item_slot`)
 proves the dispatch + slot mechanics work end-to-end against the
@@ -355,7 +355,7 @@ closure not bubbling to the App-scope handler.  May share root
 cause with `9.2.6` / `9.2.13` (right-dock panels not appearing)
 and `9.2.3` (neighbourhood scope not swapping).
 
-**Re-closure-3 (commit `<this-commit>`).**  Suspicion confirmed:
+**Re-closure-3 (commit `43a9fcab`).**  Suspicion confirmed:
 the dispatch was the regression, not the WebView surface or the
 JS bundle.  Shared root cause + fix with `9.2.3`'s Re-closure-3 —
 toolbar's `note-toolbar-raw` cell now uses
@@ -476,7 +476,7 @@ both use the same helper.  Diagnosis path: log
 `RUST_LOG=tolaria=info`, click TOC button, watch for
 "ToggleTableOfContents: dispatched" and any panel-attach traces.
 
-**Re-closure-3 (commit `<this-commit>`).**  Likelihood confirmed:
+**Re-closure-3 (commit `43a9fcab`).**  Likelihood confirmed:
 the right-dock attach helper was fine; the dispatch never reached
 the handler at `tolaria/src/main.rs:805` because the toolbar's
 `note-toolbar-toc` cell used `cx.dispatch_action(&actions::ToggleTableOfContents)`
@@ -803,7 +803,7 @@ not a filled disk.  **Fix paths:**
 Option 1 is smaller; take it unless `gpui-component`'s asset
 loader can't load just `Check` without the surrounding circle.
 
-**Re-closure-2 (commit `<this-commit>`).**  Took Option 1.  The
+**Re-closure-2 (commit `43a9fcab`).**  Took Option 1.  The
 `Fill` variant of `ActiveStyle` now renders an inner
 `rounded_full` 18×18 disc as a child of the cell, with the
 glyph (`IconName::Check`) painted in white over that disc.  The
@@ -914,7 +914,7 @@ events `note_list_pane` consumes.  Fix path: mirror the
 `install_vault_watch_task` pattern in `sidebar_panel` so the
 sidebar's section counts refresh on every frontmatter change.
 
-**Re-closure-2 (commit `<this-commit>`).**  Three seams:
+**Re-closure-2 (commit `43a9fcab`).**  Three seams:
 
 (1) **`inbox_count` now reflects `!is_organized`.**
 `SidebarPanel::build_from_samples` previously assigned
@@ -1034,7 +1034,7 @@ of the `chrono` runtime promotion if some downstream feature gate
 needs adjusting.  Fix path: run the app, click the inspector
 toggle, capture the panic or log to localise the failure.
 
-**Re-closure-2 (commit `<this-commit>`).**  Root cause was not the
+**Re-closure-2 (commit `43a9fcab`).**  Root cause was not the
 `Info` variant: `actions::ToggleInspector` (`tolaria/src/main.rs:528`)
 was still routed to GPUI's debug element-picker overlay
 (`Window::toggle_inspector`), so clicking the toolbar inspector cell
@@ -1085,7 +1085,7 @@ dispatch chain — toolbar `on_click`, action handler entry,
 `dispatch_to_workspace` resolve, `toggle_or_swap_right_dock_panel`
 branch selection, `Dock::set_panel` invocation.
 
-**Re-closure-3 (commit `<this-commit>`).**  Cause **(1)** was the
+**Re-closure-3 (commit `43a9fcab`).**  Cause **(1)** was the
 correct hypothesis: the toolbar's `note-toolbar-inspector` cell
 called `cx.dispatch_action(&actions::ToggleInspector)`, which
 re-enters `active_window.update(...)` while the window slot is
@@ -1270,7 +1270,7 @@ so the developer overlay regains a discoverable surface.
 `rebuild_menus_with_workspace` call sites in `tolaria/src/main.rs`.
 **Size:** small.
 
-**Closure (commit `<this-commit>`).**  `MenuState::inspector_picking`
+**Closure (commit `43a9fcab`).**  `MenuState::inspector_picking`
 renamed to `properties_open` (drives the product right-dock toggle's
 label).  New `MenuState::inspector_overlay_picking` field drives the
 restored GPUI element-picker entry's label.  View menu now renders
