@@ -142,6 +142,17 @@ Cross-references to the durable-memory entries that govern subagent dispatch.  T
 - `feedback_orchestrator_post_dispatch_verify.md` — every dispatch ends with `git status --short` + `git log --oneline -3` + (if worktree) FF-merge + `git worktree remove -f -f`.  Subagents skip the commit step ~80% of the time; worktrees leak ~10GB of `target/` cache each.
 - `feedback_gpui_dispatch_from_click_closure.md` — when an action is dispatched from inside an `on_click` closure, use `window.dispatch_action(Box::new(action), cx)` NOT `cx.dispatch_action(&action)`; the latter silently fails because we're already inside the window's update.
 
+### Pre-dispatch hygiene check
+
+Before starting a new code-writing dispatch, confirm a clean slate:
+
+```sh
+git worktree list                                                    # no leftover worktrees
+git branch | grep -E '^  worktree-agent|^  phase-' || echo "clean"   # no zombie refs
+```
+
+If anything is left over from a prior session, clean it first via the worktree reconciliation playbook below.  Stacking new dispatches on top of leftover state is how multi-GB disk leaks + orphan-branch clutter accumulate.
+
 ### Dispatch prompt template
 
 Every code-writing dispatch carries these sections in order:
@@ -150,8 +161,33 @@ Every code-writing dispatch carries these sections in order:
 3. **What ships.**  Numbered list of concrete deliverables.
 4. **Out of scope.**  Explicit list — defers + deferred reasons.
 5. **Process invariants.**  Inline copy of the cross-refs above, especially the "YOU MUST `git commit`" guardrail.
-6. **Critical files.**  Absolute paths with line numbers for the load-bearing references.
-7. **Report back template.**  Commit sha, files changed, test delta, MAY findings.
+6. **Worktree contract** (verbatim, when the dispatch lands in a worktree — see below).
+7. **Critical files.**  Absolute paths with line numbers for the load-bearing references.
+8. **Report back template.**  Final commit sha(s), files changed, test delta, MAY findings.
+
+### Worktree contract (paste verbatim into every code-writing dispatch)
+
+```
+You are running in a git worktree at <path-from-result>.  Your HEAD
+is the worktree-agent-XXX branch (do not create new branches — no
+`git checkout -b`).
+
+Commit contract:
+- ONE commit on this branch, covering everything the row asked for.
+- If you genuinely need a follow-up commit (e.g. logging cleanup,
+  doc tweaks after the main fix), you MUST enumerate every commit
+  sha in your final report.  The orchestrator will FF-merge every
+  commit on this branch into feat/native-gpui-chrome; any commit
+  not in your report is an orphan and surfaces as a regression.
+
+Final action contract:
+- `cargo fmt --all` after every .rs cluster.
+- `cargo clippy --workspace --all-targets -- -D warnings` green.
+- `cargo test --workspace` green.
+- `git status --short` returning ZERO modified/staged lines for tracked files.
+- `git log <branch> --oneline ^feat/native-gpui-chrome` listing every
+  commit you made — paste this list verbatim into your final report.
+```
 
 ### Worktree reconciliation playbook
 
@@ -169,9 +205,13 @@ git cherry-pick <orphan-sha>
 
 # 3. Clean up the working tree + its target/ cache.
 git worktree remove -f -f <path>
+
+# 4. Delete the zombie branch ref — `git worktree remove` only deletes
+#    the working-tree directory and the lock, not the branch.
+git branch -D <branch>
 ```
 
-When the dispatch result is main-tree:
+When the dispatch result is main-tree (no `worktreeBranch`):
 
 ```sh
 git status --short                                            # check for M / A / staged
