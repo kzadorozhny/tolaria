@@ -1525,13 +1525,8 @@ impl Render for NoteListPane {
                     .child(sort_button)
                     .child(search_button)
                     // Worklist 2.19 — the `+` glyph emits a
-                    // `CreateNoteRequested` event so the workspace can
-                    // perform the vault-side create.  Pre-fix the
-                    // glyph was a styled-but-inert label.  Built
-                    // inline rather than through `header_icon_action`
-                    // because that helper produces a non-interactive
-                    // [`AnyElement`]; the plus glyph needs an
-                    // `on_click` listener.
+                    // `CreateNoteRequested` event so the workspace
+                    // performs the vault-side create.
                     .child(
                         h_flex()
                             .id("note-list-new")

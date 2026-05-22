@@ -807,15 +807,9 @@ fn toggle_frontmatter_flag(id: NoteId, key: &str, value: bool, cx: &mut App) {
     cx.global_mut::<Vault>()
         .set_frontmatter_bool(id, key, value)
         .detach();
-    // Force a redraw so the toolbar's next render observes the
-    // freshly-mutated in-memory frontmatter (worklist 9.2.9).  The
-    // vault is a GPUI `Global`, so mutating it does NOT notify any
-    // entity — without this nudge the toolbar would keep showing the
-    // pre-click glyph until something else triggered a re-render
-    // (sidebar selection, window focus, …) and the user would
-    // perceive the click as a no-op.  `refresh_windows` is idempotent
-    // within an update cycle, so dispatching it once per toggle is
-    // cheap.
+    // Force redraw — vault is a GPUI `Global` that doesn't auto-notify
+    // entities, so without this nudge the toolbar keeps showing the
+    // pre-click glyph (worklist 9.2.9).
     cx.refresh_windows();
     log::info!(
         target: "note_item::toolbar",
@@ -912,13 +906,6 @@ mod tests {
             |_window, _cx| {},
         );
     }
-
-    // Worklist 9.3.5 — `toolbar_cell_builds_inspector_button` was
-    // dropped along with the `note-toolbar-inspector` cell itself;
-    // the inspector toggle now lives in the title bar
-    // (`workspace::title_bar`) and the panel header
-    // (`inspector_panel`).  No equivalent toolbar shape test remains
-    // here because the toolbar no longer carries the cell.
 
     #[test]
     fn toolbar_height_matches_react_breadcrumb_bar() {

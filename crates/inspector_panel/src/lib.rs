@@ -1626,10 +1626,8 @@ impl Render for InspectorPanel {
 /// silently swallow the dispatch via `.log_err()`.  See the
 /// `note_toolbar.rs` neighbourhood-cell comment for the full story.
 ///
-/// The helper takes `cx: &App` and resolves theme tokens itself rather
-/// than accepting three same-typed [`Hsla`] parameters — keeping the
-/// signature one-parameter eliminates the colour-swap footgun that
-/// three positional `Hsla` values would invite at a future call site.
+/// Takes `&App` and resolves theme tokens internally so callers can't
+/// pick the wrong colour for a same-typed [`Hsla`] parameter.
 fn render_header_strip(cx: &App) -> AnyElement {
     let theme = cx.theme();
     let border_color = theme.border;
