@@ -38,6 +38,9 @@
 ## 3. Low Priority
 
 9.3.1. Block editor drag handles do not Cary React side styling
+9.3.2. Inspector panel should open at least the default width of the sidebar
+9.3.3. Inspector panel header — same height as note header, title reads `Properties`
+9.3.4. Inspector open/close button migrates to the panel header when open
 
 ---
 
@@ -1100,6 +1103,52 @@ guards against the route regressing.  The four `Reopened-2` rows
 turned out to be a single bug; each row's annotation flags the
 shared fix so future triage doesn't re-investigate each cell
 independently.
+
+#### 9.3.2
+
+**Source:** user-reported polish on the right-dock Inspector panel,
+2026-05-21.  **Symptom:** the panel opens at a width too narrow to
+render Properties / Aliases / etc. comfortably.
+
+**Scope:** raise `InspectorPanel::default_size` to the same width
+the sidebar opens at by default (look up `SidebarPanel::default_size`
+or the workspace's left-dock `.size(px(...))` initial value in
+`crates/workspace/src/workspace.rs:402`).  Aligns the right dock's
+opening width with the user's existing left-dock muscle memory.
+Surface: `crates/inspector_panel/src/lib.rs` `default_size` impl.
+**Size:** trivial.
+
+#### 9.3.3
+
+**Source:** user-reported polish, 2026-05-21, with attached Image #6.
+**Symptom:** the panel currently has no header bar; content starts
+at the top edge.
+
+**Scope:** add a header strip to `InspectorPanel` matching the note
+toolbar's height (`note_toolbar::NOTE_TOOLBAR_HEIGHT_PT` = 52pt) so
+the panel header sits flush with the toolbar across the workspace.
+Header content: a `Properties` text label (theme.foreground, same
+weight as note-toolbar breadcrumb segments).  Surface:
+`crates/inspector_panel/src/lib.rs` render path.  **Size:** small.
+
+#### 9.3.4
+
+**Source:** user-reported polish, 2026-05-21, with attached Image #6.
+**Symptom:** the inspector toggle stays in the note toolbar even when
+the panel is open; React's reference moves it into the panel header
+when the panel is visible.
+
+**Scope:** when `InspectorPanel` is mounted + open on the right dock,
+the panel header (added in `9.3.3`) renders:
+- **Left**: the inspector toggle glyph (same `IconName::PanelRight`
+  the note-toolbar uses), dispatching `actions::ToggleInspector`.
+- **Centre**: `Properties` title.
+- **Right**: a close `X` button, also dispatching `actions::ToggleInspector`.
+Simultaneously the note-toolbar's inspector cell hides while the
+panel is open (read `workspace.is_right_dock_open(cx)` +
+`right_dock_panel_key == Some("inspector")` — both accessors already
+exist).  When the panel closes, the cell reappears in the toolbar.
+**Deps:** depends on `9.3.3` (header strip) shipping first.  **Size:** small.
 
 ### Cross-row notes
 
