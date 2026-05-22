@@ -429,6 +429,36 @@ the prior fixed-size cut).  When `workspace_window_bounds` returns
 `None` (early startup race), falls back to the previous
 `INSPECTOR_FALLBACK_BOUNDS` so the inspector still opens visibly.
 
+**2026-05-22 fourth follow-up — subtract 28 pt title-bar height so
+the inspector's frame matches the workspace's frame.**
+
+User: *"the inspector window height more than the main window.  it
+looks like standard window title bar height need to be subtracted"*.
+
+Frame/content-rect mismatch traced through GPUI's macOS plumbing:
+
+- `Window::bounds()` returns `NSWindow::frame` — full **frame**
+  rect, includes the title-bar zone
+  (`gpui_macos/src/window.rs` around `fn bounds(&self) -> Bounds`).
+- `cx.open_window` passes the bounds' size through
+  `initWithContentRect_styleMask_backing_defer_screen_` — that's
+  the **content** rect (`gpui_macos/src/window.rs` around the
+  `initWithContentRect…` call).
+
+So passing `workspace.frame.size.height` straight through made the
+inspector's *content* equal the workspace's *frame* height, and the
+title bar got added on top — making the inspector's frame ~28 pt
+taller than the workspace.
+
+The workspace itself uses an opaque-transparent title bar
+(`titlebar.appears_transparent = true` in `main.rs`), so its title
+bar lives inside its frame and we don't double-count.  The
+inspector uses the standard opaque title bar, so we subtract
+`STANDARD_MACOS_TITLE_BAR_HEIGHT_PT = 28.0` from the inspector's
+content height to make its frame match the workspace's frame.
+Clamped at 0 so a freakishly small workspace doesn't underflow into
+negative `Pixels`.
+
 #### 10.2.1
 
 Consumed by `actions` and Phase 12.1 `command_palette`

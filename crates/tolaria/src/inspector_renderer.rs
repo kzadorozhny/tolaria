@@ -129,6 +129,31 @@ pub fn toggle_inspector_window(cx: &mut App) {
 /// with real content.
 const INSPECTOR_WINDOW_WIDTH_PT: f32 = 360.0;
 
+/// Standard macOS NSWindow title-bar height in logical points
+/// (`NSWindowStyleMaskTitled` default).  We subtract this from the
+/// inspector's height because:
+///
+/// - `Window::bounds()` returns the workspace's **frame** rect
+///   (`NSWindow::frame`, includes the title-bar zone) — see
+///   `gpui_macos/src/window.rs` around `fn bounds(&self) -> Bounds`.
+/// - `cx.open_window` passes `WindowBounds::Windowed(bounds).size`
+///   through `initWithContentRect:` (`gpui_macos/src/window.rs`
+///   around the `initWithContentRect_styleMask_backing_defer_screen_`
+///   call), which makes it the **content** rect.
+///
+/// Result: passing `workspace.frame.size.height` straight through
+/// produced an inspector whose *frame* was 28 pt taller than the
+/// workspace (the title bar got added on top).  The user reported it
+/// as "inspector window height more than the main window".
+///
+/// The workspace itself uses an opaque-transparent title bar
+/// (`titlebar.appears_transparent = true` in `main.rs`), so its
+/// title-bar zone is hidden inside the workspace's frame and we
+/// don't double-count.  The inspector window uses the standard
+/// opaque title bar (`appears_transparent: false`) so we do need
+/// the subtraction.
+const STANDARD_MACOS_TITLE_BAR_HEIGHT_PT: f32 = 28.0;
+
 /// Fallback inspector-window bounds for the early-startup race where
 /// the workspace window isn't open yet (so
 /// [`crate::macos::workspace_window_bounds`] returns `None`).  Keeps
@@ -161,7 +186,16 @@ fn ensure_inspector_window_open(cx: &mut App) {
             },
             size: gpui::Size {
                 width: px(INSPECTOR_WINDOW_WIDTH_PT),
-                height: ws.size.height,
+                // Subtract the standard macOS title bar height so the
+                // inspector's *frame* (content + 28 pt title bar)
+                // matches the workspace's *frame* height.  See the
+                // `STANDARD_MACOS_TITLE_BAR_HEIGHT_PT` doc-comment for
+                // the frame/content-rect mismatch this works around.
+                // Clamp at 0 so a freakishly small workspace (or a
+                // hypothetical future change that gives the inspector
+                // a taller chrome) doesn't underflow into negative
+                // `Pixels`.
+                height: (ws.size.height - px(STANDARD_MACOS_TITLE_BAR_HEIGHT_PT)).max(px(0.0)),
             },
         })
         .unwrap_or(INSPECTOR_FALLBACK_BOUNDS);
