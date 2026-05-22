@@ -200,7 +200,7 @@ pub(crate) mod macos {
     /// Centralises the active-window → workspace-entity hop so each
     /// new workspace-level action handler stays a single-line
     /// dispatch.
-    fn dispatch_to_workspace<F>(label: &'static str, cx: &mut App, f: F)
+    pub(crate) fn dispatch_to_workspace<F>(label: &'static str, cx: &mut App, f: F)
     where
         F: FnOnce(
                 &mut workspace::TolariaWorkspace,
@@ -2297,6 +2297,186 @@ mod tests {
             factory_calls.get(),
             0,
             "slot was populated, so the factory must not run again on swap-back"
+        );
+    }
+
+    /// Worklist 9.2.13 Reopened-3 — end-to-end coverage of the
+    /// production inspector toggle path: title-bar click dispatches
+    /// [`actions::ToggleInspector`] via [`Window::dispatch_action`]
+    /// from inside the window's own update; the App-scope
+    /// `cx.on_action` handler defers a workspace lookup via
+    /// [`dispatch_to_workspace`]; the deferred closure attaches the
+    /// inspector panel through [`toggle_or_swap_right_dock_panel`].
+    ///
+    /// The existing
+    /// `toggle_inspector_attaches_panel_and_swaps_with_toc` test calls
+    /// the helper directly and the existing
+    /// `toolbar_window_dispatch_reaches_app_action_handler_under_nested_update`
+    /// test pins the dispatch route — neither composes the full chain.
+    /// This test does: a regression that breaks ANY hop (action
+    /// registration, deferred resolve, workspace downcast, panel
+    /// attach) would silently keep the right dock empty in production
+    /// today (user-visible as "inspector doesn't open") but the prior
+    /// tests would still pass.
+    #[gpui::test]
+    fn toggle_inspector_dispatch_chain_attaches_panel_end_to_end(cx: &mut TestAppContext) {
+        use gpui::AppContext as _;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        use workspace::TolariaWorkspace;
+
+        cx.update(gpui_component::init);
+
+        // Match the production `cx.open_window` shape: wrap the
+        // workspace in `gpui_component::Root`.  The simpler
+        // `cx.add_window(TolariaWorkspace::empty)` shape used by the
+        // helper-direct tests sets the workspace AS the window root —
+        // `dispatch_to_workspace` then fails its
+        // `root.downcast::<gpui_component::Root>()` step (it expects
+        // the production wrapper).  This test pins the production
+        // chain, so it needs to match the production layout.
+        let workspace_slot: Rc<RefCell<Option<gpui::Entity<TolariaWorkspace>>>> =
+            Rc::new(RefCell::new(None));
+        let workspace_slot_inner = workspace_slot.clone();
+        let window = cx.add_window(move |window, cx| {
+            let workspace = cx.new(|cx| TolariaWorkspace::empty(window, cx));
+            *workspace_slot_inner.borrow_mut() = Some(workspace.clone());
+            gpui_component::Root::new(workspace, window, cx)
+        });
+        // Active window — drives the dispatch through the deferred
+        // `cx.active_window()` resolve in `dispatch_to_workspace`.
+        window
+            .update(cx, |_root, window, _cx| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+
+        // Per-hop counters: the test prints which hops fired when it
+        // fails so future regressions are localised without manual
+        // log inspection.  Maps directly to the production
+        // `info!`/`warn!` log sites.
+        let handler_called = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let workspace_resolved = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let factory_called = std::rc::Rc::new(std::cell::Cell::new(0u32));
+
+        // Mirror the production handler registration from
+        // `tolaria::macos::run`: an App-scope `ToggleInspector`
+        // listener that defers a workspace resolve and toggles the
+        // right-dock panel through the shared helper.
+        let inspector_slot: std::rc::Rc<
+            std::cell::RefCell<Option<gpui::Entity<inspector_panel::InspectorPanel>>>,
+        > = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let inspector_slot_for_action = inspector_slot.clone();
+        let handler_called_inner = handler_called.clone();
+        let workspace_resolved_inner = workspace_resolved.clone();
+        let factory_called_inner = factory_called.clone();
+        cx.update(|cx| {
+            cx.on_action(move |_: &actions::ToggleInspector, cx| {
+                handler_called_inner.set(handler_called_inner.get() + 1);
+                let slot = inspector_slot_for_action.clone();
+                let workspace_resolved_inner = workspace_resolved_inner.clone();
+                let factory_called_inner = factory_called_inner.clone();
+                crate::macos::dispatch_to_workspace(
+                    "ToggleInspector",
+                    cx,
+                    move |ws, _window, cx| {
+                        workspace_resolved_inner.set(workspace_resolved_inner.get() + 1);
+                        crate::macos::toggle_or_swap_right_dock_panel(
+                            ws,
+                            cx,
+                            "inspector",
+                            &slot,
+                            |cx| {
+                                factory_called_inner.set(factory_called_inner.get() + 1);
+                                cx.new(|_| inspector_panel::InspectorPanel::new())
+                            },
+                        );
+                    },
+                );
+            });
+        });
+
+        // Production-shape dispatch: from inside an active-window
+        // update (mirrors the `on_click` closure on the title-bar
+        // toggle cell), call `Window::dispatch_action`.
+        window
+            .update(cx, |_root, window, cx| {
+                window.dispatch_action(Box::new(actions::ToggleInspector), cx);
+            })
+            .unwrap();
+        // The action defers via `Window::dispatch_action`, the handler
+        // defers again via `dispatch_to_workspace`.  Two defers ⇒ two
+        // drain passes to be safe.
+        cx.run_until_parked();
+        cx.run_until_parked();
+
+        // Read workspace state through the held slot (the window
+        // root is `gpui_component::Root`, not the workspace).
+        let workspace = workspace_slot
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("workspace slot populated during window construction");
+        let after_dispatch = cx.update(|cx| {
+            workspace.update(cx, |ws, cx| {
+                (
+                    ws.right_dock_panel_key(cx),
+                    ws.is_right_dock_open(cx),
+                    inspector_slot.borrow().is_some(),
+                )
+            })
+        });
+        assert_eq!(
+            after_dispatch.0.as_deref(),
+            Some("inspector"),
+            "after a Window::dispatch_action(ToggleInspector) the right \
+             dock must report the inspector panel_key — if this fails, \
+             one of the chain hops (action register / handler defer / \
+             workspace resolve / helper / attach) silently dropped the \
+             dispatch.  Per-hop counters: handler_called={}, \
+             workspace_resolved={}, factory_called={}.  Match the \
+             production logs at `tolaria::inspector` / \
+             `tolaria::right_dock` / `workspace::title_bar` to find \
+             the broken hop.",
+            handler_called.get(),
+            workspace_resolved.get(),
+            factory_called.get(),
+        );
+        assert!(
+            after_dispatch.1,
+            "InspectorPanel reports starts_open=true; after the chain \
+             completes the dock must be open."
+        );
+        assert!(
+            after_dispatch.2,
+            "the panel slot must be populated so subsequent dispatches \
+             find the cached entity"
+        );
+        // Per-hop assertions: each counter pins one specific hop of
+        // the chain so a future regression's failure message
+        // immediately tells the user which hop broke (the right-dock
+        // assertion above is a function of all three).
+        assert_eq!(
+            handler_called.get(),
+            1,
+            "App-scope `cx.on_action` handler must fire exactly once \
+             per `Window::dispatch_action(ToggleInspector)`"
+        );
+        assert_eq!(
+            workspace_resolved.get(),
+            1,
+            "`dispatch_to_workspace`'s deferred workspace resolve must \
+             fire — failure here means either `cx.active_window` \
+             returned `None`, the window root didn't downcast to \
+             `gpui_component::Root`, or the inner view didn't \
+             downcast to `TolariaWorkspace`.  Check the warn! logs at \
+             those branches in `dispatch_to_workspace`."
+        );
+        assert_eq!(
+            factory_called.get(),
+            1,
+            "the fresh-attach branch of \
+             `toggle_or_swap_right_dock_panel` must run the factory \
+             on first dispatch (slot was empty)"
         );
     }
 
