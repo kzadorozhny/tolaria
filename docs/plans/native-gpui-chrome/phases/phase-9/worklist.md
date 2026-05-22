@@ -38,6 +38,7 @@
 9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
 9.2.16. ✅ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
 9.2.17. ✅ The note width toggle (wide/narrow) does not work
+9.2.18. Add text_overflow ellipsis to note header_strip note titles
 
 ## 3. Low Priority
 
