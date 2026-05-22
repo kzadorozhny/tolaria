@@ -883,17 +883,34 @@ pub(crate) mod macos {
                 cx.on_action(|_: &actions::ToggleElementInspector, cx| {
                     #[cfg(debug_assertions)]
                     {
-                        let Some(handle) = cx.active_window() else {
-                            log::warn!("ToggleElementInspector: no active window");
-                            return;
-                        };
-                        if let Err(err) =
-                            handle.update(cx, |_, window, app_cx| window.toggle_inspector(app_cx))
-                        {
-                            log::error!("ToggleElementInspector update failed: {err:#}");
-                            return;
-                        }
-                        rebuild_menus(cx);
+                        // Worklist 10.1.2 — the Cmd+Alt+I menu accelerator
+                        // routes the action dispatch through the active
+                        // window's responder chain, so by the time this
+                        // handler fires the window slot in `App::windows`
+                        // is already taken by the current update.  Calling
+                        // `cx.active_window().update(cx, …)` synchronously
+                        // returns `Err("window not found")` — the same
+                        // re-entrancy guard documented in the
+                        // `dispatch_to_workspace` test
+                        // (`active_window_update_from_inside_an_active_window_update_silently_drops`).
+                        // Defer the actual toggle so the inner
+                        // `handle.update` runs after the menu's dispatch
+                        // tree unwinds — mirrors the pattern
+                        // [`dispatch_to_workspace`] uses for every other
+                        // window-touching action.
+                        cx.defer(|cx| {
+                            let Some(handle) = cx.active_window() else {
+                                log::warn!("ToggleElementInspector: no active window");
+                                return;
+                            };
+                            if let Err(err) = handle.update(cx, |_, window, app_cx| {
+                                window.toggle_inspector(app_cx)
+                            }) {
+                                log::error!("ToggleElementInspector update failed: {err:#}");
+                                return;
+                            }
+                            rebuild_menus(cx);
+                        });
                     }
                     #[cfg(not(debug_assertions))]
                     {

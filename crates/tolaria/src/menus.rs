@@ -334,6 +334,7 @@ mod tests {
             &[
                 Action("Show Sidebar"),
                 Action("Show Properties"),
+                Separator,
                 Action("Show Inspector"),
                 Separator,
                 Action("Zoom In"),
@@ -361,6 +362,7 @@ mod tests {
             &[
                 Action("Hide Sidebar"),
                 Action("Hide Properties"),
+                Separator,
                 Action("Hide Inspector"),
                 Separator,
                 Action("Zoom In"),
@@ -386,6 +388,7 @@ mod tests {
             &[
                 Action("Hide Sidebar"),
                 Action("Show Properties"),
+                Separator,
                 Action("Show Inspector"),
                 Separator,
                 Action("Zoom In"),
@@ -411,6 +414,7 @@ mod tests {
             &[
                 Action("Show Sidebar"),
                 Action("Hide Properties"),
+                Separator,
                 Action("Show Inspector"),
                 Separator,
                 Action("Zoom In"),
@@ -436,6 +440,7 @@ mod tests {
             &[
                 Action("Show Sidebar"),
                 Action("Show Properties"),
+                Separator,
                 Action("Hide Inspector"),
                 Separator,
                 Action("Zoom In"),
@@ -474,6 +479,7 @@ mod tests {
             vec![
                 Some(ToggleSidebar.name()),
                 Some(ToggleInspector.name()),
+                None, // separator (between product toggles and dev overlay)
                 Some(ToggleElementInspector.name()),
                 None, // separator
                 Some(ZoomIn.name()),

@@ -15,7 +15,7 @@
 ## 1. Blockers
 
 10.1.1. ⏳ WKWebView z-order fix
-10.1.2. ToggleElementInspector update failed: window not found
+10.1.2. ✅ ToggleElementInspector update failed: window not found
 
 ## 2. High Priority
 
@@ -209,6 +209,47 @@ the editor body remain hidden, but the editor renders again.
    Useless on its own, but worth re-trying with `contentView` made
    layer-backed to see whether the issue is `zPosition` interacting
    badly with the non-layer-backed default.
+
+#### 10.1.2
+
+**Root cause.**  The `Cmd+Alt+I` menu accelerator routes
+`actions::ToggleElementInspector` through the active window's
+responder chain, so by the time `cx.on_action(|_, cx| …)` fires at
+the App level the window slot in `App::windows` is already taken by
+the current dispatch update.  `cx.active_window().update(cx, |…|
+window.toggle_inspector(app_cx))` then returns the documented
+`Err("window not found")` (same re-entrancy guard captured by the
+`active_window_update_from_inside_an_active_window_update_silently_drops`
+regression test).  `.log_err()`-style swallowing turned the toggle
+into a silent no-op for every menu-initiated dispatch.
+
+**Fix (`crates/tolaria/src/main.rs:883–907`).**  Wrap the inner
+`handle.update` in `cx.defer(|cx| …)` so the toggle runs *after* the
+menu's dispatch update unwinds and the window slot is free.  Mirrors
+the pattern used by `dispatch_to_workspace` (already deferring for
+exactly this reason — see the deferred-closure comment at
+`main.rs:223–256`).  `rebuild_menus(cx)` stays *inside* the deferred
+closure so the post-toggle `Window::is_inspector_picking` state is
+observed when the menu labels rebuild.
+
+Side fix: `crates/tolaria/src/menus.rs` test-suite (5 cases) updated
+to match the extra `View → Properties / Inspector` separator landed at
+`fd151868`; the menu structure grew from 7 to 8 items but the tests
+weren't refreshed in that commit, leaving the test suite red on
+`feat/native-gpui-chrome`.  Tests now match the live menu shape.
+
+**No `#[gpui::test]` regression.**  The re-entrancy contract is
+already pinned by the
+`active_window_update_from_inside_an_active_window_update_silently_drops`
+test (`main.rs:2660–2691`) which captures the exact pattern this fix
+escapes.  Adding a second test asserting `cx.defer` lets the toggle
+through would duplicate that contract without protecting an
+additional invariant.
+
+**User manual validation** — trigger `Cmd+Alt+I` (or `View → Show /
+Hide Inspector`) and confirm the GPUI element-picker overlay toggles
+visibly + no `ToggleElementInspector update failed` warning lands in
+the log.
 
 #### 10.2.1
 
