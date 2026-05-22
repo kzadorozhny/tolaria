@@ -1296,7 +1296,7 @@ pre-populates `sizes[3] = PANEL_MIN_SIZE` ahead of the first
 render, so the state already has a value that wins over the
 initial.
 
-**Re-closure-2 (commit `<this-commit>`).**  Always-push the
+**Re-closure-2 (commit `7ced27dd`).**  Always-push the
 right dock into the panels vec (mirrors the left-dock pattern at
 `workspace.rs:421-431`).  The panel slot is now stable from the
 *first* render — `panels.len()` is always 4 regardless of dock
@@ -1847,7 +1847,7 @@ prefers `extract_title(body)` (first `# H1`, else frontmatter
 absent.  Two display-title surfaces ⇒ two answers for the same
 note.
 
-**Re-closure (commit `<this-commit>`).**  Make
+**Re-closure (commit `7ced27dd`).**  Make
 `note_list_pane::extract_title` `pub` and call it from
 `handle_enter_neighborhood`: load the note body via
 `vault::Vault::note_content` (blocking on the foreground
