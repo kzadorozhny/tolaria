@@ -1122,7 +1122,7 @@ opening width with the user's existing left-dock muscle memory.
 Surface: `crates/inspector_panel/src/lib.rs` `default_size` impl.
 **Size:** trivial.
 
-**Closure (commit `<this-commit>`).**  Introduced a shared
+**Closure (commit `d9766aa5`).**  Introduced a shared
 `workspace::workspace::WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT` constant
 (`200.0`) so the left dock's `.size(px(...))` paint, the right
 dock's `.size(px(...))` paint, and `InspectorPanel::default_size`
@@ -1144,7 +1144,7 @@ Header content: a `Properties` text label (theme.foreground, same
 weight as note-toolbar breadcrumb segments).  Surface:
 `crates/inspector_panel/src/lib.rs` render path.  **Size:** small.
 
-**Closure (commit `<this-commit>`).**  Added a 52-pt header strip
+**Closure (commit `d9766aa5`).**  Added a 52-pt header strip
 to `InspectorPanel::render` via a private `render_header_strip`
 helper.  The strip mirrors the note-toolbar chrome
 (`theme.background` background, `border_b_1` in `theme.border`) so
@@ -1175,7 +1175,7 @@ panel is open (read `workspace.is_right_dock_open(cx)` +
 exist).  When the panel closes, the cell reappears in the toolbar.
 **Deps:** depends on `9.3.3` (header strip) shipping first.  **Size:** small.
 
-**Closure (commit `<this-commit>`).**  The header strip (added in
+**Closure (commit `d9766aa5`).**  The header strip (added in
 `9.3.3` above) carries both buttons: `IconName::PanelRight` on the
 left, `IconName::Close` on the right, both dispatching
 `actions::ToggleInspector` via `Window::dispatch_action` (the same
@@ -1340,7 +1340,7 @@ button is the closed-state affordance, the panel-header X is the
 open-state affordance.  **Size:** small.  **Deps:** none, but
 coordinate sequencing with `9.3.4`.
 
-**Closure (commit `<this-commit>`).**  Added a
+**Closure (commit `d9766aa5`).**  Added a
 `title-bar-toggle-inspector` cell to the right cluster of
 `workspace::title_bar`, mirroring the existing
 `title-bar-toggle-sidebar` cell on the left.  Same shape (28x20-pt
@@ -1369,7 +1369,7 @@ to `debug!`.  Keep the per-handler `info!` traces at
 and don't fire as often).  Surface: `crates/note_item/src/note_toolbar.rs`
 toolbar cells.  **Size:** trivial.
 
-**Closure (commit `<this-commit>`).**  Downgraded the three
+**Closure (commit `d9766aa5`).**  Downgraded the three
 remaining `info!` "click registered" lines (neighborhood, raw,
 toc) at `note_item::toolbar` to `debug!`.  The fourth (inspector)
 went away with the cell removal in `9.3.5` — no log to downgrade
