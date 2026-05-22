@@ -565,9 +565,7 @@ pub(crate) mod macos {
     ///   another neighbourhood — the toggle exits first), but the
     ///   variant is exhaustive on `NoteListScope` so the match has to
     ///   cover it.
-    fn scope_display_label(
-        scope: &note_list_pane::NoteListScope,
-    ) -> gpui::SharedString {
+    fn scope_display_label(scope: &note_list_pane::NoteListScope) -> gpui::SharedString {
         use note_list_pane::NoteListScope;
         match scope {
             NoteListScope::Inbox => gpui::SharedString::from("Inbox"),
@@ -592,9 +590,28 @@ pub(crate) mod macos {
     /// SENTINEL_9_2_16_TEST_MARKER
     pub fn run() {
         env_logger::Builder::new()
+            // Worklist 9.2.13 (Reopened-3) + 9.3.5 (Reopened) — the
+            // inspector toggle dispatch chain crosses two crates:
+            // `workspace::title_bar` emits the click log, `tolaria::*`
+            // emits the handler / factory / right-dock logs.  Filtering
+            // only `tolaria` at Info level dropped the first hop of the
+            // chain (`workspace::title_bar` "title-bar inspector click")
+            // from the user's terminal under default `cargo run`, so
+            // they couldn't see where the dispatch broke.  Promote
+            // `workspace` to Info as well; both crates' info-level
+            // diagnostic chains now fire without an explicit RUST_LOG.
             .filter_module("tolaria", log::LevelFilter::Info)
+            .filter_module("workspace", log::LevelFilter::Info)
             .parse_default_env()
             .init();
+        // `eprintln!` (not `log::info!`) so the build tag prints
+        // *before* any log filter runs and survives any RUST_LOG
+        // override the user sets — the user's main complaint on 9.3.5
+        // was "the icon is still in the note toolbar", which is most
+        // easily diagnosed by confirming the binary they run was built
+        // from the latest source.  Print it to stderr with a clear
+        // banner so it's the first thing a triage screenshot picks up.
+        eprintln!("=== tolaria build={} ===", TOLARIA_BUILD_TAG);
         log::info!(
             target: "tolaria",
             "tolaria starting — build={} (worklist 9.3.5 build tag)",
@@ -2553,9 +2570,8 @@ mod tests {
         // branch change surfaces here.
         let handler_slot = slot.clone();
         let handler_list = note_list.clone();
-        let handler_prev_scope: std::rc::Rc<
-            std::cell::RefCell<Option<NoteListScope>>,
-        > = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let handler_prev_scope: std::rc::Rc<std::cell::RefCell<Option<NoteListScope>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
         let handler_prev_scope_closure = handler_prev_scope.clone();
         cx.update(|cx| {
             cx.on_action(move |_: &actions::EnterNeighborhood, cx| {
@@ -2621,9 +2637,7 @@ mod tests {
     /// `handle_enter_neighborhood` helper the production handler
     /// dispatches through.
     #[gpui::test]
-    fn neighborhood_handler_enters_when_scope_is_not_neighborhood(
-        cx: &mut TestAppContext,
-    ) {
+    fn neighborhood_handler_enters_when_scope_is_not_neighborhood(cx: &mut TestAppContext) {
         use gpui::{AppContext as _, Entity};
         use note_item::{NeighborhoodAnchor, NoteItem};
         use note_list_pane::{NoteListPane, NoteListScope};
@@ -2652,16 +2666,14 @@ mod tests {
         let note = cx
             .update(|cx| cx.global::<Vault>().note_sync(anchor_id).cloned())
             .expect("vault must surface the anchor note");
-        let item: Entity<NoteItem> =
-            cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        let item: Entity<NoteItem> = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
         *slot.borrow_mut() = Some(item.clone());
 
         // Shared previous-scope memory.  Boots empty — matches the
         // workspace-just-opened state where the user has never
         // entered neighbourhood mode.
-        let prev_scope: std::rc::Rc<
-            std::cell::RefCell<Option<NoteListScope>>,
-        > = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let prev_scope: std::rc::Rc<std::cell::RefCell<Option<NoteListScope>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
 
         // Drive the on-path through the shared helper — production
         // and test agree on the same code.
@@ -2720,9 +2732,7 @@ mod tests {
     /// the previous scope's display label.  This is the off-half of
     /// the toggle contract — the row's load-bearing user behaviour.
     #[gpui::test]
-    fn neighborhood_handler_exits_when_scope_matches_active_id(
-        cx: &mut TestAppContext,
-    ) {
+    fn neighborhood_handler_exits_when_scope_matches_active_id(cx: &mut TestAppContext) {
         use gpui::{AppContext as _, Entity};
         use note_item::{NeighborhoodAnchor, NoteItem};
         use note_list_pane::{NoteListPane, NoteListScope};
@@ -2748,8 +2758,7 @@ mod tests {
         let note = cx
             .update(|cx| cx.global::<Vault>().note_sync(anchor_id).cloned())
             .expect("vault must surface the anchor note");
-        let item: Entity<NoteItem> =
-            cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        let item: Entity<NoteItem> = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
         *slot.borrow_mut() = Some(item.clone());
 
         // Pre-seed the workspace into the SAVED state the toggle-off
@@ -2757,15 +2766,11 @@ mod tests {
         // anchor global names the active id, prev-scope slot holds
         // a `Folder("projects")` we want restored.
         let saved_scope = NoteListScope::Folder("projects".into());
-        let prev_scope: std::rc::Rc<
-            std::cell::RefCell<Option<NoteListScope>>,
-        > = std::rc::Rc::new(std::cell::RefCell::new(Some(saved_scope.clone())));
+        let prev_scope: std::rc::Rc<std::cell::RefCell<Option<NoteListScope>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(Some(saved_scope.clone())));
         cx.update(|cx| {
             note_list.update(cx, |pane, cx| {
-                pane.set_scope(
-                    NoteListScope::Neighborhood(anchor_id, HashSet::new()),
-                    cx,
-                );
+                pane.set_scope(NoteListScope::Neighborhood(anchor_id, HashSet::new()), cx);
                 pane.set_header_title("Neighborhood of b", cx);
             });
             cx.set_global(NeighborhoodAnchor(Some(anchor_id)));

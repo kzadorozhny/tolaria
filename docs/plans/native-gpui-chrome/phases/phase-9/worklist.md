@@ -1129,6 +1129,25 @@ available width OR `Dock::set_panel` reads `starts_open == true`
 be a fresh regression in the right-dock visibility chain in
 `workspace.rs` after the dock-width constant unification.
 
+**Diagnostic-promotion (commit `<this-commit>`).**  The
+`b1614df8` instrumentation pass added info-level logs at every
+dispatch hop, but the env_logger filter in `tolaria::macos::run`
+only registered `tolaria` at Info — the **first** hop of the
+inspector chain (`workspace::title_bar` "title-bar inspector
+click") was silently filtered out at default `cargo run` log
+level, so the user's terminal showed nothing on click and the
+diagnosis stalled.  Fix: extend the env_logger filter to include
+`workspace` at Info as well, and `eprintln!` the
+`TOLARIA_BUILD_TAG` banner at startup (bypasses any log filter,
+makes it trivial for the user to confirm a fresh binary is being
+run — addresses 9.3.5 `Reopened` "still in toolbar" cache
+suspicion in the same change).  The four inspector-chain info!
+sites now print to the user's terminal under plain `cargo run`:
+(1) title-bar click, (2) ToggleInspector handler entry, (3)
+toggle_or_swap_right_dock_panel branch + factory invocation, (4)
+the InspectorPanel factory body.  Open until the user re-runs
+and shares the trace.
+
 #### 9.3.1
 
 **Source:** user-reported polish on the embedded BlockNote editor,
@@ -1526,6 +1545,20 @@ the More-overflow popover.  Likely causes:
 Diagnosis: confirm via screenshot whether (a) the title-bar
 button is visible OR (b) any toolbar cell uses
 `IconName::PanelRight`.
+
+**Build-tag banner (commit `<this-commit>`).**  To unblock the
+"stale binary" hypothesis the user can't easily check on their
+own, the `tolaria::macos::run` entrypoint now emits a clear
+`=== tolaria build=<TOLARIA_BUILD_TAG> ===` banner to stderr via
+`eprintln!` (bypasses any RUST_LOG / env_logger filter).  The
+banner is the first line of stderr on every launch, so a triage
+screenshot of the terminal prove-or-disproves the stale-cache
+suspicion in one glance — no need to ask the user to
+`cargo clean` blindly.  Same change also extends the env_logger
+filter to include `workspace` at Info (worklist 9.2.13 cross-row
+fix), so the title-bar click log now appears under plain
+`cargo run`.  Open until the user re-runs and confirms which
+hypothesis (1, 2, or 3) the trace pins.
 
 #### 9.3.6
 
