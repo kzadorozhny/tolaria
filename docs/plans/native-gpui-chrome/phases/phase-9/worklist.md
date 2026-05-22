@@ -1545,7 +1545,7 @@ each `open_in_webview` resets to narrow.  React stores the
 setting in frontmatter — a follow-up row can wire that read
 without touching the toggle path.
 
-**Closure (commit `<this-commit>`).**  Shipped all 7 scope items.
+**Closure (commit `55561ed7`).**  Shipped all 7 scope items.
 Bridge tests added: `to_host_set_wide_mode_roundtrip` +
 `to_host_set_wide_mode_disabled_roundtrip` (both ways across the
 JSON envelope, including the explicit `false` field).  NoteItem
@@ -1777,7 +1777,7 @@ neighborhood-handler test (`neighborhood_handler_enters_when_scope_is_not_neighb
 to assert the title-only label.  Surface: 1 fn body + 2 test
 assertions.  **Size:** trivial.
 
-**Closure (commit `<this-commit>`).**  Replaced
+**Closure (commit `55561ed7`).**  Replaced
 `gpui::SharedString::from(format!("Neighborhood of {title}"))`
 with `title.clone()` in `handle_enter_neighborhood`.  Both
 affected tests now assert against `anchor_stem.as_ref()` directly.
