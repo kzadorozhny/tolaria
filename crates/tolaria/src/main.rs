@@ -522,7 +522,13 @@ pub(crate) mod macos {
         ids.extend(vault.outbound_links(id));
         ids.remove(&id);
         let count = ids.len();
-        let header = gpui::SharedString::from(format!("Neighborhood of {title}"));
+        // Worklist 9.3.8 — header reads the note's title alone (e.g.
+        // `My Note`), not `Neighborhood of My Note`.  The note-list
+        // pane already styles its header the same way as the inbox
+        // view (large, dense title text), so the title-only label
+        // reads as a direct echo of "which note are we showing the
+        // neighbourhood of" without the prefix verbiage.
+        let header = title.clone();
         // Worklist 9.2.3 reopened — surface an `info!` log at handler
         // entry + an explicit `warn!` when the resolved neighborhood
         // is empty.  The empty-set case is exactly what the user
@@ -1018,6 +1024,36 @@ pub(crate) mod macos {
                     );
                     if let Err(e) = item.update(cx, |item, cx| item.toggle_raw_mode(cx)) {
                         log::warn!("ToggleRawEditor: toggle_raw_mode failed: {e:#}");
+                    }
+                });
+
+                // Worklist 9.2.17 — `ToggleNoteWidth` mirrors the
+                // raw-mode handler: read the active NoteItem from the
+                // shared slot, log the transition, dispatch through
+                // `toggle_wide_mode` which flips the chrome-owned
+                // `wide_mode` flag + pushes `ToHost::SetWideMode` to
+                // the embedded editor.  The editor-host toggles a
+                // `.wide-mode` class on `.editor-host-container` and
+                // CSS removes the `max-width` constraint.
+                let width_slot = active_note_item.clone();
+                cx.on_action(move |_: &actions::ToggleNoteWidth, cx| {
+                    let Some(item) = width_slot.borrow().as_ref().cloned() else {
+                        log::warn!(
+                            target: "tolaria::note_width",
+                            "ToggleNoteWidth: no active NoteItem — toolbar click reached \
+                             the handler before preload_blank_webview populated the slot"
+                        );
+                        return;
+                    };
+                    let id = item.read(cx).id();
+                    let pre_wide = item.read(cx).wide_mode();
+                    log::debug!(
+                        target: "tolaria::note_width",
+                        "ToggleNoteWidth: id={id:?} wide_mode {pre_wide} → {}",
+                        !pre_wide,
+                    );
+                    if let Err(e) = item.update(cx, |item, cx| item.toggle_wide_mode(cx)) {
+                        log::warn!("ToggleNoteWidth: toggle_wide_mode failed: {e:#}");
                     }
                 });
 
@@ -2694,7 +2730,8 @@ mod tests {
 
     /// Worklist 9.2.14 — dispatching [`actions::EnterNeighborhood`]
     /// must (a) push a `NoteListScope::Neighborhood(...)` onto the
-    /// pane, (b) flip the pane's header to `"Neighborhood of <stem>"`,
+    /// pane, (b) flip the pane's header to the active note's title
+    /// (worklist 9.3.8 — title alone, not `Neighborhood of <title>`),
     /// and (c) write `Some(id)` into the
     /// [`note_item::NeighborhoodAnchor`] global so the next toolbar
     /// render paints the cell in its active state.
@@ -2735,7 +2772,8 @@ mod tests {
 
         // Build the note-list pane against the real vault — its
         // `header_title` defaults to "Inbox" so we can assert the
-        // post-dispatch value is the new "Neighborhood of …" label.
+        // post-dispatch value is the new title-only label
+        // (worklist 9.3.8 — was previously "Neighborhood of …").
         let note_list = cx.update(|cx| cx.new(|cx| NoteListPane::from_vault(cx)));
         let initial_header = cx.update(|cx| note_list.read(cx).header_title().clone());
         assert_eq!(
@@ -2783,13 +2821,13 @@ mod tests {
         cx.update(|cx| cx.dispatch_action(&actions::EnterNeighborhood));
         cx.run_until_parked();
 
-        // Header reflects the active note's title.
+        // Header reflects the active note's title (worklist 9.3.8 —
+        // title alone, no `Neighborhood of` prefix).
         let header_after = cx.update(|cx| note_list.read(cx).header_title().clone());
-        let expected = format!("Neighborhood of {anchor_stem}");
         assert_eq!(
             header_after.as_ref(),
-            expected,
-            "EnterNeighborhood must update the note-list header to 'Neighborhood of <title>'",
+            anchor_stem.as_ref(),
+            "EnterNeighborhood must update the note-list header to the active note's title",
         );
 
         // Scope reflects the neighborhood filter.
@@ -2910,12 +2948,14 @@ mod tests {
             "toggle-on must save the pre-neighbourhood scope into the slot",
         );
 
-        // Header reflects the entered neighbourhood.
+        // Header reflects the entered neighbourhood — worklist 9.3.8
+        // pinned this to the active note's title alone (was
+        // previously `Neighborhood of <title>`).
         let header_after = cx.update(|cx| note_list.read(cx).header_title().clone());
         assert_eq!(
             header_after.as_ref(),
-            format!("Neighborhood of {anchor_stem}"),
-            "toggle-on must set the header to 'Neighborhood of <title>'",
+            anchor_stem.as_ref(),
+            "toggle-on must set the header to the active note's title (worklist 9.3.8)",
         );
     }
 

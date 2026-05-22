@@ -395,6 +395,23 @@ export function dispatchToHost(
             }
             break;
         }
+        case "set_wide_mode": {
+            // Phase 9 worklist 9.2.17 — chrome-owned wide/narrow
+            // toggle.  Toggle a `.wide-mode` class on the
+            // `.editor-host-container` element; CSS does the rest
+            // (`.editor-host-container.wide-mode .bn-editor` clears
+            // `max-width`).  No editor instance changes needed.
+            const container = document.querySelector<HTMLElement>(
+                ".editor-host-container",
+            );
+            if (!container) break;
+            if (msg.v.wide) {
+                container.classList.add("wide-mode");
+            } else {
+                container.classList.remove("wide-mode");
+            }
+            break;
+        }
     }
 }
 

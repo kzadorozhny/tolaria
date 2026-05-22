@@ -59,6 +59,15 @@ pub enum ToHost {
     /// unconditionally via `shouldUseRawEditor(path)` and treat this
     /// envelope as a no-op.
     SetRawMode(SetRawMode),
+
+    /// Toggle the editor's content-width constraint (Phase 9 worklist
+    /// 9.2.17).  `wide = false` keeps the BlockNote editor's default
+    /// reading-column width (controlled by `--editor-max-width` in
+    /// `editor-host/src/style.css`); `wide = true` clears the
+    /// max-width so the content fills the available column.  Chrome
+    /// owns the toggle state per `NoteItem` so the editor doesn't
+    /// have to thread its own flag across `NoteOpen` swaps.
+    SetWideMode(SetWideMode),
 }
 
 /// Payload for [`ToHost::NoteOpen`].  `path` is included for
@@ -103,6 +112,20 @@ pub struct ThemeSet {
 pub struct SetRawMode {
     /// `true` mounts the raw editor; `false` mounts BlockNote.
     pub enabled: bool,
+}
+
+/// Payload for [`ToHost::SetWideMode`].
+///
+/// `wide = true` removes the editor body's `max-width` constraint
+/// (content fills the column); `wide = false` keeps the default
+/// reading-column width from `--editor-max-width`.  The editor-host
+/// toggles a `.wide-mode` class on `.editor-host-container` so the
+/// CSS rule does the work; no JS layout recalc needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetWideMode {
+    /// `true` removes the content-width constraint; `false` restores
+    /// the default reading-column width.
+    pub wide: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -381,6 +404,25 @@ mod tests {
         let msg = ToHost::SetRawMode(SetRawMode { enabled: false });
         let json = encode_to_host(&msg).unwrap();
         assert_eq!(json, r#"{"k":"set_raw_mode","v":{"enabled":false}}"#);
+        assert_eq!(decode_to_host(&json).unwrap(), msg);
+    }
+
+    #[test]
+    fn to_host_set_wide_mode_roundtrip() {
+        // Worklist 9.2.17 — wire-shape lock for the wide-mode toggle.
+        // The TypeScript dispatcher keys off `k=="set_wide_mode"`,
+        // so any rename here would silently desync the bridge.
+        let msg = ToHost::SetWideMode(SetWideMode { wide: true });
+        let json = encode_to_host(&msg).unwrap();
+        assert_eq!(json, r#"{"k":"set_wide_mode","v":{"wide":true}}"#);
+        assert_eq!(decode_to_host(&json).unwrap(), msg);
+    }
+
+    #[test]
+    fn to_host_set_wide_mode_disabled_roundtrip() {
+        let msg = ToHost::SetWideMode(SetWideMode { wide: false });
+        let json = encode_to_host(&msg).unwrap();
+        assert_eq!(json, r#"{"k":"set_wide_mode","v":{"wide":false}}"#);
         assert_eq!(decode_to_host(&json).unwrap(), msg);
     }
 

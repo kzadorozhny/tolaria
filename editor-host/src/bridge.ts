@@ -18,7 +18,8 @@ export type ToHost =
     | { k: "focus_editor" }
     | { k: "save_request" }
     | { k: "theme_set"; v: { mode: ThemeMode } }
-    | { k: "set_raw_mode"; v: { enabled: boolean } };
+    | { k: "set_raw_mode"; v: { enabled: boolean } }
+    | { k: "set_wide_mode"; v: { wide: boolean } };
 
 // ---------------------------------------------------------------------------
 // Editor → Native

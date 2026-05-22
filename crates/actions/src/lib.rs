@@ -71,6 +71,19 @@ gpui::actions!(
         /// React parity (the React `BreadcrumbBar.tsx` `RawToggleButton`
         /// is mouse-only); users can map one via the user keymap.
         ToggleRawEditor,
+        /// Flip the active `NoteItem` between the default
+        /// reading-column width and the unconstrained "wide" width
+        /// (Phase 9 worklist 9.2.17).  Chrome owns the toggle state
+        /// per `NoteItem`; the action handler in `tolaria/src/main.rs`
+        /// resolves the active item and calls
+        /// `NoteItem::toggle_wide_mode`, which flips the field and
+        /// pushes `editor_bridge::ToHost::SetWideMode` down to the
+        /// embedded editor (editor-host toggles `.wide-mode` on
+        /// `.editor-host-container` and CSS does the rest).
+        /// Dispatched from the note-toolbar `note-toolbar-width`
+        /// cell.  No default keybinding (React parity — the React
+        /// `NoteWidthAction` is mouse-only).
+        ToggleNoteWidth,
         /// Attach (or close) the table-of-contents panel in the
         /// workspace's right dock (Phase 9 worklist 9.2.6).
         ///

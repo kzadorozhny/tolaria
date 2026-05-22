@@ -63,7 +63,13 @@ pub const NOTE_TOOLBAR_HEIGHT_PT: f32 = 52.0;
 /// installed [`Vault`] global; absent vault (mock-mode + chrome tests
 /// without a real vault) renders the cells in their "off" state and
 /// the click handlers become log-only.
-pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyElement {
+pub(crate) fn render(
+    id: NoteId,
+    path: &Path,
+    raw_mode: bool,
+    wide_mode: bool,
+    cx: &App,
+) -> AnyElement {
     let theme = cx.theme();
     let bg = theme.background;
     let border = theme.border;
@@ -295,10 +301,28 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
                 window.dispatch_action(Box::new(actions::ToggleRawEditor), cx);
             },
         ))
-        .child(stub_cell(
+        // Worklist 9.2.17 — wide/narrow toggle.  Dispatches
+        // `ToggleNoteWidth` (matches the raw-mode shape); the handler
+        // in `tolaria/src/main.rs` mutates the active `NoteItem`'s
+        // `wide_mode` flag and pushes `ToHost::SetWideMode` over the
+        // bridge.  Active-state treatment paints when `wide_mode` is
+        // on, same `ActiveStyle::Tint` glyph that raw-mode + toc use.
+        .child(toolbar_cell_with_active(
             "note-toolbar-width",
             IconName::Maximize,
-            "Toggle note width",
+            if wide_mode {
+                "Use narrow note width"
+            } else {
+                "Use wide note width"
+            },
+            wide_mode,
+            |window, cx| {
+                log::debug!(
+                    target: "note_item::toolbar",
+                    "width: click registered, dispatching ToggleNoteWidth"
+                );
+                window.dispatch_action(Box::new(actions::ToggleNoteWidth), cx);
+            },
         ))
         .child(stub_cell(
             "note-toolbar-ai",

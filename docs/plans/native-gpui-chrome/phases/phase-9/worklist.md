@@ -37,7 +37,7 @@
 9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
 9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
 9.2.16. ✅ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
-9.2.17. The note width toggle (wide/narrow) does not work
+9.2.17. ✅ The note width toggle (wide/narrow) does not work
 
 ## 3. Low Priority
 
@@ -48,7 +48,7 @@
 9.3.5. ✅ Note properties panel toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
 9.3.6. ✅ Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
 9.3.7. ✅ Block editor selection menu should have React side styling
-9.3.8. The Note List eighbourhood mode title reads `Neighbourhood`of <note-is>. It should be `Note title` (same as in Note List)
+9.3.8. ✅ The Note List eighbourhood mode title reads `Neighbourhood`of <note-is>. It should be `Note title` (same as in Note List)
 
 ---
 
@@ -1501,6 +1501,63 @@ set the new neighbourhood scope as before.  Two new
 and `neighborhood_handler_exits_when_scope_matches_active_id` —
 pin the enter and exit branches against an on-disk vault fixture.
 
+#### 9.2.17
+
+**Source:** user-filed, 2026-05-22.  **Symptom:** the
+`note-toolbar-width` cell (between the raw-mode and AI cells)
+has been a `stub_cell` since Phase 8 — clicking it does nothing.
+The React app's `BreadcrumbBar.tsx::NoteWidthAction` toggles
+between a constrained reading column (`normal`) and an
+unconstrained "wide" column.  User wants the toggle to actually
+work in the GPUI chrome.
+
+**Scope:** mirror the worklist `9.2.4` raw-mode pattern:
+
+1. Add `actions::ToggleNoteWidth` action verb.
+2. Add `editor_bridge::ToHost::SetWideMode(SetWideMode { wide:
+   bool })` envelope variant — wire format
+   `{"k":"set_wide_mode","v":{"wide":true}}`.
+3. Add `NoteItem::wide_mode: bool` field + `wide_mode()` getter
+   + `toggle_wide_mode(cx)` method (flip flag, push bridge
+   envelope, `cx.notify()`).  Reset to `false` on
+   `open_in_webview` so each tab opens narrow (matches React's
+   per-component state shape).
+4. Swap the `note-toolbar-width` `stub_cell` for a
+   `toolbar_cell_with_active` (same shape as raw-mode + ToC) that
+   paints in `ActiveStyle::Tint` when wide and dispatches
+   `ToggleNoteWidth`.  Tooltip flips text between "Use wide note
+   width" and "Use narrow note width".
+5. App-scope `cx.on_action(|_: &ToggleNoteWidth, cx| ...)` handler
+   in `tolaria::macos::run` reads the active `NoteItem` from
+   `active_note_item` slot, logs the transition at `debug!`, and
+   calls `toggle_wide_mode`.  Same active-item shape the raw
+   handler uses.
+6. Editor-host `bridge.ts` adds the `set_wide_mode` variant to
+   the `ToHost` union; `EditorApp.tsx` `applyToHost` handler
+   toggles `.wide-mode` on `.editor-host-container`.
+7. `editor-host/src/style.css` adds
+   `.editor-host-container.wide-mode .bn-editor { max-width: none; }`
+   to lift the `--editor-max-width` constraint.
+
+**Out of scope:** per-note frontmatter persistence
+(`_note_width_mode`).  The chrome-side toggle is in-memory only;
+each `open_in_webview` resets to narrow.  React stores the
+setting in frontmatter — a follow-up row can wire that read
+without touching the toggle path.
+
+**Closure (commit `<this-commit>`).**  Shipped all 7 scope items.
+Bridge tests added: `to_host_set_wide_mode_roundtrip` +
+`to_host_set_wide_mode_disabled_roundtrip` (both ways across the
+JSON envelope, including the explicit `false` field).  NoteItem
+tests added: `toggle_wide_mode_flips_the_flag` (false → true →
+false round trip) + `wide_mode_defaults_to_false`.  Active-state
+glyph treatment uses the same `ActiveStyle::Tint` as raw-mode +
+ToC so the toolbar reads consistently.  No new Phosphor icons —
+`IconName::Maximize` (already in the stub) doubles as the
+wide-mode glyph.  Bundle: 2,492.64 kB → 2,492.87 kB (+0.23 kB
+from the bridge handler + CSS rule).  Rust test counts grew by
+2 in `note_item` (47) and 2 in `editor_bridge` (45).
+
 #### 9.3.7
 
 **Source:** user-filed, 2026-05-21.  **Symptom:** the BlockNote
@@ -1699,6 +1756,36 @@ went away with the cell removal in `9.3.5` — no log to downgrade
 there.  The per-handler `info!` traces at `tolaria::*` stay
 unchanged so a future dispatch regression still surfaces in
 production logs without the per-click noise.
+
+#### 9.3.8
+
+**Source:** user-filed, 2026-05-22.  **Symptom:** the note-list
+header in neighbourhood mode reads `Neighborhood of <title>`
+(e.g. `Neighborhood of My Note`).  The user wants the header to
+just show the active note's title alone — the prefix verbiage
+adds clutter, and the note-list pane already styles its header
+the same way (large, dense title text) for the inbox view, so a
+title-only label reads as a direct echo of "which note are we
+showing the neighbourhood of."
+
+**Scope:** drop the `"Neighborhood of "` prefix from the
+`set_header_title` call in `tolaria::macos::handle_enter_neighborhood`
+(`crates/tolaria/src/main.rs`, near the `format!(...)` call) and
+pass the bare `title` `SharedString`.  Update the related test
+(`enter_neighborhood_updates_header_and_anchor`) and the
+neighborhood-handler test (`neighborhood_handler_enters_when_scope_is_not_neighborhood`)
+to assert the title-only label.  Surface: 1 fn body + 2 test
+assertions.  **Size:** trivial.
+
+**Closure (commit `<this-commit>`).**  Replaced
+`gpui::SharedString::from(format!("Neighborhood of {title}"))`
+with `title.clone()` in `handle_enter_neighborhood`.  Both
+affected tests now assert against `anchor_stem.as_ref()` directly.
+The 9.2.14 closure paragraph already credited the note-list
+header to "show the active note's title"; this row finishes the
+job by dropping the prefix from the literal.  Closure docstring
+on the test was also updated.  31 tolaria tests + 33 tests in
+the surrounding crates stay green.
 
 ### Cross-row notes
 

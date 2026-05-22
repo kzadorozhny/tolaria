@@ -36,7 +36,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use editor_bridge::{encode_to_host, FromHost, Headings, Mods, NoteOpen, SetRawMode, ToHost};
+use editor_bridge::{
+    encode_to_host, FromHost, Headings, Mods, NoteOpen, SetRawMode, SetWideMode, ToHost,
+};
 pub use editor_bridge::{Heading, ThemeMode};
 use gpui::{
     div, App, Context, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled,
@@ -375,6 +377,15 @@ pub struct NoteItem {
     /// previous note's state (mirrors React, which holds raw-mode in
     /// component-local state that resets on a note change).
     raw_mode: bool,
+    /// Per-item wide-mode flag (Phase 9 worklist 9.2.17).
+    ///
+    /// `true` removes the editor body's `max-width` constraint so
+    /// content fills the column; `false` keeps the default
+    /// reading-column width.  Mirrors `raw_mode` in shape: chrome
+    /// owns the toggle, the next `open_in_webview` resets to `false`
+    /// (each tab starts in default-width), and the toolbar reads
+    /// this on every render for the active-state glyph treatment.
+    wide_mode: bool,
     #[cfg(target_os = "macos")]
     macos: MacosState,
 }
@@ -398,6 +409,7 @@ impl NoteItem {
             editor_ready: false,
             pending_open: None,
             raw_mode: false,
+            wide_mode: false,
             #[cfg(target_os = "macos")]
             macos: MacosState::default(),
         }
@@ -528,6 +540,13 @@ impl NoteItem {
         // the previous note's raw-mode flag across, surprising users
         // who picked raw on a different file.
         self.raw_mode = false;
+        // Worklist 9.2.17 — wide-mode resets too.  React holds the
+        // setting in per-note frontmatter (`_note_width_mode`), which
+        // would survive an `open_in_webview`.  Phase 9 ships the
+        // chrome-side toggle without the frontmatter persistence:
+        // the wide flag stays in-memory only and resets per open.
+        // A follow-up row will wire the frontmatter read.
+        self.wide_mode = false;
 
         let payload = NoteOpen {
             id: self.id,
@@ -615,6 +634,42 @@ impl NoteItem {
                 enabled: self.raw_mode,
             }),
             "SetRawMode",
+            cx,
+        )
+    }
+
+    /// Current wide-mode flag (Phase 9 worklist 9.2.17).  `true` when
+    /// the editor body has its `max-width` removed and content fills
+    /// the available column width; `false` for the default
+    /// reading-column width.  Toolbar reads this on every render to
+    /// drive the cell's active-state glyph treatment.
+    #[must_use]
+    pub fn wide_mode(&self) -> bool {
+        self.wide_mode
+    }
+
+    /// Flip [`Self::wide_mode`] and push the corresponding
+    /// [`ToHost::SetWideMode`] envelope into the embedded editor.
+    /// Worklist 9.2.17 — mirrors [`Self::toggle_raw_mode`] in shape:
+    /// chrome is the single source of truth, the mutation lands
+    /// regardless of the bridge result, and the toolbar repaints via
+    /// `cx.notify()` on every call.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the same encode / `evaluate_script` failures as
+    /// [`Self::send_to_host`].  The state mutation lands regardless of
+    /// the bridge result so a transient JS evaluation hiccup cannot
+    /// desync the chrome's idea of the toggle from the editor's
+    /// surface.
+    pub fn toggle_wide_mode(&mut self, cx: &mut Context<Self>) -> Result<()> {
+        self.wide_mode = !self.wide_mode;
+        cx.notify();
+        self.send_to_host(
+            &ToHost::SetWideMode(SetWideMode {
+                wide: self.wide_mode,
+            }),
+            "SetWideMode",
             cx,
         )
     }
@@ -807,7 +862,7 @@ impl Render for NoteItem {
         // entity with `path = PathBuf::new()`, and neither cluster has
         // meaningful state to render until a note swaps in.
         let toolbar = (!self.path.as_os_str().is_empty())
-            .then(|| note_toolbar::render(self.id, &self.path, self.raw_mode, cx));
+            .then(|| note_toolbar::render(self.id, &self.path, self.raw_mode, self.wide_mode, cx));
 
         // Block-level flex column instead of `gpui_component::v_flex()`:
         // the helper bundles `align-items: center`, which we don't want
@@ -870,6 +925,7 @@ impl NoteItem {
             editor_ready: false,
             pending_open: None,
             raw_mode: false,
+            wide_mode: false,
             macos: MacosState {
                 webview: Some(webview),
             },
@@ -919,6 +975,7 @@ impl NoteItem {
             editor_ready: false,
             pending_open: Some(pending_open),
             raw_mode: false,
+            wide_mode: false,
             macos: MacosState {
                 webview: Some(webview),
             },
@@ -1858,6 +1915,45 @@ mod tests {
     fn raw_mode_defaults_to_false() {
         let item = NoteItem::new_for_tests(fresh_note(1));
         assert!(!item.raw_mode());
+    }
+
+    /// Phase 9 worklist 9.2.17 — chrome-owned wide-mode toggle mirrors
+    /// the raw-mode shape: `wide_mode()` reads the field, and
+    /// `toggle_wide_mode(cx)` flips it + pushes `ToHost::SetWideMode`
+    /// down the bridge.  Same `new_for_tests` setup as raw-mode: no
+    /// WebView attached, `send_to_host` short-circuits cleanly, and
+    /// the state mutation lands unconditionally.
+    #[gpui::test]
+    fn toggle_wide_mode_flips_the_flag(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        let item = cx.update(|cx| {
+            cx.new(|_cx: &mut Context<NoteItem>| NoteItem::new_for_tests(fresh_note(1)))
+        });
+
+        cx.update(|cx| {
+            item.update(cx, |item: &mut NoteItem, _| {
+                assert!(!item.wide_mode(), "default wide_mode is false");
+            });
+            item.update(cx, |item: &mut NoteItem, cx| {
+                item.toggle_wide_mode(cx)
+                    .expect("toggle_wide_mode returns Ok when no WebView is mounted");
+                assert!(item.wide_mode(), "toggle flips false -> true");
+            });
+            item.update(cx, |item: &mut NoteItem, cx| {
+                item.toggle_wide_mode(cx)
+                    .expect("toggle_wide_mode returns Ok when no WebView is mounted");
+                assert!(!item.wide_mode(), "toggle flips true -> false");
+            });
+        });
+    }
+
+    /// Phase 9 worklist 9.2.17 — `wide_mode` default mirrors
+    /// `raw_mode`: every fresh-mount note opens in the default
+    /// (narrow) reading-column width.
+    #[test]
+    fn wide_mode_defaults_to_false() {
+        let item = NoteItem::new_for_tests(fresh_note(1));
+        assert!(!item.wide_mode());
     }
 
     /// Phase 8 worklist 1.2 (third attempt): the macOS `render` path

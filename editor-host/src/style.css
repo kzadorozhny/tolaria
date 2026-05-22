@@ -405,6 +405,17 @@ body {
   caret-color: var(--colors-cursor);
 }
 
+/* Worklist 9.2.17 — wide-mode lifts the reading-column constraint so
+   the editor body fills the available column.  The chrome owns the
+   toggle and pushes it down via the `set_wide_mode` bridge envelope;
+   `EditorApp.tsx` toggles the class on this container, and CSS does
+   the rest.  The padding rule below is a sibling override — the
+   default padding formula bakes in `var(--editor-max-width)` for
+   horizontal alignment math, which doesn't make sense when wide. */
+.editor-host-container.wide-mode .bn-editor {
+  max-width: none;
+}
+
 /* Let each rich-text block resolve its own base direction for mixed LTR/RTL notes. */
 .editor-host-container .bn-block-content {
   text-align: start;
