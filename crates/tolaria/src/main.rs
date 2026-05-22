@@ -247,15 +247,18 @@ pub(crate) mod macos {
     }
 
     /// Rebuild the native menu bar from the current
-    /// sidebar / inspector state with the workspace already in scope.
+    /// sidebar / properties / element-overlay state with the workspace
+    /// already in scope.
     ///
-    /// Worklist 3.2 — the View menu's two toggle entries flip between
+    /// Worklist 3.2 — the View menu's toggle entries flip between
     /// `"Show …"` and `"Hide …"` based on the workspace's left-dock
-    /// state and GPUI's inspector overlay.  Action handlers that
-    /// already run inside `dispatch_to_workspace` call this so the
-    /// rebuild observes the *post-toggle* state.
+    /// state and the right-dock's mounted panel.  Worklist 9.2.15 —
+    /// adds a third axis for GPUI's element-picker debug overlay,
+    /// sourced from [`gpui::Window::is_inspector_picking`].  Action
+    /// handlers that already run inside `dispatch_to_workspace` call
+    /// this so the rebuild observes the *post-toggle* state.
     ///
-    /// `inspector_picking` is sourced from
+    /// `inspector_overlay_picking` is sourced from
     /// [`gpui::Window::is_inspector_picking`] — the only public GPUI
     /// API that exposes any part of the inspector overlay state.  It
     /// returns `true` during the mouse-pick step (a strict subset of
@@ -272,19 +275,23 @@ pub(crate) mod macos {
     /// the duration of the outer update.
     fn rebuild_menus_with_workspace(
         workspace: &workspace::TolariaWorkspace,
-        _window: &mut gpui::Window,
+        window: &mut gpui::Window,
         cx: &mut gpui::Context<workspace::TolariaWorkspace>,
     ) {
-        // Worklist 9.2.13 — the View → Inspector entry now toggles the
-        // application's `InspectorPanel` in the right dock (the
-        // GPUI element-picker overlay moved to `ToggleElementInspector`),
-        // so the menu label tracks the right dock's mounted-panel
-        // state rather than `Window::is_inspector_picking`.
-        let inspector_visible = workspace.is_right_dock_open(cx)
+        // Worklist 9.2.13 — the View → Properties entry toggles the
+        // application's `InspectorPanel` in the right dock via
+        // `ToggleInspector` (the action verb kept its legacy name; the
+        // menu label reads `Properties` since worklist 9.2.15), so the
+        // label tracks the right dock's mounted-panel state.  Worklist
+        // 9.2.15 — the restored `Show / Hide Inspector` entry
+        // dispatches `ToggleElementInspector`, so its label follows
+        // GPUI's element-picker state on the active window.
+        let properties_open = workspace.is_right_dock_open(cx)
             && workspace.right_dock_panel_key(cx).as_deref() == Some("inspector");
         let state = menus::MenuState {
             sidebar_open: workspace.is_sidebar_open(cx),
-            inspector_picking: inspector_visible,
+            properties_open,
+            inspector_overlay_picking: window.is_inspector_picking(cx),
         };
         cx.set_menus(menus::app_menus(state));
     }

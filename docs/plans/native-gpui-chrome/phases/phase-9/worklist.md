@@ -35,7 +35,7 @@
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
 9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
-9.2.15. ⏳ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
+9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
 
 ## 3. Low Priority
 
@@ -1269,6 +1269,21 @@ so the developer overlay regains a discoverable surface.
 **Surface:** `crates/tolaria/src/menus.rs` + the workspace's
 `rebuild_menus_with_workspace` call sites in `tolaria/src/main.rs`.
 **Size:** small.
+
+**Closure (commit `<this-commit>`).**  `MenuState::inspector_picking`
+renamed to `properties_open` (drives the product right-dock toggle's
+label).  New `MenuState::inspector_overlay_picking` field drives the
+restored GPUI element-picker entry's label.  View menu now renders
+both entries: `Show / Hide Properties` (dispatches
+`actions::ToggleInspector` → right-dock panel) and a separate
+`Show / Hide Inspector` (dispatches `actions::ToggleElementInspector`
+→ GPUI debug overlay, `Cmd+Alt+I`).  `rebuild_menus_with_workspace`
+populates both fields — `properties_open` from
+`workspace.is_right_dock_open(cx) && panel_key == Some("inspector")`,
+`inspector_overlay_picking` from `Window::is_inspector_picking`
+(debug-only; field stays `false` in release builds).  Tests extended
+to cover all four state-axis combinations (both closed, both open,
+only properties, only overlay).
 
 #### 9.3.5
 

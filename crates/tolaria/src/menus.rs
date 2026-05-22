@@ -17,32 +17,44 @@
 
 use actions::{
     About, CloseTab, CloseWindow, EditCopy, EditCut, EditPaste, EditRedo, EditSelectAll, EditUndo,
-    NewNote, OpenSettings, OpenVault, Quit, ReportIssue, ResetZoom, Save, ToggleInspector,
-    ToggleSidebar, ViewDocs, ZoomIn, ZoomOut,
+    NewNote, OpenSettings, OpenVault, Quit, ReportIssue, ResetZoom, Save, ToggleElementInspector,
+    ToggleInspector, ToggleSidebar, ViewDocs, ZoomIn, ZoomOut,
 };
 use gpui::{Menu, MenuItem, OsAction};
 
 /// Snapshot of the workspace state the menu labels depend on.
 ///
-/// Worklist 3.2 — the View menu's two toggle entries pick their label
-/// from the current sidebar / inspector state (`"Show Sidebar"` vs
-/// `"Hide Sidebar"`, `"Show Inspector"` vs `"Hide Inspector"`) instead
-/// of the static `"Toggle …"` verbs.  Passed by value because both
-/// fields are `bool` and the struct lives only for the duration of one
-/// `cx.set_menus(...)` call — `MenuState` is intentionally not a
-/// `gpui::Global`; the workspace owns sidebar / right-dock state.
+/// Worklist 3.2 — the View menu's toggle entries pick their label from
+/// the current sidebar / properties / inspector-overlay state
+/// (`"Show Sidebar"` vs `"Hide Sidebar"`, `"Show Properties"` vs
+/// `"Hide Properties"`, `"Show Inspector"` vs `"Hide Inspector"`)
+/// instead of the static `"Toggle …"` verbs.  Passed by value because
+/// every field is `bool` and the struct lives only for the duration of
+/// one `cx.set_menus(...)` call — `MenuState` is intentionally not a
+/// `gpui::Global`; the workspace owns sidebar / right-dock state and
+/// `Window::is_inspector_picking` owns the dev-overlay axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MenuState {
     /// Whether the workspace's left dock (sidebar) is currently open.
     pub sidebar_open: bool,
     /// Whether the product [`inspector_panel::InspectorPanel`] is
     /// currently visible in the workspace's right dock.  Worklist
-    /// 9.2.13 — the View → Inspector entry now toggles the panel,
-    /// not GPUI's element-picker overlay, so the label tracks the
-    /// dock's visible-and-showing-inspector state.  Computed by
-    /// `main.rs::rebuild_menus_with_workspace` as
-    /// `right_dock_panel_key() == Some("inspector") && is_right_dock_open()`.
-    pub inspector_picking: bool,
+    /// 9.2.13 — the View → Properties entry toggles the panel via
+    /// `actions::ToggleInspector` (the action verb kept its legacy
+    /// name; the menu label now reads `Properties` per the panel's
+    /// own title).  Computed by `main.rs::rebuild_menus_with_workspace`
+    /// as `right_dock_panel_key() == Some("inspector") && is_right_dock_open()`.
+    pub properties_open: bool,
+    /// Whether GPUI's element-picker debug overlay is currently
+    /// picking.  Worklist 9.2.15 — restored as a separate
+    /// `Show / Hide Inspector` entry driven by `actions::ToggleElementInspector`
+    /// (`Cmd+Alt+I`).  Sourced from `Window::is_inspector_picking`,
+    /// which returns `true` during the mouse-pick step (a strict
+    /// subset of "overlay is visible") — accurate for the labelling
+    /// purpose because the overlay is only useful while picking.
+    /// Debug-only in practice: the action is a no-op in release
+    /// builds, so the label simply stays `Show Inspector` there.
+    pub inspector_overlay_picking: bool,
 }
 
 /// Build the application menu bar.
@@ -122,29 +134,40 @@ fn edit_menu() -> Menu {
     }
 }
 
-/// View menu — sidebar / inspector toggles plus the standard
-/// zoom-in / zoom-out / reset-zoom triplet.  Zoom commands are
-/// stub-but-wired (Phase 9.x will implement workspace font-size
+/// View menu — sidebar / properties / inspector toggles plus the
+/// standard zoom-in / zoom-out / reset-zoom triplet.  Zoom commands
+/// are stub-but-wired (Phase 9.x will implement workspace font-size
 /// scaling); the menu entries are in place so the muscle-memory
 /// accelerators behave the same as any other macOS editor.
 ///
-/// Worklist 3.2 — the sidebar / inspector entries flip between
+/// Worklist 3.2 — the sidebar / properties entries flip between
 /// `"Show …"` and `"Hide …"` based on [`MenuState`] so the menu
 /// reflects the current visibility instead of the static
-/// `"Toggle …"` verb.  Three trigger points (initial set, sidebar
-/// action handler, inspector action handler in `main.rs`) rebuild the
-/// whole menu via `cx.set_menus(app_menus(...))` so the label tracks
-/// state across every dispatch vector (menu click, Cmd accelerator,
-/// title-bar / note-toolbar buttons).  The inspector axis is a proxy
-/// over `Window::is_inspector_picking`; see [`MenuState::inspector_picking`]
-/// for the caveat about picking-vs-overlay-open state.
+/// `"Toggle …"` verb.  Worklist 9.2.15 — the legacy `Show Inspector`
+/// entry split in two: the product-panel toggle (`actions::ToggleInspector`)
+/// now reads `Show / Hide Properties` (matching the panel's own
+/// `Properties` title) and a separate `Show / Hide Inspector` entry
+/// dispatches `actions::ToggleElementInspector` (`Cmd+Alt+I`) for the
+/// GPUI element-picker debug overlay.  Both labels rebuild via the
+/// trigger points in `main.rs`: the sidebar / inspector / element-overlay
+/// action handlers all call `rebuild_menus` so the label tracks state
+/// across every dispatch vector (menu click, Cmd accelerator,
+/// title-bar / note-toolbar buttons).  The overlay axis is a proxy
+/// over `Window::is_inspector_picking`; see
+/// [`MenuState::inspector_overlay_picking`] for the caveat about
+/// picking-vs-overlay-open state.
 fn view_menu(state: MenuState) -> Menu {
     let sidebar_label = if state.sidebar_open {
         "Hide Sidebar"
     } else {
         "Show Sidebar"
     };
-    let inspector_label = if state.inspector_picking {
+    let properties_label = if state.properties_open {
+        "Hide Properties"
+    } else {
+        "Show Properties"
+    };
+    let inspector_label = if state.inspector_overlay_picking {
         "Hide Inspector"
     } else {
         "Show Inspector"
@@ -154,7 +177,8 @@ fn view_menu(state: MenuState) -> Menu {
         disabled: false,
         items: vec![
             MenuItem::action(sidebar_label, ToggleSidebar),
-            MenuItem::action(inspector_label, ToggleInspector),
+            MenuItem::action(properties_label, ToggleInspector),
+            MenuItem::action(inspector_label, ToggleElementInspector),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn),
             MenuItem::action("Zoom Out", ZoomOut),
@@ -294,9 +318,13 @@ mod tests {
         assert_eq!(menu.items.len(), 8);
     }
 
-    /// View menu (default state — both closed): "Show Sidebar" /
-    /// "Show Inspector" / sep / ZoomIn / ZoomOut / Actual Size.
-    /// Worklist 3.2 makes the first two labels state-driven.
+    /// View menu (default state — every axis closed): "Show Sidebar"
+    /// / "Show Properties" / "Show Inspector" / sep / ZoomIn / ZoomOut
+    /// / Actual Size.  Worklist 3.2 made the toggle labels
+    /// state-driven; worklist 9.2.15 split the legacy Inspector entry
+    /// into the product-panel `Properties` toggle and the GPUI
+    /// element-overlay `Inspector` toggle, so the default state now
+    /// pins three independent "Show …" labels.
     #[test]
     fn view_menu_shows_show_labels_when_state_closed() {
         assert_menu_schema(
@@ -304,6 +332,7 @@ mod tests {
             "View",
             &[
                 Action("Show Sidebar"),
+                Action("Show Properties"),
                 Action("Show Inspector"),
                 Separator,
                 Action("Zoom In"),
@@ -313,21 +342,24 @@ mod tests {
         );
     }
 
-    /// View menu (both open): labels flip to "Hide Sidebar" / "Hide
-    /// Inspector".  Worklist 3.2 — the menu rebuild driven from the
-    /// action handlers in `main.rs` is what keeps these in sync with
-    /// the workspace state and the active window's inspector
-    /// element-picking state.
+    /// View menu (every axis open): labels flip to "Hide Sidebar" /
+    /// "Hide Properties" / "Hide Inspector".  Worklist 3.2 — the menu
+    /// rebuild driven from the action handlers in `main.rs` keeps the
+    /// sidebar and properties labels in sync with the workspace's
+    /// dock state; worklist 9.2.15 adds the third entry whose label
+    /// follows `Window::is_inspector_picking`.
     #[test]
     fn view_menu_shows_hide_labels_when_state_open() {
         assert_menu_schema(
             &view_menu(MenuState {
                 sidebar_open: true,
-                inspector_picking: true,
+                properties_open: true,
+                inspector_overlay_picking: true,
             }),
             "View",
             &[
                 Action("Hide Sidebar"),
+                Action("Hide Properties"),
                 Action("Hide Inspector"),
                 Separator,
                 Action("Zoom In"),
@@ -337,25 +369,115 @@ mod tests {
         );
     }
 
-    /// Mixed state: sidebar open, inspector closed.  Guards the
-    /// independence of the two labels — flipping one must not bleed
-    /// into the other.
+    /// Mixed state: sidebar open, properties closed, overlay closed.
+    /// Guards the independence of the three labels — flipping one
+    /// must not bleed into the others.
     #[test]
     fn view_menu_labels_track_each_axis_independently() {
         let menu = view_menu(MenuState {
             sidebar_open: true,
-            inspector_picking: false,
+            properties_open: false,
+            inspector_overlay_picking: false,
         });
         assert_menu_schema(
             &menu,
             "View",
             &[
                 Action("Hide Sidebar"),
+                Action("Show Properties"),
                 Action("Show Inspector"),
                 Separator,
                 Action("Zoom In"),
                 Action("Zoom Out"),
                 Action("Actual Size"),
+            ],
+        );
+    }
+
+    /// Worklist 9.2.15 — properties open, overlay closed.  Pins that
+    /// the product right-dock toggle drives its own label without
+    /// flipping the dev-overlay entry.
+    #[test]
+    fn view_menu_properties_open_does_not_flip_inspector_label() {
+        let menu = view_menu(MenuState {
+            sidebar_open: false,
+            properties_open: true,
+            inspector_overlay_picking: false,
+        });
+        assert_menu_schema(
+            &menu,
+            "View",
+            &[
+                Action("Show Sidebar"),
+                Action("Hide Properties"),
+                Action("Show Inspector"),
+                Separator,
+                Action("Zoom In"),
+                Action("Zoom Out"),
+                Action("Actual Size"),
+            ],
+        );
+    }
+
+    /// Worklist 9.2.15 — element-overlay picking, properties closed.
+    /// Symmetric guard: the dev-overlay axis drives its own label
+    /// without flipping the product right-dock entry.
+    #[test]
+    fn view_menu_overlay_picking_does_not_flip_properties_label() {
+        let menu = view_menu(MenuState {
+            sidebar_open: false,
+            properties_open: false,
+            inspector_overlay_picking: true,
+        });
+        assert_menu_schema(
+            &menu,
+            "View",
+            &[
+                Action("Show Sidebar"),
+                Action("Show Properties"),
+                Action("Hide Inspector"),
+                Separator,
+                Action("Zoom In"),
+                Action("Zoom Out"),
+                Action("Actual Size"),
+            ],
+        );
+    }
+
+    /// Worklist 9.2.15 — pin the action dispatched by each View-menu
+    /// entry.  Schema tests above match by label, which would still
+    /// pass if a future refactor accidentally swapped the Properties
+    /// and Inspector entries' actions (both labels survive); this
+    /// test catches that by extracting the boxed action's
+    /// [`gpui::Action::name`] and asserting each slot's verb.
+    ///
+    /// Positional check: separators participate in the comparison so a
+    /// reorder that nudges the separator up or down also trips the
+    /// assertion — the schema tests above match positionally, but they
+    /// match by *label*; this test matches by *action verb*, and the
+    /// two together pin both axes.
+    #[test]
+    fn view_menu_pins_action_per_entry() {
+        use gpui::Action as _;
+        let menu = view_menu(MenuState::default());
+        let action_names: Vec<Option<&str>> = menu
+            .items
+            .iter()
+            .map(|item| match item {
+                MenuItem::Action { action, .. } => Some(action.name()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            action_names,
+            vec![
+                Some(ToggleSidebar.name()),
+                Some(ToggleInspector.name()),
+                Some(ToggleElementInspector.name()),
+                None, // separator
+                Some(ZoomIn.name()),
+                Some(ZoomOut.name()),
+                Some(ResetZoom.name()),
             ],
         );
     }
