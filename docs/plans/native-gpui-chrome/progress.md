@@ -42,7 +42,7 @@ spec lives in [`components.md`](components.md).
 | **✅ Phase 8 complete** | shipped at `1e1f77ac` (Strand C tail) + `6190d076` (Strand B tail) + `aad8dbbb` (Strand A tail) | 271+ | All 30 rows landed across Strand A (14), Strand B (8), Strand C (7), plus Strand A 8.13 modal subset and 8.14 scaffold.  Editor-host vitest suite grew from 0 → 271 over Strand C; workspace + crate tests grew from ~261 → ~271+ over Strand A.  Two bridge-envelope gaps logged for Phase 10/11 follow-up.  Phase 8 visual issues catalogued in [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md). |
 | **✅ Phase 8 closed** | closed 2026-05-21 at `1a96c20a` | 402+ | Manual regression sweep: 29/29 in-scope rows resolved; 7 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9.  Architectural deltas: Angle-C2 transparent base layer + WKWebView z-order reversal, byte-identical YAML frontmatter round-trip, GPUI element-picker inspector renderer wired, dynamic native menu labels.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the full ledger. |
 | **✅ Phase 9 closed** | closed 2026-05-22 at `fcc0677b` | 519+ (385 editor-host) | Manual regression sweep: 26/27 in-scope rows resolved; `9.2.5` AI button (➡️) deferred to Phase 10 pending `cli_agents` provider plumbing.  Architectural deltas: per-note frontmatter bool writes + backlinks/outbound-links indexes, chrome-owned editor toggles (raw + wide mode), right-dock panel framework (ToC + Inspector with 7 sections), display-title resolution via note-list pane, editor-host shadcn parity (custom side menu + formatting toolbar), inspector chrome reshape (title-bar toggle + panel header), resizable-state pollution workaround (`main_resizable_state` + `right_dock_ever_opened` observer), re-entrancy-safe action dispatch via `Window::dispatch_action`, build-tag startup banner + diagnostic chain.  Worklist grew from 14 originally-scoped rows to 27 once mid-phase regressions and follow-up polish landed.  See [`phases/phase-9/close-out.md`](phases/phase-9/close-out.md) for the full ledger. |
-| 10.x — Behavioral layers (renumbered, re-scoped) | ⏳ planned | — | — | `command_registry`, `nav_history`, `multi_select`, `dialog_stack`, `vault_lifecycle` (10.1–10.5) + one inherited blocker `10.1.1 WKWebView z-order fix`.  Originally numbered Phase 9 — see [`roadmap.md`](roadmap.md) Phase 10 §Note for the renumber rationale and the 2026-05-22 scope adjustment that moved `auto_git` / `telemetry_pipeline` into Phase 11 (rows 11.13 + 11.14) adjacent to their underlying services. |
+| 10.x — Behavioral layers (renumbered, re-scoped) | ⏳ in progress (1/6 in-scope rows landed) | — | — | `command_registry`, `nav_history`, `multi_select`, `dialog_stack`, `vault_lifecycle` (10.1–10.5) + one inherited blocker `10.1.1 WKWebView z-order fix` (✅ landed — re-parent WKWebView as sibling of GPUI's `native_view` under `contentView` + `CALayer.zPosition = -1` so the Metal layer composites above the WebView).  Originally numbered Phase 9 — see [`roadmap.md`](roadmap.md) Phase 10 §Note for the renumber rationale and the 2026-05-22 scope adjustment that moved `auto_git` / `telemetry_pipeline` into Phase 11 (rows 11.13 + 11.14) adjacent to their underlying services. |
 | 11.x — Service expansion | ⏳ planned | — | — | `git_provider`, `vault_search`, `vault_watcher` (advanced), `cli_agents`, `mcp_bridge`, `telemetry`, `app_updater`, `localization`, `vault_registry`, `window_state`, `native_text_assistance`, `settings_panel` persistence. |
 | 12.x — Modal chrome surfaces | ⏳ planned | — | — | `command_palette`, `quick_open`, `dialogs`, `wikilink_inputs`, `image_lightbox`, `emoji_picker`, `startup` (one task per crate). |
 | 13.x — Parity hardening | ⏳ planned | — | — | Multi-tab `Pane`; autogit + conflict resolver; onboarding; measurement gate. |
@@ -705,13 +705,22 @@ Modal chrome → Phase 12, Parity hardening → Phase 13.  See
 `auto_git` and `telemetry_pipeline` were moved out of Phase 10 and
 into Phase 11 (rows 11.13 + 11.14) — both are behavioral wrappers
 around Phase 11 services (`git_provider`, `telemetry`) and land
-naturally adjacent to the services they wrap.  Phase 10 also opens
+naturally adjacent to the services they wrap.  Phase 10 also opened
 with one inherited blocker: `10.1.1` WKWebView z-order fix — GPUI
-overlays (popovers, dropdowns, dialog stack) currently render
-behind the embedded WKWebView editor body, which blocks
-`dialog_stack` (10.4) from delivering a working modal surface.
-See [`phases/phase-10/worklist.md`](phases/phase-10/worklist.md)
-for the row-level ledger.
+overlays (popovers, dropdowns, dialog stack) rendered behind the
+embedded WKWebView editor body, which blocked `dialog_stack` (10.4)
+from delivering a working modal surface.  ✅ Landed 2026-05-22 —
+`fix_overlay_compositing` in `crates/note_item/src/lib.rs`
+re-parents the WebView from GPUI's Metal-hosting `native_view` to
+the NSWindow `contentView` (as a front-most sibling so AppKit
+`hitTest:` keeps editor interactivity), then sets the WebView's
+`CALayer.zPosition = -1.0` so Core Animation composites the Metal
+layer above it.  Known follow-up: clicks on overlays *anchored
+inside* the editor body still route to the WebView (the AppKit
+hit-test is geometric and has no GPUI overlay awareness) — to be
+addressed alongside `dialog_stack` 10.4.  See
+[`phases/phase-10/worklist.md`](phases/phase-10/worklist.md) for the
+row-level ledger.
 
 **Scope growth.**  The originally-planned 14 rows (9.2.1–9.2.9 +
 9.3.1–9.3.6) grew to 27 once mid-phase regressions and follow-up

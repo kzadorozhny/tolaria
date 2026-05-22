@@ -14,7 +14,7 @@
 
 ## 1. Blockers
 
-10.1.1. ⏳ WKWebView z-order fix
+10.1.1. ✅ WKWebView z-order fix
 
 ## 2. High Priority
 
@@ -26,7 +26,7 @@
 
 ## 3. Low Priority
 
-10.3.1. ✅ address review feedback from `review.md` (first pass) — see annotation below for the five per-fix shas
+10.3.1. ✅ address review feedback from `review.md`
 
 ---
 
@@ -156,6 +156,59 @@ verification through periscope today.
 *Status:* row left in ⏳; no code changes shipped this pass.  Pick
 back up after (a) confirms which overlays we're covering and (b)
 picks the approach.
+
+**2026-05-22 fix landed (re-parent path, user-picked).**
+
+User manually confirmed (a) — "toolbar More popover, tooltips all
+definitely are drawn under the web view" — and picked candidate (1):
+re-parent WKWebView as sibling of `native_view` under `contentView`.
+
+Implementation in `crates/note_item/src/lib.rs` —
+`fix_overlay_compositing` (replaces the no-op
+`fix_z_order_send_to_back`):
+
+1. `wk_view.superview()` → `native_view` (GPUI's Metal-hosting view).
+2. `native_view.superview()` → `contentView` (NSWindow's content
+   view).
+3. `content_view.addSubview_positioned_relativeTo(wk_view,
+   NSWindowOrderingMode::Above, None)` — re-parents the WebView to be
+   the *front-most* subview of `contentView` (so AppKit `hitTest:`
+   walks subviews back-to-front and finds the WebView first for
+   editor-body clicks; native editor interactivity intact).
+4. `wk_view.layer().setZPosition(-1.0)` — pushes the WebView's
+   `CALayer` behind `native_view`'s sibling `CAMetalLayer` for Core
+   Animation's sibling-layer ordering pass.  GPUI overlays painted
+   into the Metal layer now composite above the WebView even when
+   anchored inside the editor frame.
+
+Side dep: `Cargo.toml` adds `objc2-quartz-core = { version = "0.3",
+features = ["CALayer", "objc2-core-foundation"] }` so
+`CALayer::setZPosition` (cfg-gated on `objc2-core-foundation`) is in
+scope — `objc2-app-kit` pulls `objc2-quartz-core` transitively but
+only enables `CALayer` / `CADisplayLink` / `CAMediaTimingFunction`,
+leaving every `CGFloat`-returning setter (including `setZPosition`)
+cfg'd out.
+
+Debug-only post-condition `debug_assert!`s in the helper pin the
+invariant so any future refactor that re-introduces sub-layer
+parenting (or drops the zPosition push) trips immediately on the
+next debug `spawn_webview`.  Release builds skip the asserts —
+the warnings on the early-return branches already cover the
+recoverable cases.
+
+Known limitation (deferred to a follow-up row): the AppKit-level hit
+test is purely geometric (no awareness of where GPUI's `deferred()`
+overlays paint), so clicks landing on an overlay anchored *inside*
+the editor body still route to the WebView instead of the overlay.
+The overlay paints correctly but isn't interactive in that region.
+Eventual fix is either an overlay-region registry the hit-test
+consults or a child `NSPanel` for surfaces that need editor-body
+interactivity (the `dialog_stack` work in 10.4 will surface the right
+shape).
+
+User manually validated via `pnpm tauri`-equivalent run of
+`./target/debug/tolaria --vault demo-vault-v2 --theme light` —
+toolbar More popover + tooltips now paint above the editor body.
 
 #### 10.2.1
 
