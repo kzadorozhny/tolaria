@@ -362,6 +362,9 @@ impl SidebarPanel {
                 // mock's `total_count` exactly.  When `vault::Vault`
                 // is real (and the rescan / watch task fires) the
                 // `from_vault` path picks up the real flag.
+                // TODO(7feee93c-followup): surface this as a
+                // `MockSample::with_organized(...)` knob once mock
+                // fixtures need a non-zero archive count.
                 samples.push(SidebarSample {
                     kind: note.kind,
                     path: note.path,

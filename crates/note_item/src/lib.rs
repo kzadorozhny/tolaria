@@ -887,7 +887,9 @@ impl Render for NoteItem {
                 // hover-blank regression untouched.  This drops the
                 // wrapper entirely — including the epsilon-compare
                 // `set_bounds` dedupe — and routes through the
-                // upstream-tested path.
+                // upstream-tested path.  ADR-0115 §6 codifies the
+                // "prefer the upstream `gpui_wry::WebView::Render`"
+                // rule going forward.
                 return container.child(div().flex_1().w_full().child(webview));
             }
         }
