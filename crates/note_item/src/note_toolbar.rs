@@ -590,6 +590,11 @@ fn toolbar_cell_inner(
         .into_any_element()
 }
 
+/// Light-mode `--accent-yellow` hex literal (`#D69E2E`) hoisted to a
+/// module-scope const so the test assertion and the dark-mode follow-up
+/// share one source of truth.  See [`star_active_color`].
+const STAR_ACTIVE_RGB: u32 = 0xD69E2E;
+
 /// Active-state colour for the star toolbar cell — mirrors React's
 /// `FavoriteAction` styling, which uses the `--accent-yellow` CSS
 /// custom property (`#D69E2E` light / `#F2C86B` dark, see
@@ -604,7 +609,7 @@ fn toolbar_cell_inner(
 /// the same light-mode hue, which still reads as "active star" against
 /// both backgrounds.
 fn star_active_color() -> Hsla {
-    gpui::rgb(0xD69E2E).into()
+    gpui::rgb(STAR_ACTIVE_RGB).into()
 }
 
 /// Active-state colour for the organized toolbar cell — mirrors
@@ -1063,7 +1068,7 @@ mod tests {
     #[test]
     fn star_active_color_matches_accent_yellow() {
         let color = star_active_color();
-        let expected: Hsla = gpui::rgb(0xD69E2E).into();
+        let expected: Hsla = gpui::rgb(STAR_ACTIVE_RGB).into();
         // `Hsla` has no `PartialEq`, so compare the four channels
         // directly; rgb→hsla is deterministic so byte-identity holds.
         assert_eq!(color.h, expected.h);
@@ -1096,7 +1101,7 @@ mod tests {
     /// shadowing `text_color` with a bad ordering).
     #[test]
     fn toolbar_cell_with_active_color_builds_in_both_states() {
-        let yellow: Hsla = gpui::rgb(0xD69E2E).into();
+        let yellow: Hsla = gpui::rgb(STAR_ACTIVE_RGB).into();
         let _on = toolbar_cell_with_active_color(
             "note-toolbar-star",
             IconName::StarFill,
