@@ -1571,10 +1571,23 @@ impl Render for InspectorPanel {
             .overflow_hidden()
             .children(children);
 
+        // Worklist 9.2.13 Reopened-3 closure — the outer container
+        // MUST set `w_full()` alongside `h_full()`.  Without it, the
+        // panel renders with zero width (a flex column with only
+        // `h_full` collapses to content-width along the cross axis,
+        // which is 0 when children also lack explicit widths).  The
+        // dispatch chain attaches the panel correctly (verified by
+        // the production stderr trace + the end-to-end test in
+        // `tolaria/src/main.rs`), but a zero-width render is
+        // visually indistinguishable from "the panel didn't open."
+        // [`sidebar_panel::SidebarPanel::render`] sets both
+        // (`crates/sidebar_panel/src/lib.rs:1395-1396`); inspector
+        // must mirror that.
         div()
             .flex()
             .flex_col()
             .h_full()
+            .w_full()
             .overflow_hidden()
             .bg(background)
             .text_color(foreground)

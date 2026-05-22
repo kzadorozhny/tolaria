@@ -33,7 +33,7 @@
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
-9.2.13. ⏳ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
+9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
 9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
 9.2.16. ✅ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
@@ -44,7 +44,7 @@
 9.3.2. ✅ Inspector panel should open at least the default width of the sidebar
 9.3.3. ✅ Inspector panel header — same height as note header, title reads `Properties`
 9.3.4. ✅ Inspector open/close button migrates to the panel header when open
-9.3.5. ⏳ Note properties panel toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
+9.3.5. ✅ Note properties panel toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
 9.3.6. ✅ Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
 9.3.7. ✅ Block editor selection menu should have React side styling
 
@@ -1145,8 +1145,43 @@ suspicion in the same change).  The four inspector-chain info!
 sites now print to the user's terminal under plain `cargo run`:
 (1) title-bar click, (2) ToggleInspector handler entry, (3)
 toggle_or_swap_right_dock_panel branch + factory invocation, (4)
-the InspectorPanel factory body.  Open until the user re-runs
-and shares the trace.
+the InspectorPanel factory body.
+
+**End-to-end test (commit `d9387f49`).**  New
+`toggle_inspector_dispatch_chain_attaches_panel_end_to_end` test
+in `tolaria/src/main.rs` pins the full production dispatch path
+(Window::dispatch_action from inside an active-window update →
+App-scope cx.on_action handler → dispatch_to_workspace defer →
+toggle_or_swap_right_dock_panel → fresh-attach factory → set_panel)
+with per-hop counters (handler_called, workspace_resolved,
+factory_called) so a future regression's failure message tells
+the developer which hop broke.  Test wraps the workspace in
+`gpui_component::Root` to match the production `cx.open_window`
+setup (the simpler `cx.add_window(TolariaWorkspace::empty)`
+shape used by helper-direct tests bypasses the root downcast in
+`dispatch_to_workspace` and would hide regressions there).
+`dispatch_to_workspace` promoted from `fn` to `pub(crate) fn` so
+the test can register a handler shaped like production.
+
+**Re-closure-4 (commit `<this-commit>`).**  User's production
+stderr trace (2026-05-22) confirmed the dispatch chain runs
+**end-to-end successfully**: title-bar click → handler entered →
+fresh-attach branch → slot empty → factory invoked.  The panel
+**is** constructed and attached — but the user still sees nothing.
+Root cause: [`InspectorPanel::render`] at
+`inspector_panel/src/lib.rs:1574` set `.h_full()` on its outer
+container but **not** `.w_full()` — a flex column with only
+`h_full` collapses to content-width along the cross axis, and
+when the children also lack explicit widths the whole panel
+renders at zero width (visually indistinguishable from "didn't
+attach").  Fix: add `.w_full()` alongside `.h_full()` to the
+panel's outer div (matching [`SidebarPanel::render`] at
+`sidebar_panel/src/lib.rs:1395-1396`).  The dispatch instrumentation
++ end-to-end test from the prior two paragraphs stay green — they
+pin the chain itself.  This row finally closes after four
+reopens: 9.2.13 (`Regression` after `5a61722e`), `Reopened-2`
+(`a71cc191` cx vs window dispatch), `Reopened-3` (this thread —
+title-bar toggle didn't open).
 
 #### 9.3.1
 
@@ -1623,8 +1658,22 @@ suspicion in one glance — no need to ask the user to
 `cargo clean` blindly.  Same change also extends the env_logger
 filter to include `workspace` at Info (worklist 9.2.13 cross-row
 fix), so the title-bar click log now appears under plain
-`cargo run`.  Open until the user re-runs and confirms which
-hypothesis (1, 2, or 3) the trace pins.
+`cargo run`.
+
+**Re-closure (2026-05-22).**  User's production stderr trace
+(2026-05-22) confirmed a fresh binary: the build-tag banner
+prints `=== tolaria build=v0.1.0 git:tolaria ===` and the
+title-bar inspector click reaches the on_click closure (logged
+via `workspace::title_bar` "title-bar inspector click →
+dispatching ToggleInspector").  The toolbar inspector cell was
+removed in `d9766aa5` and `crates/note_item/src/note_toolbar.rs`
+no longer references `note-toolbar-inspector` (verified at the
+source level + re-confirmed by the user clicking the new
+title-bar primary instead of the old toolbar cell to reproduce
+9.2.13).  Of the three reopened hypotheses — (1) stale binary,
+(2) title-bar toggle invisible, (3) some other cell paints the
+glyph — none survived: the banner ruled out (1), the click trace
+ruled out (2) + (3).  Closing.
 
 #### 9.3.6
 
