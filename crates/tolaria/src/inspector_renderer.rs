@@ -49,9 +49,9 @@
 #![cfg(debug_assertions)]
 
 use gpui::{
-    div, point, px, size, AnyElement, App, AppContext as _, BorrowAppContext as _, Bounds, Context,
-    Empty, Global, Inspector, IntoElement, ParentElement, Render, SharedString, Styled,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
+    div, px, AnyElement, App, AppContext as _, BorrowAppContext as _, Bounds, Context, Empty,
+    Global, Inspector, IntoElement, ParentElement, Render, SharedString, Styled, TitlebarOptions,
+    Window, WindowBounds, WindowHandle, WindowOptions,
 };
 use gpui_component::ActiveTheme;
 
@@ -123,12 +123,51 @@ pub fn toggle_inspector_window(cx: &mut App) {
     }
 }
 
+/// Width of the inspector window in logical points.  Wide enough to
+/// hold a typical `GlobalElementId` debug-format chain on one line
+/// before the picker-not-wired follow-up (`10.1.4`) fills the body
+/// with real content.
+const INSPECTOR_WINDOW_WIDTH_PT: f32 = 360.0;
+
+/// Fallback inspector-window bounds for the early-startup race where
+/// the workspace window isn't open yet (so
+/// [`crate::macos::workspace_window_bounds`] returns `None`).  Keeps
+/// the inspector visible at a sensible spot near the top-left rather
+/// than failing to open.
+const INSPECTOR_FALLBACK_BOUNDS: Bounds<gpui::Pixels> = Bounds {
+    origin: gpui::Point {
+        x: gpui::px(40.0),
+        y: gpui::px(40.0),
+    },
+    size: gpui::Size {
+        width: gpui::px(INSPECTOR_WINDOW_WIDTH_PT),
+        height: gpui::px(480.0),
+    },
+};
+
 fn ensure_inspector_window_open(cx: &mut App) {
+    // Worklist 10.1.3 third follow-up — anchor the inspector flush
+    // against the workspace's right edge, matching its height, rather
+    // than the previous fixed `(40, 40)` / `360×480` placement.  The
+    // bounds come from `Window::bounds()` on the workspace window
+    // (global screen-coordinate space).  When no workspace window
+    // exists yet (early startup race) fall back to the original
+    // sensible default so the inspector still opens visibly.
+    let inspector_bounds = crate::macos::workspace_window_bounds(cx)
+        .map(|ws| Bounds {
+            origin: gpui::Point {
+                x: ws.origin.x + ws.size.width,
+                y: ws.origin.y,
+            },
+            size: gpui::Size {
+                width: px(INSPECTOR_WINDOW_WIDTH_PT),
+                height: ws.size.height,
+            },
+        })
+        .unwrap_or(INSPECTOR_FALLBACK_BOUNDS);
+
     let opts = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds {
-            origin: point(px(40.0), px(40.0)),
-            size: size(px(360.0), px(480.0)),
-        })),
+        window_bounds: Some(WindowBounds::Windowed(inspector_bounds)),
         titlebar: Some(TitlebarOptions {
             title: Some(SharedString::new_static("Inspector — Tolaria")),
             appears_transparent: false,

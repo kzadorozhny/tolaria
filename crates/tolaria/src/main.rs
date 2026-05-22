@@ -330,6 +330,39 @@ pub(crate) mod macos {
     /// window close and reopen) `dispatch_to_workspace` is a no-op,
     /// which leaves the previously-set labels in place — matching the
     /// `"Show …"` default we lay down before window open.
+    /// Locate the workspace window's current bounds (origin + size in
+    /// global screen-coordinate space) by iterating `cx.windows()` and
+    /// picking the one whose root downcasts to the workspace shape.
+    /// Returns `None` when the workspace window isn't open yet (early
+    /// startup) or has been dismissed.
+    ///
+    /// Used by [`crate::inspector_renderer::ensure_inspector_window_open`]
+    /// (worklist 10.1.3 third follow-up) to anchor the inspector window
+    /// flush against the workspace's right edge with matching height
+    /// rather than the fixed `(40, 40)` / `360×480` shape the earlier
+    /// cut used.
+    pub(crate) fn workspace_window_bounds(cx: &mut App) -> Option<gpui::Bounds<gpui::Pixels>> {
+        for handle in cx.windows() {
+            let maybe_bounds = handle
+                .update(cx, |root, window, app_cx| {
+                    let Ok(root_entity) = root.downcast::<gpui_component::Root>() else {
+                        return None;
+                    };
+                    let inner = root_entity.read(app_cx).view().clone();
+                    if inner.downcast::<workspace::TolariaWorkspace>().is_err() {
+                        return None;
+                    }
+                    Some(window.bounds())
+                })
+                .ok()
+                .flatten();
+            if let Some(bounds) = maybe_bounds {
+                return Some(bounds);
+            }
+        }
+        None
+    }
+
     pub(crate) fn rebuild_menus(cx: &mut App) {
         // Worklist 10.1.3 follow-up — the previous implementation went
         // through `dispatch_to_workspace`, which uses

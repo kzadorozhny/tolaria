@@ -404,6 +404,31 @@ sync (user-reported regressions on the revised cut).**
    so the View-menu label flips back to "Show Inspector" the moment
    the user clicks the X.
 
+**2026-05-22 third follow-up — anchor inspector against workspace right
+edge.**
+
+User: *"position inspector window alongside right edge of the main
+window the same height as the main window"*.  Previous cut opened at
+the fixed `(40, 40)` / `360×480` placement regardless of where the
+workspace sat.
+
+Added `crate::macos::workspace_window_bounds(cx) -> Option<Bounds<Pixels>>`
+that iterates `cx.windows()`, downcasts each root to the workspace
+shape (`gpui_component::Root → TolariaWorkspace`), and returns the
+first match's `Window::bounds()`.  `ensure_inspector_window_open` then
+computes the inspector's bounds as:
+
+```text
+origin = (workspace.origin.x + workspace.size.width, workspace.origin.y)
+size   = (INSPECTOR_WINDOW_WIDTH_PT, workspace.size.height)
+```
+
+so the inspector sits flush against the workspace's right edge with
+matching height.  `INSPECTOR_WINDOW_WIDTH_PT = 360` (unchanged from
+the prior fixed-size cut).  When `workspace_window_bounds` returns
+`None` (early startup race), falls back to the previous
+`INSPECTOR_FALLBACK_BOUNDS` so the inspector still opens visibly.
+
 #### 10.2.1
 
 Consumed by `actions` and Phase 12.1 `command_palette`
