@@ -324,10 +324,33 @@ pub(crate) fn render(
                 window.dispatch_action(Box::new(actions::ToggleNoteWidth), cx);
             },
         ))
-        .child(stub_cell(
-            "note-toolbar-ai",
-            IconName::Asterisk,
-            "Open AI assistant",
+        // Defeered
+        // .child(stub_cell(
+        //     "note-toolbar-ai",
+        //     IconName::Asterisk,
+        //     "Open AI assistant",
+        // ))
+        // Worklist 9.2.19 — restore the per-note inspector toggle on
+        // the toolbar alongside the title-bar primary added in 9.3.5.
+        // The two affordances complement each other: the title-bar
+        // toggle is workspace-chrome (always visible regardless of
+        // which note is open), the toolbar cell is per-note context
+        // (lives next to the other note-level actions like ToC and
+        // Copy path).  Both dispatch the same `ToggleInspector`
+        // action through `Window::dispatch_action` (re-entrancy-safe
+        // route documented in the 9.2.3 / 9.2.6 cells).  Mirrors the
+        // React-era `BreadcrumbBar` which always carried this cell.
+        .child(toolbar_cell(
+            "note-toolbar-inspector",
+            IconName::Info,
+            "Toggle inspector",
+            |window, cx| {
+                log::debug!(
+                    target: "note_item::toolbar",
+                    "inspector: click registered, dispatching ToggleInspector"
+                );
+                window.dispatch_action(Box::new(actions::ToggleInspector), cx);
+            },
         ))
         // Worklist 9.2.6 — clicking dispatches `ToggleTableOfContents`;
         // the chrome-side handler resolves the active workspace and
@@ -366,28 +389,6 @@ pub(crate) fn render(
             IconName::Copy,
             "Copy note path",
             move |_window, cx| copy_path_to_clipboard(&copy_path, cx),
-        ))
-        // Worklist 9.2.19 — restore the per-note inspector toggle on
-        // the toolbar alongside the title-bar primary added in 9.3.5.
-        // The two affordances complement each other: the title-bar
-        // toggle is workspace-chrome (always visible regardless of
-        // which note is open), the toolbar cell is per-note context
-        // (lives next to the other note-level actions like ToC and
-        // Copy path).  Both dispatch the same `ToggleInspector`
-        // action through `Window::dispatch_action` (re-entrancy-safe
-        // route documented in the 9.2.3 / 9.2.6 cells).  Mirrors the
-        // React-era `BreadcrumbBar` which always carried this cell.
-        .child(toolbar_cell(
-            "note-toolbar-inspector",
-            IconName::Info,
-            "Toggle inspector",
-            |window, cx| {
-                log::debug!(
-                    target: "note_item::toolbar",
-                    "inspector: click registered, dispatching ToggleInspector"
-                );
-                window.dispatch_action(Box::new(actions::ToggleInspector), cx);
-            },
         ))
         .child(more_overflow_cell(path.to_path_buf()));
 
