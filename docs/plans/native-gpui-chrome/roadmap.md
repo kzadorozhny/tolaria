@@ -263,27 +263,37 @@ Mark completed items as ✅ with a link to the commit.
 > shifted to Phase 10 and every downstream §Planned phase shifted
 > by one.  Cross-references that named the old Phase 9–12 have been
 > rewritten to Phase 10–13 throughout the planning docs.
+>
+> **Scope adjustment (2026-05-22).**  `auto_git` and
+> `telemetry_pipeline` moved out of Phase 10 and into **Phase 11**
+> (rows 11.13 + 11.14) — they are wrappers around Phase 11 services
+> (`git_provider`, `telemetry`) and land naturally adjacent to the
+> services they wrap.  Phase 10 also opens with one inherited
+> blocker: **`10.1.1` WKWebView z-order fix** — GPUI overlays
+> (popovers, dropdowns, dialog stack) currently render *behind* the
+> embedded WKWebView editor body, which blocks `dialog_stack`
+> (10.4) from delivering a working modal surface.  Filed under §1
+> Blockers in [`phases/phase-10/worklist.md`](phases/phase-10/worklist.md).
 
 The React/Tauri-era app has ~131 hooks under `src/hooks/` that
 together form an unstated state-machine library: global command
 dispatch, navigation history, multi-select, dialog stack, vault
-lifecycle, autogit policy, telemetry pipeline.  Phase 8 leans on
-ad-hoc closures and `cx.observe()` calls to wire the visible chrome;
-Phase 10 formalises this cross-cutting glue into named GPUI crates
-so Phase 11 service expansion and Phase 12 modal chrome both
-consume a stable layer instead of re-deriving slices of it.
+lifecycle.  Phase 8 leans on ad-hoc closures and `cx.observe()`
+calls to wire the visible chrome; Phase 10 formalises this
+cross-cutting glue into named GPUI crates so Phase 11 service
+expansion and Phase 12 modal chrome both consume a stable layer
+instead of re-deriving slices of it.
 
 Lands as commit-per-crate; each crate is `mock_fixtures`-compatible.
+The blocker row lands first.
 
-| # | Crate | Mirrors |
-|---|-------|---------|
+| # | Crate / Fix | Mirrors |
+|---|-------------|---------|
 | 10.1 | `command_registry` — global command dispatch + shortcut table (consumed by `actions` and Phase 12.1 `command_palette`) | `appCommandCatalog.ts`, `appCommandDispatcher.ts`, `useCommandRegistry`, `useAppKeyboard` |
 | 10.2 | `nav_history` — back / forward / neighborhood drill-down (consumed by title-bar triplet, breadcrumb) | `useNavigationHistory`, `useNeighborhoodSelection`, `useNavigationGestures`, `useTabManagement` |
 | 10.3 | `multi_select` — shared multi-row selection model (consumed by `note_list_pane`, `folder_tree`, search results) | `useMultiSelect`, `useBulkActions`, `useDeleteActions` |
-| 10.4 | `dialog_stack` — modal queue, focus return, Escape handling (foundation for Phase 12 modal chrome) | `useDialogs` |
-| 10.5 | `auto_git` — checkpoint policy, commit-message format, debounce (wraps Phase 11.1 `git_provider`; consumed by Phase 13.2 autogit flow) | `useAutoGit`, `useAutoGitWork`, `useCommitFlow`, `useConflictFlow` |
-| 10.6 | `vault_lifecycle` — open / switch / rename-detection state machine (wraps `vault` crate's data API; consumed by Phase 8.19 `workspace_switcher`) | `useVaultLoader`, `useVaultWatcher`, `useVaultRenameDetection`, `useVaultSwitcher`, `useVaultBridge` |
-| 10.7 | `telemetry_pipeline` — event sink, redaction, sampling (wraps Phase 11.6 `telemetry` service) | `useTelemetry`, `productAnalytics`, `sensitiveTextRedaction`, `telemetryConfig`, `feedbackDiagnostics` |
+| 10.4 | `dialog_stack` — modal queue, focus return, Escape handling (foundation for Phase 12 modal chrome; blocked on `10.1.1` z-order fix) | `useDialogs` |
+| 10.5 | `vault_lifecycle` — open / switch / rename-detection state machine (wraps `vault` crate's data API; consumed by Phase 8.19 `workspace_switcher`) | `useVaultLoader`, `useVaultWatcher`, `useVaultRenameDetection`, `useVaultSwitcher`, `useVaultBridge` |
 
 **Why between Phase 9 and Phase 11:** Phase 8 builds the visible
 behavior using whatever local closures + `cx.observe()` calls each
@@ -292,8 +302,9 @@ deferred note-toolbar product features (the user-visible follow-up
 to Phase 8 close-out).  Phase 10 then extracts the cross-cutting
 patterns that emerge into named crates so Phase 11 service expansion
 and Phase 12 modal chrome don't each re-derive a shortcut table /
-dialog stack / autogit policy.  Refactoring Phase 8's local closures
-to call Phase 10's crates is in-scope for each Phase 10 row.
+dialog stack / vault-lifecycle state machine.  Refactoring Phase 8's
+local closures to call Phase 10's crates is in-scope for each
+Phase 10 row.
 
 ### Phase 11 — Service expansion
 
@@ -321,6 +332,8 @@ ConflictResolverModal → `auto_git` + `git_provider`).
 | 11.10 | `window_state` — window position / size restoration across launches | `src-tauri/src/window_state.rs` |
 | 11.11 | `native_text_assistance` — OS spell-check, accent input, smart quotes (macOS NSTextInputClient bridge) | `src/lib/nativeTextAssistance.ts` |
 | 11.12 | `settings_panel` persistence wiring | mock settings → real `settings_store`, `src-tauri/src/settings.rs` |
+| 11.13 | `auto_git` — checkpoint policy, commit-message format, debounce (behavioral wrapper around 11.1 `git_provider`; consumed by Phase 13.2 autogit flow.  Moved from Phase 10.5 on 2026-05-22 to land adjacent to its underlying service) | `useAutoGit`, `useAutoGitWork`, `useCommitFlow`, `useConflictFlow` |
+| 11.14 | `telemetry_pipeline` — event sink, redaction, sampling (behavioral wrapper around 11.6 `telemetry`.  Moved from Phase 10.7 on 2026-05-22 to land adjacent to its underlying service) | `useTelemetry`, `productAnalytics`, `sensitiveTextRedaction`, `telemetryConfig`, `feedbackDiagnostics` |
 
 ### Phase 12 — Modal chrome surfaces
 
@@ -348,7 +361,7 @@ needs a 1-page spec answering the open questions called out below.
 | # | Task | Open questions before this can be picked up |
 |---|------|---------------------------------------------|
 | 13.1 | Multi-tab `Pane` UX (close hotkey, drag-reorder, persistence) | What is a "tab" — note items only, or also search / settings / inspector targets?  Persistence key — per-vault or per-app?  Where do reopened tabs land on next launch (focus, scroll position)?  Drag-reorder: same pane only, or across panes?  Close hotkey conflicts with `actions::CloseWindow` — need to disambiguate. |
-| 13.2 | Autogit checkpoints + conflict resolver flow | Depends on Phase 11.1 (`git_provider`) shape being locked first.  Checkpoint cadence (per save? on quit? interval?).  Commit-message format (React side uses `useAutoGit`; need to port the *policy*, not just the trigger).  Workflow policy lives in Phase 10.5 (`auto_git`); resolver UI in Phase 12.3 (`dialogs::ConflictResolverModal`) — but the resolution *logic* (3-way merge? side-by-side picker?) is unscoped. |
+| 13.2 | Autogit checkpoints + conflict resolver flow | Depends on Phase 11.1 (`git_provider`) shape being locked first.  Checkpoint cadence (per save? on quit? interval?).  Commit-message format (React side uses `useAutoGit`; need to port the *policy*, not just the trigger).  Workflow policy lives in Phase 11.13 (`auto_git`); resolver UI in Phase 12.3 (`dialogs::ConflictResolverModal`) — but the resolution *logic* (3-way merge? side-by-side picker?) is unscoped. |
 | 13.3 | Onboarding flow (vault picker, first-run experience) | Overlaps with Phase 12.7 (`startup` = `WelcomeScreen` + `StartupScreen`) and Phase 8.23 (`onboarding_prompts`) — what's the boundary?  First-run = absence of `settings.json`, or a separate flag?  Permission prompts (Screen Recording / Accessibility for periscope; FS access) — in scope? |
 | 13.4 | Measurement gate — memory, startup time, frame budgets; CI assertion | Budgets are unspecified — memory ceiling at what vault size?  Startup time on what hardware?  Frame budget under which scene (idle?  scrolling note list?  typing in editor body)?  CI runner — periscope needs Screen Recording + Accessibility grants, doesn't run on hosted GitHub runners.  Where does the harness live (self-hosted Mac mini? local-only gate?)? |
 
