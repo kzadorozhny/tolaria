@@ -16,7 +16,7 @@
 
 10.1.1. ⏳ WKWebView z-order fix
 10.1.2. ✅ ToggleElementInspector update failed: window not found
-10.1.3. ToggleElementInspector window shoud be a separate os window.
+10.1.3. ✅ ToggleElementInspector window shoud be a separate os window.
 
 ## 2. High Priority
 
@@ -251,6 +251,71 @@ additional invariant.
 Hide Inspector`) and confirm the GPUI element-picker overlay toggles
 visibly + no `ToggleElementInspector update failed` warning lands in
 the log.
+
+#### 10.1.3
+
+**Goal.**  Move the GPUI element-inspector UI out of the workspace
+window (where it composited as a floating div top-right) and into a
+separate, draggable, resizable OS window.  Frees the workspace's
+top-right corner and lets the user keep the inspector visible while
+poking the workspace.
+
+**Architecture (`crates/tolaria/src/inspector_renderer.rs`).**
+
+- `gpui::Inspector` stays Window-bound; the workspace's
+  `Window::toggle_inspector(cx)` still mints the per-window inspector
+  entity so GPUI's built-in `insert_inspector_hitbox` per-paint
+  machinery keeps populating the entity from cursor hits in pick mode.
+- New `InspectorBridge: gpui::Global` (App-level state) carries an
+  `Option<Entity<gpui::Inspector>>` and an
+  `Option<WindowHandle<InspectorWindow>>`.
+- The existing `render_tolaria_inspector` renderer (the callback GPUI
+  invokes inside the workspace's `Render for Inspector` impl) now:
+    1. Captures `cx.entity()` (an `Entity<Inspector>`) into the
+       bridge global on every paint — idempotent, GPUI's entity
+       registry returns the same handle, one global write per
+       inspector-on paint.
+    2. Returns `gpui::Empty` instead of the old top-right panel — the
+       in-workspace UI is gone.
+- New `InspectorWindow` view holds the captured entity + a
+  `cx.observe(&inspector, …)` subscription so any pick-state or
+  active-element change in the workspace re-renders this window.  The
+  render shape mirrors the old in-workspace panel: header strip,
+  picking-state row, active-element row (or "No element selected").
+- New `toggle_inspector_window(workspace_inspector_on: bool, cx)` is
+  called from `ToggleElementInspector` right after
+  `window.toggle_inspector(app_cx)`.  Opens the separate window when
+  the workspace just turned the inspector on; closes it when off.
+
+**The on/off arithmetic.**  GPUI doesn't expose
+`Window.inspector.is_some()` directly — only
+[`Window::is_inspector_picking`], which reads the sub-flag
+`Inspector::is_picking` (a fresh inspector defaults to
+`is_picking = false`).  So the toggle handler reads
+`is_inspector_picking` *before* the toggle inside the same `update`
+closure, then computes `new_state = !pre_state`.  The `cx.defer`
+wrapper from `10.1.2` is preserved so the menu-accelerator
+re-entrancy path keeps working.
+
+**Tests (`inspector_renderer.rs` tests module).**
+
+- `toggle_inspector_window_close_with_no_open_window_is_a_no_op` —
+  pins the idempotency guard so the toggle handler can call this
+  unconditionally without checking pre-state.
+- `toggle_inspector_window_open_without_captured_entity_warns_and_returns`
+  — pins the no-renderer-yet race (Cmd+Alt+I before the workspace's
+  first paint installs the inspector renderer): the helper logs a
+  warning and returns instead of panicking.
+- Two existing tests (`render_tolaria_inspector_signature_matches_gpui_renderer`,
+  `toggle_inspector_with_renderer_installed_does_not_panic`) keep
+  their original contract — the renderer signature and the
+  `set_inspector_renderer` install path are unchanged.
+
+**User manual validation** — `Cmd+Alt+I` once: separate OS window
+opens at (40, 40) with a 360×480 frame, title "Inspector — Tolaria".
+Hovering elements in the workspace updates the panel's "Active
+element" rows.  `Cmd+Alt+I` again: window closes; the workspace exits
+pick mode.
 
 #### 10.2.1
 

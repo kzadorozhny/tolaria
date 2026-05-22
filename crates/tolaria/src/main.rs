@@ -903,12 +903,39 @@ pub(crate) mod macos {
                                 log::warn!("ToggleElementInspector: no active window");
                                 return;
                             };
-                            if let Err(err) = handle.update(cx, |_, window, app_cx| {
-                                window.toggle_inspector(app_cx)
+                            // Worklist 10.1.3 — the toggle alternates
+                            // `Window.inspector` between `Some` and
+                            // `None`, but GPUI doesn't expose
+                            // existence directly
+                            // (`is_inspector_picking` reads the
+                            // `Inspector::is_picking` sub-flag, not
+                            // the `Option` itself).  Compute the
+                            // pre-toggle state inside the same
+                            // `update` so the post-toggle on/off is
+                            // `!pre_state` — the value the
+                            // separate-window opener needs.  A
+                            // freshly-toggled-on inspector has
+                            // `is_picking = false` by default, which
+                            // is why we read pre-state instead of
+                            // post-state.
+                            let new_state = match handle.update(cx, |_, window, app_cx| {
+                                let pre = window.is_inspector_picking(app_cx);
+                                window.toggle_inspector(app_cx);
+                                !pre
                             }) {
-                                log::error!("ToggleElementInspector update failed: {err:#}");
-                                return;
-                            }
+                                Ok(s) => s,
+                                Err(err) => {
+                                    log::error!(
+                                        "ToggleElementInspector update failed: {err:#}"
+                                    );
+                                    return;
+                                }
+                            };
+                            // After the workspace toggles, route the
+                            // open/close to the separate inspector
+                            // window so 10.1.3's "Inspector lives in
+                            // its own OS window" invariant holds.
+                            crate::inspector_renderer::toggle_inspector_window(new_state, cx);
                             rebuild_menus(cx);
                         });
                     }
