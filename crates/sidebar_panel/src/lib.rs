@@ -2055,11 +2055,7 @@ mod tests {
     fn toggle_section_renders_after_collapse(cx: &mut TestAppContext) {
         install_theme(cx);
         cx.update(|cx| cx.set_global(MockVault::seeded()));
-        let window = cx.update(|cx| {
-            let panel = SidebarPanel::from_mock(cx);
-            cx.open_window(Default::default(), |_window, cx| cx.new(|_| panel))
-                .unwrap()
-        });
+        let window = cx.add_window(|_window, cx| SidebarPanel::from_mock(cx));
         cx.run_until_parked();
         window
             .update(cx, |panel, _window, cx| {
