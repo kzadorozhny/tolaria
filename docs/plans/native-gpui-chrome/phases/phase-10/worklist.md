@@ -26,7 +26,7 @@
 
 ## 3. Low Priority
 
-10.3.1. ✅ address review feedback from `review.md` (first pass) — sha tbd
+10.3.1. ✅ address review feedback from `review.md` (first pass) — see annotation below for the five per-fix shas
 
 ---
 
