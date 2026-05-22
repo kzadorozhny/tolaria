@@ -23,17 +23,17 @@
 
 9.2.1. ✅ Star toggle → favourite frontmatter + sidebar favourites section
 9.2.2. ✅ Organised toggle → inbox-advance frontmatter
-9.2.3. ✅ Neighbourhood action → backlink filter in note-list
-9.2.4. ✅ Raw-mode toggle → editor-host raw bridge
+9.2.3. ⏳ Neighbourhood action → backlink filter in note-list
+9.2.4. ⏳ Raw-mode toggle → editor-host raw bridge
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
-9.2.6. ✅ ToC action → new `toc_panel` crate + headings bridge
-9.2.7. ⏳ More-overflow menu → archive / delete / collapse-when-narrow actions
+9.2.6. ⏳ ToC action → new `toc_panel` crate + headings bridge
+9.2.7. ✅ More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. ✅ Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
-9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
+9.2.13. ⏳ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 
 ## 3. Low Priority
 
@@ -213,6 +213,19 @@ proper empty-state placeholder in the note-list pane is tracked
 separately (deferred Phase 9.2 follow-up — outside the regression
 fix scope).
 
+**Reopened-2 (2026-05-21)** ⏳ — user re-reports "9.2.3 Neighbourhood
+produces no visible results."  Distinct from the empty-result case
+captured by `cc2c26f8`'s `warn!` log: the user is testing notes that
+DO have wikilinks but the note-list still doesn't visibly swap to
+the neighbourhood scope.  Diagnosis path: run with
+`RUST_LOG=tolaria::neighborhood=info,tolaria=info`, click the
+toolbar button, capture the log output.  If `EnterNeighborhood:
+dispatched` appears AND `neighbours=N` with `N > 0` BUT the
+note-list still shows the old scope, the regression is in
+`NoteListPane::set_scope` (or wherever the scope swap re-renders).
+Possible cause: the note-list pane is observing the wrong event
+type, or the scope-swap doesn't trigger `cx.notify()`.
+
 #### 9.2.4
 
 **Source row:** Phase 8 `8.2.12` (➡️).  **React reference:**
@@ -292,6 +305,18 @@ and its `bridge.test.ts` coverage still passes — if the live JS
 bundle is stale the chrome will still log + visually flip and the
 WebView side will stay in rich mode (separate `editor-host` build
 issue, not a Rust-side regression).
+
+**Reopened-2 (2026-05-21)** ⏳ — user re-reports "9.2.4 Raw mode
+is not showing."  Even if the JS bundle were stale, the toolbar
+glyph SHOULD flip its active state on click (purely chrome-side).
+If neither the WebView body NOR the glyph changes, the action
+isn't reaching the handler.  Diagnosis path: log `RUST_LOG=tolaria::raw_editor=info`,
+click the cell, watch for `ToggleRawEditor: dispatched`.  If the
+log doesn't fire, the action isn't reaching the handler at all —
+suspect `cx.dispatch_action` from inside the toolbar `on_click`
+closure not bubbling to the App-scope handler.  May share root
+cause with `9.2.6` / `9.2.13` (right-dock panels not appearing)
+and `9.2.3` (neighbourhood scope not swapping).
 
 #### 9.2.5
 
@@ -385,6 +410,16 @@ disappearing, so the cell stays untreated).  9.2.8 (Inspector Panel
 outline section) consumes the same `FromHost::Headings` envelope
 when it lands; no further bridge work needed there.
 
+**Reopened (2026-05-21)** ⏳ — user reports "9.2.6 TOC panel is
+not showing."  Clicking the toolbar TOC button doesn't surface
+the right-dock panel.  Original closure remains `5bd2533e`; the
+right-dock-attach pattern was reshaped by `2662e935` into the
+shared `toggle_or_swap_right_dock_panel` helper.  Likely shares
+root cause with `9.2.13` (Inspector panel doesn't appear) since
+both use the same helper.  Diagnosis path: log
+`RUST_LOG=tolaria=info`, click TOC button, watch for
+"ToggleTableOfContents: dispatched" and any panel-attach traces.
+
 #### 9.2.7
 
 **Source row:** Phase 8 `8.2.17` (➡️).  **React reference:**
@@ -400,6 +435,23 @@ neighbourhood + file-path actions also collapse into this menu.
 the overflow / responsive collapse behaviour reuses the `9.2.3`,
 `9.2.4`, `9.2.6` dispatchers — wire those first.  **Size:** medium —
 blocked on `9.2.3`, `9.2.4`, `9.2.6` shipping real handlers.
+
+**Closure (commit `f075ac21`).**  More cell now opens a
+`gpui_component::popover::Popover`-anchored dropdown with six items:
+`Reveal in Finder`, `Copy path`, `Toggle TOC` (dispatches
+`actions::ToggleTableOfContents`), `Toggle raw mode` (dispatches
+`actions::ToggleRawEditor`), `Archive` (dispatches
+`actions::Archive`), `Delete` (red, dispatches `actions::Delete`).
+New `Vault::archive_note(id)` writes `_archived: true` via
+`set_frontmatter_bool`; `Vault::delete_note(id)` removes the file
+and drops the entry from `notes`.  Tests: vault archive + delete
+round-trip; toolbar More-cell builds.  **Deferred to follow-ups:**
+responsive overflow collapse (`9.2.7-followup`); filesystem trash
+directory (`9.2.7-trash`); ConfirmDelete modal (Phase 11 dialogs).
+Note: this row ships ahead of `9.2.3` / `9.2.4` / `9.2.6` being
+fully verified live — the menu items dispatch the right actions
+but their downstream effects (panel attach, scope swap, WebView
+mode flip) are the topic of the parallel-reopened regressions.
 
 #### 9.2.8
 
@@ -941,6 +993,28 @@ flips against the actual panel.  Tests added: workspace's
 inspector) and tolaria's `toggle_inspector_attaches_panel_and_swaps_with_toc`
 exercises the open/close/swap state machine end-to-end against the
 live helper.
+
+**Reopened-2 (2026-05-21)** ⏳ — user re-reports "9.2.13 Inspector
+Panel is still does not appear" after the `2662e935` ship.  The
+test `toggle_inspector_attaches_panel_and_swaps_with_toc` passes;
+the production click doesn't open the panel.  Possible causes:
+(1) `cx.dispatch_action(&actions::ToggleInspector)` from inside
+the toolbar `on_click` closure doesn't reach the App-scope
+`cx.on_action` handler.  (2) The `dispatch_to_workspace` defer
+fires but `cx.active_window()` returns `None` or the wrong
+window.  (3) `toggle_or_swap_right_dock_panel` runs but
+`ws.attach_right_dock(panel, cx)` doesn't trigger a workspace
+re-render.  (4) The panel attaches but `Dock::set_panel` reads
+`InspectorPanel.starts_open()` differently from the test fixture
+(both return `true`, so this is unlikely).  Likely shares root
+cause with `9.2.6` (TOC panel doesn't appear) and possibly with
+`9.2.3` + `9.2.4` (toolbar dispatches that don't visibly do
+anything).  Diagnosis: add `info!` log at every step of the
+dispatch chain — toolbar `on_click`, action handler entry,
+`dispatch_to_workspace` resolve, `toggle_or_swap_right_dock_panel`
+branch selection, `Dock::set_panel` invocation.
+
+### Cross-row notes
 
 - **Shared infrastructure.** Rows `9.2.3` (neighbourhood) and `9.2.8`
   (inspector backlinks) both consume `vault::Vault::backlinks(id)` —
