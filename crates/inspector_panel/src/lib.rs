@@ -877,9 +877,7 @@ impl InspectorPanel {
         // Drop the old outline — the editor will send a fresh
         // `Headings` envelope as soon as the new note opens.  Empty in
         // the meantime so a stale outline doesn't bleed across notes.
-        if !self.headings.is_empty() {
-            self.headings.clear();
-        }
+        self.headings.clear();
         cx.notify();
     }
 
@@ -1494,8 +1492,6 @@ impl Render for InspectorPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let border_color = cx.theme().border;
         let muted = cx.theme().muted_foreground;
-        let background = cx.theme().background;
-        let foreground = cx.theme().foreground;
 
         // Snapshot expanded state so we can borrow `self` freely inside the loop.
         let section_states: Vec<(InspectorSection, bool)> = InspectorSection::ALL
@@ -1594,8 +1590,8 @@ impl Render for InspectorPanel {
             .h_full()
             .w_full()
             .overflow_hidden()
-            .bg(background)
-            .text_color(foreground)
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
             .child(header_strip)
             .child(sections)
     }
