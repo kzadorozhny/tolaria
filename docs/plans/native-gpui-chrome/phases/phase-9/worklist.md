@@ -1186,7 +1186,7 @@ items on the neighbourhood UX:
 cell + `crates/note_list_pane/src/lib.rs` header.  **Size:** small
 each; ship as one commit.
 
-**Closure (commit `<this-commit>`).**  Both items landed in one
+**Closure (commit `7d697f5a`).**  Both items landed in one
 commit, both backed by tests.
 
 *Item 1 — toolbar active state.*  Introduced
