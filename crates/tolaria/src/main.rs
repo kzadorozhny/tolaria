@@ -409,25 +409,25 @@ pub(crate) mod macos {
         ws.attach_right_dock(panel, cx);
     }
 
-    /// Build identifier emitted at workspace open so users + triage can
-    /// confirm which binary is actually running (Worklist 9.3.5
+    /// Build identifiers emitted at workspace open so users + triage
+    /// can confirm which binary is actually running (Worklist 9.3.5
     /// `Reopened` paragraph).  The version is sourced from
     /// `CARGO_PKG_VERSION` (so it always tracks the crate `Cargo.toml`);
-    /// the `GIT_HASH` slot is filled when a wrapping build script
-    /// exports it and falls back to `unknown` during plain `cargo run`.
-    /// Recording the tag in production logs is cheaper than asking the
-    /// user to `cargo clean -p tolaria && cargo run` and re-reproduce.
-    const TOLARIA_BUILD_TAG: &str = concat!(
-        "v",
-        env!("CARGO_PKG_VERSION"),
-        " git:",
-        // `option_env!` returns `None` when `GIT_HASH` is unset, so the
-        // `unwrap_or` falls back to a literal sentinel — same shape as
-        // the React side's `__GIT_COMMIT__` define in `vite.config.ts`.
-        // The literal is matched by periscope smoke tests to confirm a
-        // fresh build was actually picked up.
-        env!("CARGO_PKG_NAME"),
-    );
+    /// the git hash is sourced from `GIT_HASH` when a wrapping build
+    /// script exports it and falls back to the `"unknown"` sentinel
+    /// during plain `cargo run`.  Recording the tag in production logs
+    /// is cheaper than asking the user to `cargo clean -p tolaria &&
+    /// cargo run` and re-reproduce.
+    ///
+    /// Split into two consts (instead of a single `concat!`) because
+    /// `concat!` only accepts string literals — `option_env!` returns
+    /// `Option<&'static str>`, which `concat!` rejects.  Compose at
+    /// the format-string level instead.
+    const TOLARIA_BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+    const TOLARIA_BUILD_GIT_HASH: &str = match option_env!("GIT_HASH") {
+        Some(hash) => hash,
+        None => "unknown",
+    };
 
     /// Worklist 9.2.16 — shared "EnterNeighborhood action fired"
     /// handler body.  Lives outside the `cx.on_action` closure in
@@ -646,11 +646,15 @@ pub(crate) mod macos {
         // easily diagnosed by confirming the binary they run was built
         // from the latest source.  Print it to stderr with a clear
         // banner so it's the first thing a triage screenshot picks up.
-        eprintln!("=== tolaria build={} ===", TOLARIA_BUILD_TAG);
+        eprintln!(
+            "=== tolaria build=v{} git:{} ===",
+            TOLARIA_BUILD_VERSION, TOLARIA_BUILD_GIT_HASH,
+        );
         log::info!(
             target: "tolaria",
-            "tolaria starting — build={} (worklist 9.3.5 build tag)",
-            TOLARIA_BUILD_TAG,
+            "tolaria starting — build=v{} git:{} (worklist 9.3.5 build tag)",
+            TOLARIA_BUILD_VERSION,
+            TOLARIA_BUILD_GIT_HASH,
         );
 
         let args = parse_args();
