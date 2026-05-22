@@ -36,7 +36,7 @@
 9.2.13. ⏳ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
 9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
-9.2.16. ⏳ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
+9.2.16. ✅ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
 
 ## 3. Low Priority
 
@@ -1428,6 +1428,22 @@ again → exit back to the previous scope.
 
 **Surface:** `tolaria/src/main.rs` `EnterNeighborhood` handler;
 optional small state in `note_item` or a new slot.  **Size:** small.
+
+**Closure (commit `<this-commit>`).**  Extracted the handler body
+into a `handle_enter_neighborhood(active_note_item, note_list,
+prev_scope, cx)` free function in `tolaria/src/main.rs::macos` so
+both the production `cx.on_action` closure and the new
+`#[gpui::test]`s reach the same code path.  A new
+`Rc<RefCell<Option<NoteListScope>>>` "prev-scope" slot — owned by
+`fn run` alongside `active_note_item` — backs the toggle memory.
+Branch logic: read current pane scope; if it's
+`NoteListScope::Neighborhood(anchor, _)` with `anchor == active_id`,
+restore the saved scope (falling back to `Inbox` if none) + clear
+`NeighborhoodAnchor` to `None`; otherwise save current scope and
+set the new neighbourhood scope as before.  Two new
+`#[gpui::test]`s — `neighborhood_handler_enters_when_scope_is_not_neighborhood`
+and `neighborhood_handler_exits_when_scope_matches_active_id` —
+pin the enter and exit branches against an on-disk vault fixture.
 
 #### 9.3.7
 

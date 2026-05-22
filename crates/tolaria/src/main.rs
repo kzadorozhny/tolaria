@@ -415,6 +415,181 @@ pub(crate) mod macos {
         env!("CARGO_PKG_NAME"),
     );
 
+    /// Worklist 9.2.16 — shared "EnterNeighborhood action fired"
+    /// handler body.  Lives outside the `cx.on_action` closure in
+    /// `pub fn run` so the regression tests can call the same code
+    /// path the production toolbar click eventually reaches — the
+    /// alternative (re-implementing the handler inline in each
+    /// `#[gpui::test]`) drifts as soon as either side touches the
+    /// branch logic.
+    ///
+    /// `prev_scope` is the shared previous-scope memory backing the
+    /// on/off toggle: caller owns the slot, this fn reads + writes
+    /// through the `&RefCell` so the handler closure and the sidebar
+    /// subscription that clears the slot can share one storage.
+    pub(crate) fn handle_enter_neighborhood(
+        active_note_item: &crate::open_note::ActiveNoteItemSlot,
+        note_list: &gpui::Entity<note_list_pane::NoteListPane>,
+        prev_scope: &std::cell::RefCell<Option<note_list_pane::NoteListScope>>,
+        cx: &mut gpui::App,
+    ) {
+        use note_list_pane::NoteListScope;
+        // Worklist 9.2.3 reopened — empty slot at handler entry means
+        // the toolbar click raced ahead of `preload_blank_webview`.
+        // Warn so the regression surfaces in default-level logs.
+        let Some(item) = active_note_item.borrow().as_ref().cloned() else {
+            log::warn!(
+                target: "tolaria::neighborhood",
+                "EnterNeighborhood: no active NoteItem — toolbar click \
+                 reached the handler before preload_blank_webview populated \
+                 the slot"
+            );
+            return;
+        };
+        let id = item.read(cx).id();
+        let Some(vault) = cx.try_global::<vault::Vault>() else {
+            log::warn!("EnterNeighborhood: no Vault global installed");
+            return;
+        };
+        // Worklist 9.2.16 — read the pane's current scope BEFORE
+        // deciding which branch to take: if it already anchors on
+        // this note's id, we're toggling OFF and restore the saved
+        // previous scope; otherwise we toggle ON and SAVE the
+        // current scope before swapping in the neighbourhood filter.
+        let current_scope = note_list.read(cx).scope().clone();
+        let already_in_this_neighborhood = matches!(
+            &current_scope,
+            NoteListScope::Neighborhood(anchor, _) if *anchor == id,
+        );
+        if already_in_this_neighborhood {
+            // Toggle OFF — restore the saved scope (or fall back to
+            // Inbox if no previous scope was saved, e.g. the user
+            // entered the workspace directly into neighbourhood mode
+            // via a future deep link).
+            let restored = prev_scope
+                .borrow_mut()
+                .take()
+                .unwrap_or(NoteListScope::Inbox);
+            let header = scope_display_label(&restored);
+            log::info!(
+                target: "tolaria::neighborhood",
+                "EnterNeighborhood: toggle OFF id={id:?} → restoring scope {restored:?}",
+            );
+            note_list.update(cx, |pane, cx| {
+                pane.set_scope(restored, cx);
+                pane.set_header_title(header, cx);
+            });
+            // Drop the anchor so the toolbar cell's 9.2.14 active-
+            // state glyph deactivates on the next render — the
+            // visual signal of "exited".
+            cx.set_global(note_item::NeighborhoodAnchor(None));
+            cx.refresh_windows();
+            return;
+        }
+
+        // Toggle ON — preserve the current scope first so the next
+        // click can pop back to it.
+        *prev_scope.borrow_mut() = Some(current_scope);
+
+        // Title for the header label is read before we drop the
+        // immutable vault borrow — keeps the `set_header_title`
+        // call below a single owned `SharedString`.
+        let title = vault
+            .note_sync(id)
+            .map(|n| n.title.clone())
+            .unwrap_or_else(|| gpui::SharedString::from(format!("note {}", id.get())));
+        // Union of inbound + outbound, minus the active note itself.
+        // Both query fns already exclude self-links, so the union
+        // doesn't reintroduce it; the `remove(&id)` below is
+        // belt-and-braces for the future fold of fenced-code
+        // awareness that might surface self-targets again.
+        let mut ids: std::collections::HashSet<vault::NoteId> =
+            vault.backlinks(id).into_iter().collect();
+        ids.extend(vault.outbound_links(id));
+        ids.remove(&id);
+        let count = ids.len();
+        let header = gpui::SharedString::from(format!("Neighborhood of {title}"));
+        // Worklist 9.2.3 reopened — surface an `info!` log at handler
+        // entry + an explicit `warn!` when the resolved neighborhood
+        // is empty.  The empty-set case is exactly what the user
+        // perceives as "the click did nothing": the scope swaps but
+        // the filter hides every entry.  The warn log makes the root
+        // cause discoverable from the live log without enabling debug.
+        log::info!(
+            target: "tolaria::neighborhood",
+            "EnterNeighborhood: id={id:?} title={title:?} resolved {count} neighbour(s)",
+        );
+        if count == 0 {
+            log::warn!(
+                target: "tolaria::neighborhood",
+                "EnterNeighborhood: id={id:?} has no inbound or outbound \
+                 wikilinks — the note list will render empty.  Add a \
+                 [[wikilink]] to or from this note to populate the neighbourhood."
+            );
+        }
+        note_list.update(cx, |pane, cx| {
+            pane.set_scope(NoteListScope::Neighborhood(id, ids), cx);
+            pane.set_header_title(header, cx);
+        });
+        // Worklist 9.2.14 — broadcast the anchor so the note-toolbar's
+        // neighbourhood cell can paint itself in the active-state
+        // glyph colour on the next render.  The toolbar reads this
+        // global directly (no per-render plumbing); we also
+        // `refresh_windows()` so the live toolbar repaints even
+        // though no entity it observes notified — the global is the
+        // source of truth.
+        cx.set_global(note_item::NeighborhoodAnchor(Some(id)));
+        cx.refresh_windows();
+    }
+
+    /// Worklist 9.2.16 — render a [`note_list_pane::NoteListScope`] back
+    /// into the human-readable header label the sidebar would have
+    /// emitted via [`sidebar_panel::SidebarSelectionChangedEvent::display_label`].
+    ///
+    /// Used by the `EnterNeighborhood` toggle-OFF branch: the saved
+    /// previous scope is restored without the originating sidebar
+    /// event in scope, so we re-derive the label here.  The mapping
+    /// mirrors `SidebarPanel`'s label-resolver:
+    ///
+    /// - `Inbox` → `"Inbox"`
+    /// - `AllNotes` → `"All Notes"`
+    /// - `Archive` → `"Archive"`
+    /// - `Type(name)` → the type label verbatim
+    /// - `Folder(path)` → the path's last segment (vault-root sentinel
+    ///   `""` renders as `"Vault"` for symmetry with the sidebar's
+    ///   root-folder row)
+    /// - `View(name)` → the saved-view name verbatim
+    /// - `Neighborhood(_, _)` → fall back to `"Inbox"`; the toggle-OFF
+    ///   branch only invokes this on the SAVED scope which is never a
+    ///   neighbourhood (we never enter neighbourhood mode from inside
+    ///   another neighbourhood — the toggle exits first), but the
+    ///   variant is exhaustive on `NoteListScope` so the match has to
+    ///   cover it.
+    fn scope_display_label(
+        scope: &note_list_pane::NoteListScope,
+    ) -> gpui::SharedString {
+        use note_list_pane::NoteListScope;
+        match scope {
+            NoteListScope::Inbox => gpui::SharedString::from("Inbox"),
+            NoteListScope::AllNotes => gpui::SharedString::from("All Notes"),
+            NoteListScope::Archive => gpui::SharedString::from("Archive"),
+            NoteListScope::Type(label) => label.clone(),
+            NoteListScope::Folder(path) => {
+                if path.is_empty() {
+                    gpui::SharedString::from("Vault")
+                } else {
+                    path.rsplit('/')
+                        .next()
+                        .map(|seg| gpui::SharedString::from(seg.to_owned()))
+                        .unwrap_or_else(|| path.clone())
+                }
+            }
+            NoteListScope::View(name) => name.clone(),
+            NoteListScope::Neighborhood(_, _) => gpui::SharedString::from("Inbox"),
+        }
+    }
+
+    /// SENTINEL_9_2_16_TEST_MARKER
     pub fn run() {
         env_logger::Builder::new()
             .filter_module("tolaria", log::LevelFilter::Info)
@@ -1097,90 +1272,50 @@ pub(crate) mod macos {
                     // back-navigation for the dedicated crate.
                     let neighborhood_slot = active_note_item.clone();
                     let neighborhood_note_list = note_list.clone();
+                    // Worklist 9.2.16 — previous-scope memory backing
+                    // the EnterNeighborhood toggle.  When the user
+                    // enters neighbourhood mode we stash the pane's
+                    // current scope here; when the user clicks the
+                    // toolbar cell a SECOND time on the same active
+                    // note we pop this slot to restore the prior
+                    // sidebar context (Inbox / AllNotes / a Type /
+                    // a Folder / a saved View) instead of forcing
+                    // them to click another sidebar row to exit.
+                    //
+                    // `Option<NoteListScope>` distinguishes "we have
+                    // never entered neighbourhood mode" (`None` →
+                    // fall back to the default `Inbox`) from "we
+                    // remembered the previous scope" (`Some(scope)`
+                    // → restore verbatim).  The slot is shared via
+                    // `Rc<RefCell<…>>` because both the handler
+                    // closure and the future sidebar-clearing path
+                    // (which writes through the same slot) need
+                    // mutable access without forcing the closure to
+                    // own the slot exclusively.
+                    //
+                    // Phase 10's `nav_history` crate will replace
+                    // this single-slot memory with a proper stack;
+                    // the present row only ships the on/off toggle
+                    // contract.
+                    let neighborhood_prev_scope: std::rc::Rc<
+                        std::cell::RefCell<Option<note_list_pane::NoteListScope>>,
+                    > = std::rc::Rc::new(std::cell::RefCell::new(None));
+                    let neighborhood_prev_scope_handler = neighborhood_prev_scope.clone();
                     cx.on_action(move |_: &actions::EnterNeighborhood, cx| {
-                        // Worklist 9.2.3 reopened — promote the
-                        // slot-empty path from `debug!` to `warn!` so
-                        // a future regression surfaces in default-level
-                        // logs.  The slot is populated by
-                        // `preload_blank_webview` at workspace open
-                        // and mutated in-place by every
-                        // `open_in_webview` thereafter, so an empty
-                        // slot at toolbar-click time would indicate a
-                        // real ordering bug, not a transient state.
-                        let Some(item) = neighborhood_slot.borrow().as_ref().cloned() else {
-                            log::warn!(
-                                target: "tolaria::neighborhood",
-                                "EnterNeighborhood: no active NoteItem — toolbar click \
-                                 reached the handler before preload_blank_webview populated \
-                                 the slot"
-                            );
-                            return;
-                        };
-                        let id = item.read(cx).id();
-                        let Some(vault) = cx.try_global::<vault::Vault>() else {
-                            log::warn!("EnterNeighborhood: no Vault global installed");
-                            return;
-                        };
-                        // Title for the header label is read before
-                        // we drop the immutable vault borrow — keeps
-                        // the `set_header_title` call below a single
-                        // owned `SharedString`.
-                        let title = vault
-                            .note_sync(id)
-                            .map(|n| n.title.clone())
-                            .unwrap_or_else(|| gpui::SharedString::from(format!("note {}", id.get())));
-                        // Union of inbound + outbound, minus the active
-                        // note itself.  Both query fns already exclude
-                        // self-links, so the union doesn't reintroduce
-                        // it; the `remove(&id)` below is belt-and-braces
-                        // for the future fold of fenced-code awareness
-                        // that might surface self-targets again.
-                        let mut ids: std::collections::HashSet<vault::NoteId> =
-                            vault.backlinks(id).into_iter().collect();
-                        ids.extend(vault.outbound_links(id));
-                        ids.remove(&id);
-                        let count = ids.len();
-                        let header =
-                            gpui::SharedString::from(format!("Neighborhood of {title}"));
-                        // Worklist 9.2.3 reopened — surface an
-                        // `info!` log at handler entry + an explicit
-                        // `warn!` when the resolved neighborhood is
-                        // empty.  The empty-set case is exactly what
-                        // the user perceives as "the click did
-                        // nothing": the scope swaps but the filter
-                        // hides every entry, so the visible result is
-                        // an empty list.  The warn log makes the
-                        // root cause discoverable from the live log
-                        // without enabling debug.
-                        log::info!(
-                            target: "tolaria::neighborhood",
-                            "EnterNeighborhood: id={id:?} title={title:?} resolved {count} neighbour(s)",
+                        // Worklist 9.2.16 — delegate to
+                        // [`handle_enter_neighborhood`] so the production
+                        // path and the `#[gpui::test]` regressions share
+                        // a single source of truth.  The handler reads
+                        // the active scope, branches on toggle-on /
+                        // toggle-off, and updates pane + anchor + saved
+                        // scope through the slot the sidebar
+                        // subscription also clears.
+                        handle_enter_neighborhood(
+                            &neighborhood_slot,
+                            &neighborhood_note_list,
+                            &neighborhood_prev_scope_handler,
+                            cx,
                         );
-                        if count == 0 {
-                            log::warn!(
-                                target: "tolaria::neighborhood",
-                                "EnterNeighborhood: id={id:?} has no inbound or outbound \
-                                 wikilinks — the note list will render empty.  Add a \
-                                 [[wikilink]] to or from this note to populate the neighbourhood."
-                            );
-                        }
-                        neighborhood_note_list.update(cx, |pane, cx| {
-                            pane.set_scope(
-                                note_list_pane::NoteListScope::Neighborhood(id, ids),
-                                cx,
-                            );
-                            pane.set_header_title(header, cx);
-                        });
-                        // Worklist 9.2.14 — broadcast the anchor so the
-                        // note-toolbar's neighbourhood cell can paint
-                        // itself in the active-state glyph colour on
-                        // the next render.  The toolbar reads this
-                        // global directly (no per-render plumbing); we
-                        // also `refresh_windows()` so the live toolbar
-                        // repaints even though no entity it observes
-                        // notified — the global is the source of truth.
-                        cx.set_global(note_item::NeighborhoodAnchor(Some(id)));
-                        cx.refresh_windows();
                     });
 
                     // Worklist 9.2.7 — `Archive` writes `_archived: true`
@@ -1386,6 +1521,16 @@ pub(crate) mod macos {
                         // click straight into `open_note`.
                         let scoped_open_slot = slot.clone();
                         let scoped_open_handle = note_list.clone();
+                        // Worklist 9.2.16 — clearing the previous-scope
+                        // memory when ANY sidebar row is picked.  The
+                        // EnterNeighborhood toggle pops back to the
+                        // saved scope on second click; once the user
+                        // navigates via the sidebar that memory is
+                        // stale (a fresh entry will save the NEW scope
+                        // before swapping in).  Sharing the same Rc as
+                        // the action handler keeps the two paths
+                        // agreeing on a single source of truth.
+                        let sidebar_prev_scope = neighborhood_prev_scope.clone();
                         model_cx
                             .subscribe_in(
                                 &sidebar,
@@ -1467,6 +1612,12 @@ pub(crate) mod macos {
                                     // the note-toolbar's active-state glyph drops
                                     // back to muted on the next render.
                                     cx.set_global(note_item::NeighborhoodAnchor(None));
+                                    // Worklist 9.2.16 — also clear the saved
+                                    // previous-scope memory.  The user just
+                                    // picked a fresh sidebar row; any pending
+                                    // "exit back to before-the-neighbourhood"
+                                    // pop would now restore an outdated context.
+                                    *sidebar_prev_scope.borrow_mut() = None;
                                 },
                             )
                             .detach();
@@ -2348,9 +2499,8 @@ mod tests {
         use gpui::{AppContext as _, Entity};
         use note_item::{NeighborhoodAnchor, NoteItem};
         use note_list_pane::{NoteListPane, NoteListScope};
-        use std::collections::HashSet;
         use tempfile::tempdir;
-        use vault::{NoteId, Vault};
+        use vault::Vault;
         cx.update(gpui_component::init);
 
         // Real on-disk vault with two notes wikilinked together so the
@@ -2395,33 +2545,26 @@ mod tests {
         let item: Entity<NoteItem> = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
         *slot.borrow_mut() = Some(item.clone());
 
-        // Register the same handler shape `macos::run` uses — local
-        // clone of the slot + the pane so the closure captures match
-        // the production wiring.
+        // Register the production handler via the shared helper —
+        // `handle_enter_neighborhood` reads the slot, the pane, and
+        // the prev-scope memory through the same `Rc<RefCell<…>>`
+        // backing the live workspace's `cx.on_action` closure.  Tests
+        // and production agree on a single implementation; any future
+        // branch change surfaces here.
         let handler_slot = slot.clone();
         let handler_list = note_list.clone();
+        let handler_prev_scope: std::rc::Rc<
+            std::cell::RefCell<Option<NoteListScope>>,
+        > = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let handler_prev_scope_closure = handler_prev_scope.clone();
         cx.update(|cx| {
             cx.on_action(move |_: &actions::EnterNeighborhood, cx| {
-                let Some(item) = handler_slot.borrow().as_ref().cloned() else {
-                    return;
-                };
-                let id = item.read(cx).id();
-                let Some(vault) = cx.try_global::<Vault>() else {
-                    return;
-                };
-                let title = vault
-                    .note_sync(id)
-                    .map(|n| n.title.clone())
-                    .unwrap_or_else(|| gpui::SharedString::from(format!("note {}", id.get())));
-                let mut ids: HashSet<NoteId> = vault.backlinks(id).into_iter().collect();
-                ids.extend(vault.outbound_links(id));
-                ids.remove(&id);
-                let header = gpui::SharedString::from(format!("Neighborhood of {title}"));
-                handler_list.update(cx, |pane, cx| {
-                    pane.set_scope(NoteListScope::Neighborhood(id, ids), cx);
-                    pane.set_header_title(header, cx);
-                });
-                cx.set_global(NeighborhoodAnchor(Some(id)));
+                crate::macos::handle_enter_neighborhood(
+                    &handler_slot,
+                    &handler_list,
+                    &handler_prev_scope_closure,
+                    cx,
+                );
             });
         });
 
@@ -2467,6 +2610,209 @@ mod tests {
                 "anchor must answer `true` for the anchor note's id",
             );
         });
+    }
+
+    /// Worklist 9.2.16 — first click on the neighbourhood cell while
+    /// the pane is in `Inbox` (or any non-neighbourhood scope) must
+    /// behave the same as the 9.2.14 entry path: pane scope flips to
+    /// `Neighborhood(active_id, ids)`, anchor global writes
+    /// `Some(active_id)`, header reads `"Neighborhood of <title>"`.
+    /// Pins the on-half of the toggle contract through the same
+    /// `handle_enter_neighborhood` helper the production handler
+    /// dispatches through.
+    #[gpui::test]
+    fn neighborhood_handler_enters_when_scope_is_not_neighborhood(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui::{AppContext as _, Entity};
+        use note_item::{NeighborhoodAnchor, NoteItem};
+        use note_list_pane::{NoteListPane, NoteListScope};
+        use tempfile::tempdir;
+        use vault::Vault;
+        cx.update(gpui_component::init);
+
+        // Fixture vault: `a.md` wikilinks `b.md` so `b`'s
+        // neighbourhood resolves to a non-empty set.
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.md"), "# A\n[[b]]\n").unwrap();
+        std::fs::write(dir.path().join("b.md"), "# B\nbody\n").unwrap();
+        let vault = Vault::open_at(dir.path()).expect("open vault");
+        let (anchor_id, anchor_stem) = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "b")
+            .map(|n| (n.id, n.title.clone()))
+            .expect("vault scan must surface the `b.md` fixture");
+        cx.update(|cx| cx.set_global(vault));
+
+        let note_list = cx.update(|cx| cx.new(|cx| NoteListPane::from_vault(cx)));
+        // Slot populated with the anchor note — matches the prod
+        // `preload_blank_webview` → `open_in_webview` chain.
+        let slot: crate::open_note::ActiveNoteItemSlot =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let note = cx
+            .update(|cx| cx.global::<Vault>().note_sync(anchor_id).cloned())
+            .expect("vault must surface the anchor note");
+        let item: Entity<NoteItem> =
+            cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        *slot.borrow_mut() = Some(item.clone());
+
+        // Shared previous-scope memory.  Boots empty — matches the
+        // workspace-just-opened state where the user has never
+        // entered neighbourhood mode.
+        let prev_scope: std::rc::Rc<
+            std::cell::RefCell<Option<NoteListScope>>,
+        > = std::rc::Rc::new(std::cell::RefCell::new(None));
+
+        // Drive the on-path through the shared helper — production
+        // and test agree on the same code.
+        cx.update(|cx| {
+            crate::macos::handle_enter_neighborhood(&slot, &note_list, &prev_scope, cx);
+        });
+        cx.run_until_parked();
+
+        // Scope flipped to Neighborhood anchored on this note's id.
+        let scope_after = cx.update(|cx| note_list.read(cx).scope().clone());
+        match scope_after {
+            NoteListScope::Neighborhood(id, _) => assert_eq!(
+                id, anchor_id,
+                "toggle-on must anchor the neighbourhood scope on the active id"
+            ),
+            other => panic!(
+                "toggle-on must push NoteListScope::Neighborhood onto the pane, got {other:?}",
+            ),
+        }
+
+        // Anchor global names the active id — toolbar's active-state
+        // glyph wakes up on the next render.
+        cx.update(|cx| {
+            let anchor = cx
+                .try_global::<NeighborhoodAnchor>()
+                .copied()
+                .expect("toggle-on must install the NeighborhoodAnchor global");
+            assert_eq!(
+                anchor,
+                NeighborhoodAnchor(Some(anchor_id)),
+                "anchor payload must name the active note's id",
+            );
+        });
+
+        // Previous-scope slot remembers the boot-time Inbox so the
+        // next click can pop back.
+        assert_eq!(
+            *prev_scope.borrow(),
+            Some(NoteListScope::Inbox),
+            "toggle-on must save the pre-neighbourhood scope into the slot",
+        );
+
+        // Header reflects the entered neighbourhood.
+        let header_after = cx.update(|cx| note_list.read(cx).header_title().clone());
+        assert_eq!(
+            header_after.as_ref(),
+            format!("Neighborhood of {anchor_stem}"),
+            "toggle-on must set the header to 'Neighborhood of <title>'",
+        );
+    }
+
+    /// Worklist 9.2.16 — second click on the same active note while
+    /// the pane is ALREADY in `Neighborhood(active_id, …)` must exit
+    /// neighbourhood mode: scope reverts to the saved previous scope,
+    /// the anchor global clears to `None`, and the header restores
+    /// the previous scope's display label.  This is the off-half of
+    /// the toggle contract — the row's load-bearing user behaviour.
+    #[gpui::test]
+    fn neighborhood_handler_exits_when_scope_matches_active_id(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui::{AppContext as _, Entity};
+        use note_item::{NeighborhoodAnchor, NoteItem};
+        use note_list_pane::{NoteListPane, NoteListScope};
+        use std::collections::HashSet;
+        use tempfile::tempdir;
+        use vault::Vault;
+        cx.update(gpui_component::init);
+
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.md"), "# A\n[[b]]\n").unwrap();
+        std::fs::write(dir.path().join("b.md"), "# B\nbody\n").unwrap();
+        let vault = Vault::open_at(dir.path()).expect("open vault");
+        let anchor_id = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "b")
+            .map(|n| n.id)
+            .expect("vault scan must surface the `b.md` fixture");
+        cx.update(|cx| cx.set_global(vault));
+
+        let note_list = cx.update(|cx| cx.new(|cx| NoteListPane::from_vault(cx)));
+        let slot: crate::open_note::ActiveNoteItemSlot =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let note = cx
+            .update(|cx| cx.global::<Vault>().note_sync(anchor_id).cloned())
+            .expect("vault must surface the anchor note");
+        let item: Entity<NoteItem> =
+            cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        *slot.borrow_mut() = Some(item.clone());
+
+        // Pre-seed the workspace into the SAVED state the toggle-off
+        // branch expects to see: pane scope is `Neighborhood(anchor_id, …)`,
+        // anchor global names the active id, prev-scope slot holds
+        // a `Folder("projects")` we want restored.
+        let saved_scope = NoteListScope::Folder("projects".into());
+        let prev_scope: std::rc::Rc<
+            std::cell::RefCell<Option<NoteListScope>>,
+        > = std::rc::Rc::new(std::cell::RefCell::new(Some(saved_scope.clone())));
+        cx.update(|cx| {
+            note_list.update(cx, |pane, cx| {
+                pane.set_scope(
+                    NoteListScope::Neighborhood(anchor_id, HashSet::new()),
+                    cx,
+                );
+                pane.set_header_title("Neighborhood of b", cx);
+            });
+            cx.set_global(NeighborhoodAnchor(Some(anchor_id)));
+        });
+        cx.run_until_parked();
+
+        // Fire the handler a SECOND time — expected behaviour: exit.
+        cx.update(|cx| {
+            crate::macos::handle_enter_neighborhood(&slot, &note_list, &prev_scope, cx);
+        });
+        cx.run_until_parked();
+
+        // Scope restored to the saved previous scope.
+        let scope_after = cx.update(|cx| note_list.read(cx).scope().clone());
+        assert_eq!(
+            scope_after, saved_scope,
+            "toggle-off must restore the saved previous scope verbatim",
+        );
+
+        // Anchor cleared — toolbar's active-state glyph deactivates.
+        cx.update(|cx| {
+            let anchor = cx
+                .try_global::<NeighborhoodAnchor>()
+                .copied()
+                .unwrap_or_default();
+            assert_eq!(
+                anchor,
+                NeighborhoodAnchor(None),
+                "toggle-off must clear the NeighborhoodAnchor global",
+            );
+        });
+
+        // Saved slot consumed — the next on-click starts a fresh save.
+        assert_eq!(
+            *prev_scope.borrow(),
+            None,
+            "toggle-off must consume the saved-scope slot (Phase 10 nav_history \
+             will replace this with a stack)",
+        );
+
+        // Header restored to the previous scope's display label.
+        let header_after = cx.update(|cx| note_list.read(cx).header_title().clone());
+        assert_eq!(
+            header_after.as_ref(),
+            "projects",
+            "toggle-off must restore the previous scope's display label",
+        );
     }
 
     /// Worklist 9.2.14 — picking any sidebar row must clear the
