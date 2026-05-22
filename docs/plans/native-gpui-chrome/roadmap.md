@@ -76,40 +76,11 @@ path — schedule its removal under Phase 7 close-out.
 
 **Phase 8 — closed 2026-05-21 (`1a96c20a`).**  Behavioral fidelity pass.  29/29 in-scope rows resolved; 7 note-toolbar product features (8.2.9–8.2.14, 8.2.17) deferred to Phase 9 as net-new product work.  See [`phases/phase-8/close-out.md`](phases/phase-8/close-out.md) for the post-mortem and [`phases/phase-8/worklist.md`](phases/phase-8/worklist.md) for the row-level ledger.
 
+**Phase 9 — closed 2026-05-22 (`fcc0677b`).**  Note-toolbar product features.  26/27 in-scope rows resolved; `9.2.5` AI button (➡️) deferred to Phase 10 pending `cli_agents` provider plumbing.  Scope grew from the originally-planned 14 rows (9.2.1–9.2.9 + 9.3.1–9.3.6) to 27 once mid-phase regressions and follow-up polish landed.  Major architectural deltas: per-note frontmatter bool writes, backlinks + outbound-links vault indexes, chrome-owned editor toggles (raw + wide mode), right-dock panel framework (ToC + Inspector with 7 sections), display-title resolution via note-list pane, editor-host shadcn parity, inspector chrome reshape (title-bar toggle + panel header), resizable-state pollution workaround, re-entrancy-safe action dispatch via `Window::dispatch_action`, build-tag startup banner.  See [`phases/phase-9/close-out.md`](phases/phase-9/close-out.md) for the post-mortem and [`phases/phase-9/worklist.md`](phases/phase-9/worklist.md) for the row-level ledger.
+
 ## Active
 
-### Phase 9 — note-toolbar product features
-
-Phase 9 wires the six active note-toolbar slots that Phase 8 close-out
-deferred (`note-toolbar-star`, `-organized`, `-neighborhood`, `-raw`,
-`-toc`, `-more`) plus an inspector-panel content row, and accumulates
-any new regression rows reported during dogfood.  Each is net-new
-product work — not a regression — so it carries the full feature
-shape from the React `BreadcrumbBar`: new frontmatter fields, new
-panels, new actions, new bridge variants where needed.  Worklist
-lives at [`phases/phase-9/worklist.md`](phases/phase-9/worklist.md);
-rows live at `9.2.1`–`9.2.9` plus the regression `9.2.9` filed mid-phase.
-
-**Scope adjustments mid-phase (2026-05-21):**
-
-- `9.2.5` AI button — **deferred** ➡️ to Phase 10 (or later); the
-  chrome attach is cheap but the underlying provider plumbing
-  (Phase 11.4 `cli_agents`) isn't here yet, and shipping the dock
-  without the provider story buys little.
-- `9.2.8` Note Inspector Panel content — **added** as a paired
-  follow-up to Phase 8 `8.2.18`; the toolbar button is wired but
-  the panel content (backlinks, references, type instances,
-  outline) is sparse.  Shares `vault::Vault::backlinks(id)` with
-  9.2.3 and a future `ToHost::Headings` bridge variant with 9.2.6.
-- `9.2.9` Star toggle external-edit regression — **filed** at user
-  report; tracked separately from 9.2.1 (which stays ✅) because
-  the bug is post-shipping rather than an implementation defect.
-
-Behavioral-layer crate extraction (`command_registry`, `nav_history`,
-`multi_select`, `dialog_stack`, `auto_git`, `vault_lifecycle`,
-`telemetry_pipeline`) moves to **Phase 10** below — renumbered from
-the original "Phase 9 — Behavioral layers" when this user-visible
-product phase took over the Phase 9 slot.
+_(no active phase — Phase 10 next; see Planned below.)_
 
 ### Phase 8 — Behavioral fidelity pass (CLOSED)
 
