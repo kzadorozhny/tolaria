@@ -16,6 +16,7 @@
 
 10.1.1. ⏳ WKWebView z-order fix
 10.1.2. ✅ ToggleElementInspector update failed: window not found
+10.1.3. ToggleElementInspector window shoud be a separate os window.
 
 ## 2. High Priority
 
