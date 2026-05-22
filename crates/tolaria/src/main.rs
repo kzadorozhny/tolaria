@@ -506,12 +506,27 @@ pub(crate) mod macos {
         *prev_scope.borrow_mut() = Some(current_scope);
 
         // Title for the header label is read before we drop the
-        // immutable vault borrow — keeps the `set_header_title`
-        // call below a single owned `SharedString`.
-        let title = vault
-            .note_sync(id)
-            .map(|n| n.title.clone())
-            .unwrap_or_else(|| gpui::SharedString::from(format!("note {}", id.get())));
+        // immutable vault borrow.  Worklist 9.3.8 Reopened — the
+        // user-visible display title (note-list row text) prefers the
+        // first H1 / frontmatter `title:` over the file-stem
+        // `Note::title` field.  Re-use the note-list pane's
+        // `extract_title` helper so the neighbourhood header always
+        // matches the row label the user clicked from.  Body load is
+        // async via `vault::Vault::note_content`; we block on the
+        // foreground executor because the handler already runs on the
+        // UI thread and the read is small (one note's body).
+        let title = {
+            let stem = vault
+                .note_sync(id)
+                .map(|n| n.title.clone())
+                .unwrap_or_else(|| gpui::SharedString::from(format!("note {}", id.get())));
+            let body = cx.foreground_executor().block_on(vault.note_content(id));
+            body.ok()
+                .as_deref()
+                .and_then(note_list_pane::extract_title)
+                .map(gpui::SharedString::from)
+                .unwrap_or(stem)
+        };
         // Union of inbound + outbound, minus the active note itself.
         // Both query fns already exclude self-links, so the union
         // doesn't reintroduce it; the `remove(&id)` below is
@@ -2763,11 +2778,15 @@ mod tests {
         std::fs::write(dir.path().join("a.md"), "# A\n[[b]]\n").unwrap();
         std::fs::write(dir.path().join("b.md"), "# B\nbody\n").unwrap();
         let vault = Vault::open_at(dir.path()).expect("open vault");
-        let (anchor_id, anchor_stem) = vault
+        let anchor_id = vault
             .iter_notes()
             .find(|n| n.title.as_ref() == "b")
-            .map(|n| (n.id, n.title.clone()))
+            .map(|n| n.id)
             .expect("vault scan must surface the `b.md` fixture");
+        // Worklist 9.3.8 Reopened — the neighbourhood header reads
+        // the H1 / frontmatter display title (`B`), not the file-stem
+        // `Note::title` (`b`).  Mirrors what the note-list row shows.
+        let anchor_display_title = "B";
         cx.update(|cx| cx.set_global(vault));
 
         // Build the note-list pane against the real vault — its
@@ -2826,7 +2845,7 @@ mod tests {
         let header_after = cx.update(|cx| note_list.read(cx).header_title().clone());
         assert_eq!(
             header_after.as_ref(),
-            anchor_stem.as_ref(),
+            anchor_display_title,
             "EnterNeighborhood must update the note-list header to the active note's title",
         );
 
@@ -2883,11 +2902,15 @@ mod tests {
         std::fs::write(dir.path().join("a.md"), "# A\n[[b]]\n").unwrap();
         std::fs::write(dir.path().join("b.md"), "# B\nbody\n").unwrap();
         let vault = Vault::open_at(dir.path()).expect("open vault");
-        let (anchor_id, anchor_stem) = vault
+        let anchor_id = vault
             .iter_notes()
             .find(|n| n.title.as_ref() == "b")
-            .map(|n| (n.id, n.title.clone()))
+            .map(|n| n.id)
             .expect("vault scan must surface the `b.md` fixture");
+        // Worklist 9.3.8 Reopened — the neighbourhood header reads
+        // the H1 / frontmatter display title (`B`), not the file-stem
+        // `Note::title` (`b`).  Mirrors what the note-list row shows.
+        let anchor_display_title = "B";
         cx.update(|cx| cx.set_global(vault));
 
         let note_list = cx.update(|cx| cx.new(|cx| NoteListPane::from_vault(cx)));
@@ -2954,7 +2977,7 @@ mod tests {
         let header_after = cx.update(|cx| note_list.read(cx).header_title().clone());
         assert_eq!(
             header_after.as_ref(),
-            anchor_stem.as_ref(),
+            anchor_display_title,
             "toggle-on must set the header to the active note's title (worklist 9.3.8)",
         );
     }

@@ -374,7 +374,12 @@ fn default_header_title() -> SharedString {
 /// `extractH1TitleFromContent` / `extractFrontmatterTitleFromContent`
 /// pair in `src/utils/noteTitle.ts` so the native chrome surfaces
 /// the same display string as the Tauri-era app.
-fn extract_title(body: &str) -> Option<String> {
+///
+/// Public so the workspace's neighbourhood-header handler can resolve
+/// the same display title the note-list shows for its rows (worklist
+/// 9.3.8 — header must echo the human-readable title, not the
+/// file-stem `Note::title` field).
+pub fn extract_title(body: &str) -> Option<String> {
     let mut frontmatter_title: Option<String> = None;
     let mut lines = body.lines().peekable();
 

@@ -1264,6 +1264,54 @@ all read from one source of truth.  The right dock used to mount at
 `px(320.0)`; both now resolve to the sidebar's 200-pt baseline so
 the user's muscle memory carries across.
 
+**Reopened (2026-05-22)** — user reports the side dock panel is
+too narrow.  The `d9766aa5` fix literally satisfied the row spec
+("at least the default width of the sidebar"), but 200pt isn't
+enough column width for the inspector's property-value pairs to
+render comfortably.  React's app defaults to **280pt** for the
+inspector (`src/hooks/useLayoutPanels.ts:20`).
+
+**Re-closure (commit `5e8cc075`).**  Added a new
+`workspace::workspace::WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT`
+constant (`280.0`) independent from the sidebar's 200pt knob.
+The workspace render's right-dock `resizable_panel().size(...)`
+call now reads the new constant, and `InspectorPanel::default_size`
+reads the same constant so both surfaces stay in lockstep.
+
+**Reopened-2 (2026-05-22)** ⏳ — user reports the right dock
+still collapses to fit displayed text (≈ 90pt instead of 280pt);
+the TOC panel shows the same regression.  Root cause: when the
+right dock attaches for the first time, the workspace's panels
+vec grows from 3 → 4 entries.  Gpui-component's
+`ResizableState::sync_panels_count`
+(`gpui-component/.../resizable/mod.rs:124`) extends the new slot
+with `PANEL_MIN_SIZE` (100pt), then `adjust_to_container_size`
+redistributes column widths by ratio across ALL panels.  With
+sizes `[200, 300, ~1000, 100]` summing to 1600pt against a
+1500pt container, the new right-dock column ends up at
+`1500 * 100/1600 ≈ 94pt`.  The `.size(280)` on the resizable
+panel is the *initial* size — only used when the state's
+per-panel `size` slot is `None`, but `sync_panels_count`
+pre-populates `sizes[3] = PANEL_MIN_SIZE` ahead of the first
+render, so the state already has a value that wins over the
+initial.
+
+**Re-closure-2 (commit `<this-commit>`).**  Always-push the
+right dock into the panels vec (mirrors the left-dock pattern at
+`workspace.rs:421-431`).  The panel slot is now stable from the
+*first* render — `panels.len()` is always 4 regardless of dock
+state — so `sync_panels_count` doesn't late-insert a new slot
+with `PANEL_MIN_SIZE`.  Visibility is gated by
+`right_dock_visible = self.right_dock.read(cx).active_panel().is_some()`;
+when no panel is attached, `.visible(false)` returns a
+zero-width div so the editor still flushes to the right edge of
+the window.  On first user-driven attach, the resizable layer
+reads the panel's `.size(WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT)`
+initial size because `panel_state.size` is `None`, opening the
+dock at the configured 280pt.  Fixes the TOC panel symptom
+simultaneously since both panels mount through the same right
+dock.  All 41 workspace + 33 tolaria tests stay green.
+
 #### 9.3.3
 
 **Source:** user-reported polish, 2026-05-21, with attached Image #6.
@@ -1786,6 +1834,33 @@ header to "show the active note's title"; this row finishes the
 job by dropping the prefix from the literal.  Closure docstring
 on the test was also updated.  31 tolaria tests + 33 tests in
 the surrounding crates stay green.
+
+**Reopened (2026-05-22)** ⏳ — user reports the header reads the
+note's **ID** (file stem like `20251031-meeting-notes`) not its
+**title** (the H1 / frontmatter display name).  Root cause:
+`vault::Note::title` is built from the file stem at
+`crates/vault/src/lib.rs:855` (`path.file_stem()`), NOT from the
+H1 / frontmatter.  The note-list rows use a different code path
+(`note_list_pane::collect_vault_entries` at line 647) that
+prefers `extract_title(body)` (first `# H1`, else frontmatter
+`title:`) and falls back to the file stem only when those are
+absent.  Two display-title surfaces ⇒ two answers for the same
+note.
+
+**Re-closure (commit `<this-commit>`).**  Make
+`note_list_pane::extract_title` `pub` and call it from
+`handle_enter_neighborhood`: load the note body via
+`vault::Vault::note_content` (blocking on the foreground
+executor, same shape `collect_vault_entries` uses), feed it
+through `extract_title`, fall back to `Note::title` when the
+extractor returns `None`.  Now both surfaces (note-list row +
+neighbourhood header) read the same display title — the H1 /
+frontmatter title where present, file stem otherwise.  Both
+affected tolaria tests updated: the fixture writes
+`# B\nbody\n` to `b.md`, so the extractor returns `"B"` while
+`Note::title` is `"b"`; the assertion variable was renamed from
+`anchor_stem` to `anchor_display_title` to reflect that switch.
+33 tolaria tests stay green.
 
 ### Cross-row notes
 

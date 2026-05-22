@@ -356,17 +356,23 @@ impl Render for TolariaWorkspace {
         // this `is_open()` snapshot always reflects the latest toggle.
         let left_dock = self.left_dock.clone();
         let left_dock_visible = self.left_dock.read(cx).is_open();
-        // Phase 7 visual-fidelity: hide the right dock entirely when
-        // nothing is attached to it — the reference shows the editor
-        // extending to the right edge of the window, and until
-        // `inspector_panel` lands the dock is just an empty 240-pt
-        // blank vertical bar that eats editor width.
-        let right_dock = self
-            .right_dock
-            .read(cx)
-            .active_panel()
-            .is_some()
-            .then(|| self.right_dock.clone());
+        // Worklist 9.3.2 Reopened-2 — the right dock must occupy a
+        // stable slot in the resizable group from the *first* render,
+        // not get pushed in conditionally when a panel attaches.
+        // Reason: gpui-component's `ResizableState::sync_panels_count`
+        // extends new slots with `PANEL_MIN_SIZE` (100pt) and then
+        // `adjust_to_container_size` redistributes column widths by
+        // ratio — so when the right dock first appears, the
+        // dock-column ends up at ~100/(200+300+~1000+100) ≈ 94pt
+        // (collapses to fit text).  The `.size(280)` initial size
+        // is ignored because the state's size slot was already
+        // pre-populated with 100 by the late insertion.  Mirror the
+        // left-dock pattern (always-push + `.visible(...)`-gated) so
+        // the right column's slot stays stable; the user's first
+        // toggle now opens the dock at the configured 280pt instead
+        // of the collapsed 94pt.
+        let right_dock = self.right_dock.clone();
+        let right_dock_visible = self.right_dock.read(cx).active_panel().is_some();
         let center_group = self.center_group.clone();
         let note_list_column = self.note_list_column.clone();
         // Paint our own `theme.background` instead of relying on
@@ -456,27 +462,29 @@ impl Render for TolariaWorkspace {
                             .dump_as("workspace-center"),
                     ),
                 );
-                if let Some(right_dock) = right_dock {
-                    panels.push(
-                        resizable_panel()
-                            // Worklist 9.3.2 Reopened — paint at the
-                            // inspector's content-density-appropriate
-                            // 280pt instead of the sidebar's 200pt.
-                            // The right dock holds property-value
-                            // pairs that wrap below ~260pt, so opening
-                            // at 200pt left the panel too narrow to
-                            // read property labels alongside values
-                            // (user-reported regression).
-                            .size(px(WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT))
-                            .flex_none()
-                            .child(
-                                div()
-                                    .size_full()
-                                    .child(right_dock)
-                                    .dump_as("workspace-right-dock"),
-                            ),
-                    );
-                }
+                // Worklist 9.3.2 Reopened-2 — always-push (mirrors
+                // the left dock) so the panel slot is stable from
+                // first render and `sync_panels_count` doesn't
+                // late-insert with `PANEL_MIN_SIZE`.  Visibility is
+                // gated by `right_dock_visible`; when no panel is
+                // attached, the inner `right_dock` Entity<Dock>
+                // renders as an empty div anyway (its own match arm
+                // on `DockState::Empty`).  `.visible(false)` returns
+                // a zero-width div so the editor still flushes to
+                // the right edge of the window when the dock is
+                // closed.
+                panels.push(
+                    resizable_panel()
+                        .size(px(WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT))
+                        .visible(right_dock_visible)
+                        .flex_none()
+                        .child(
+                            div()
+                                .size_full()
+                                .child(right_dock)
+                                .dump_as("workspace-right-dock"),
+                        ),
+                );
                 // `min_h_0` + `overflow_hidden` is the classic flex
                 // trick that lets this row shrink below its content's
                 // natural height.  Without it, an overflowing panel
