@@ -1129,7 +1129,7 @@ available width OR `Dock::set_panel` reads `starts_open == true`
 be a fresh regression in the right-dock visibility chain in
 `workspace.rs` after the dock-width constant unification.
 
-**Diagnostic-promotion (commit `<this-commit>`).**  The
+**Diagnostic-promotion (commit `148378eb`).**  The
 `b1614df8` instrumentation pass added info-level logs at every
 dispatch hop, but the env_logger filter in `tolaria::macos::run`
 only registered `tolaria` at Info — the **first** hop of the
@@ -1546,7 +1546,7 @@ Diagnosis: confirm via screenshot whether (a) the title-bar
 button is visible OR (b) any toolbar cell uses
 `IconName::PanelRight`.
 
-**Build-tag banner (commit `<this-commit>`).**  To unblock the
+**Build-tag banner (commit `148378eb`).**  To unblock the
 "stale binary" hypothesis the user can't easily check on their
 own, the `tolaria::macos::run` entrypoint now emits a clear
 `=== tolaria build=<TOLARIA_BUILD_TAG> ===` banner to stderr via
