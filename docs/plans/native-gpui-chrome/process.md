@@ -8,7 +8,7 @@ Workflow, naming, and verification rules that apply throughout the ADR-0115 migr
 2. **Row IDs are stable.**  Numbers are assigned once when a row is added and never renumber even if the row is reopened, deferred, or won't-fixed.
 3. **Three-segment row IDs.**  Every worklist row reads as `<phase>.<severity>.<number>` (e.g. `9.2.7`).  The phase prefix is written on the row even though the row lives inside a phase-scoped file, so the same identifier reads correctly in commit messages, cross-phase references, and out-of-context citations.
 4. **User-driven verification.**  Every ✅ is validated live by the user in the running app.  Subagents never auto-validate via periscope or any other oracle (`feedback_manual_validation.md`).
-5. **Subagents write code; the orchestrator dispatches + verifies + ledgers** (`feedback_delegate_plan_tasks.md`).  Mechanical sweep / capture work runs on Sonnet; substantive code changes stay on Opus default (`feedback_periscope_sweep_sonnet.md`).
+5. **Subagents write code; the orchestrator dispatches + verifies + ledgers** (`feedback_delegate_plan_tasks.md` + `feedback_orchestrator_post_dispatch_verify.md`).  Mechanical research work can run on Sonnet; substantive code changes stay on Opus default.  Subagents skip the `git commit` step ~80% of the time even with explicit guardrails — the orchestrator's post-dispatch verify step is load-bearing, not optional.
 
 ## The continuous loop
 
@@ -50,6 +50,7 @@ After **every iteration** of Rust source changes (per crate or per logical sub-t
 3. **Spawn `code-reviewer` agent with the `idiomatic-rust-review` skill** against the changed files.  **Auto-apply every MUST and SHOULD finding** without prompting the user (MAY findings get surfaced separately for the user to decide).
 4. Re-run `cargo fmt` + `cargo test` after applying review findings.
 5. Commit.
+6. **Orchestrator post-dispatch verification.**  After the subagent returns: `git status --short` + `git log --oneline -3` from the main worktree.  If the subagent worked in a worktree (`worktreeBranch` in result), also run `git log <branch> --oneline ^feat/native-gpui-chrome` to catch orphan follow-up commits, then `git merge --ff-only <branch>` (or `git cherry-pick` if diverged) and `git worktree remove -f -f <path>` to reclaim ~10GB of `target/` cache.  See `feedback_orchestrator_post_dispatch_verify.md` for the full playbook.  This step is mandatory — subagents skip the final `git commit` ~80% of the time and worktrees leak disk catastrophically if not removed (observed 86GB leak in one Phase 9 session).
 
 One row may span multiple iterations.  The ✅ goes on the row only after the last iteration lands and the user has verified live.
 
@@ -91,6 +92,8 @@ When appending a new row to section 2 of Phase 9, the next available ID is `9.2.
 
 The leading status emoji is the **only** in-place edit ever applied to an existing row.  Everything else stays frozen.
 
+A row may cycle through `(none) → ⏳ → ✅ → ⏳ → ✅ → …` as the user surfaces regressions live; the trail accumulates as `Closure → Reopened → Re-closure → Reopened-2 → …` paragraphs inside the row's annotation.  See `## Reopen mechanics` below.
+
 ### User-driven verification
 
 After orchestrator marks ✅, the user verifies in the running app.  Subagents never auto-validate (`feedback_manual_validation.md`).
@@ -98,10 +101,12 @@ After orchestrator marks ✅, the user verifies in the running app.  Subagents n
 If the user reports a regression — phrased `[<phase>.<severity>.<number>] [optional note]`, e.g. `[9.2.1] still broken in dark mode` — the orchestrator:
 
 1. Locates the row, removes its ✅, restores `⏳`.
-2. Records the *original* commit sha in the row's `#### N.<sev>.<n>` annotation (so the next iteration can reference what was tried).
+2. Appends a `**Reopened (YYYY-MM-DD)** ⏳` paragraph to the row's `#### N.<sev>.<n>` annotation capturing the user's note + the original `Closure` commit sha as the trace anchor.  The earlier `Closure` paragraph stays intact.
 3. Dispatches a subagent with the user's new note attached as additional context.
 
 The original row title stays unchanged.  No new sentences, no parentheticals, no commit hashes appended to the line.
+
+For repeat reopens (`Reopened-2`, `Re-closure-3`, …) see `## Reopen mechanics` below — the accumulating-paragraph pattern handles arbitrary cycles.
 
 ### Appending new rows
 
@@ -134,7 +139,82 @@ Cross-references to the durable-memory entries that govern subagent dispatch.  T
 - `feedback_manual_validation.md` — no periscope auto-validation during regression sweeps; the user is the validator.
 - `feedback_delegate_plan_tasks.md` — orchestrator dispatches + verifies + ledgers; subagents read references and write code.
 - `feedback_periscope_followup_test.md` — every periscope-driven UI finding gets a `#[gpui::test]` regression in the same commit.
-- `feedback_periscope_sweep_sonnet.md` — periscope sweep / capture runs use `model: "sonnet"`; substantive code changes stay on Opus default.
+- `feedback_orchestrator_post_dispatch_verify.md` — every dispatch ends with `git status --short` + `git log --oneline -3` + (if worktree) FF-merge + `git worktree remove -f -f`.  Subagents skip the commit step ~80% of the time; worktrees leak ~10GB of `target/` cache each.
+- `feedback_gpui_dispatch_from_click_closure.md` — when an action is dispatched from inside an `on_click` closure, use `window.dispatch_action(Box::new(action), cx)` NOT `cx.dispatch_action(&action)`; the latter silently fails because we're already inside the window's update.
+
+### Dispatch prompt template
+
+Every code-writing dispatch carries these sections in order:
+1. **Branch + tip pointer.**  `feat/native-gpui-chrome` and the latest 2–3 commit shas the dispatch builds on.
+2. **Row reference.**  Worklist file path + `#### N.M.N` annotation as the source of truth.
+3. **What ships.**  Numbered list of concrete deliverables.
+4. **Out of scope.**  Explicit list — defers + deferred reasons.
+5. **Process invariants.**  Inline copy of the cross-refs above, especially the "YOU MUST `git commit`" guardrail.
+6. **Critical files.**  Absolute paths with line numbers for the load-bearing references.
+7. **Report back template.**  Commit sha, files changed, test delta, MAY findings.
+
+### Worktree reconciliation playbook
+
+When the dispatch result includes `worktreeBranch`:
+
+```sh
+# 1. Orphan check — subagents sometimes commit twice and only report one sha.
+git log <branch> --oneline ^feat/native-gpui-chrome
+
+# 2a. If linear descendant: fast-forward in.
+git merge --ff-only <branch>
+
+# 2b. If diverged: cherry-pick the orphan(s) and fix conflicts.
+git cherry-pick <orphan-sha>
+
+# 3. Clean up the working tree + its target/ cache.
+git worktree remove -f -f <path>
+```
+
+When the dispatch result is main-tree:
+
+```sh
+git status --short                                            # check for M / A / staged
+cargo clippy --workspace --all-targets -- -D warnings        # verify compiles
+git add <files> && git commit                                 # if subagent skipped
+```
+
+## GPUI dispatch invariants
+
+GPUI actions dispatched from inside a click / hover / hit-test closure must use **`window.dispatch_action(Box::new(action), cx)`**, NOT `cx.dispatch_action(&action)`.
+
+**Why:** the `cx`-flavoured call attempts to re-enter the same window's update via `cx.windows[id].take()`, which returns `None` because we're already inside that window's update.  The failure is swallowed by `.log_err()` — the click silently does nothing, the App-scope `cx.on_action` handler never fires, no log line appears.  `Window::dispatch_action` internally defers via `cx.defer`, queueing the dispatch for after the click update unwinds.
+
+**Symptom signature:** the click does nothing in the running app, but `#[gpui::test]`s that invoke the dispatch path directly all pass.  Tests don't reproduce because they bypass the click-closure re-entrancy context.
+
+**Observed in Phase 9:** five user reports (`9.2.3`, `9.2.4`, `9.2.6`, `9.2.13`, plus the title-bar sidebar toggle) all traced to this trap.  Diagnosis + fix shipped at commit `a71cc191`.
+
+See `feedback_gpui_dispatch_from_click_closure.md` for the durable rule.
+
+## Reopen mechanics
+
+A row may flip ✅ → ⏳ → ✅ → ⏳ multiple times as the user re-tests live and surfaces regressions that previous fixes missed.  Each cycle accumulates into the row's `#### N.<sev>.<n>` annotation:
+
+- **First reopen.**  Append a `**Reopened (YYYY-MM-DD)** ⏳` paragraph capturing the user's report verbatim, the suspected root cause, and the diagnosis path.  Note the original `Closure` commit sha for trace continuity.
+- **Re-closure.**  After the next fix lands, append `**Re-closure (commit `<sha>`).**` describing the actual root cause and the seam.  Do NOT overwrite the earlier `Closure` paragraph.
+- **Second reopen.**  Append `**Reopened-2 (YYYY-MM-DD)** ⏳`.  Earlier `Reopened` / `Re-closure` paragraphs stay intact.
+- **Third re-closure.**  Append `**Re-closure-3 (commit `<sha>`).**`.  Etc.
+
+The trail `Closure → Reopened → Re-closure → Reopened-2 → Re-closure-2 → …` IS the row's history.  The leading status emoji on the row line is the only in-place edit; everything else accumulates.
+
+The row's title stays frozen — even across multiple reopens, even if the root cause turns out to be entirely different from what the title implies.
+
+## Triage hypotheses (in order)
+
+When a user report contradicts the source code or in-process tests pass green, walk these hypotheses in order before dispatching a speculative fix:
+
+1. **Orphan worktree commits.**  The user's binary is built from `feat/native-gpui-chrome`, not the subagent's worktree branch.  If the subagent made follow-up commits the orchestrator never FF-merged, those changes never reach the user.  Diagnose: `git log <worktree-branch> --oneline ^feat/native-gpui-chrome` for every worktree.  See `feedback_orchestrator_post_dispatch_verify.md`.
+2. **Stale `cargo` incremental cache.**  Suggest `cargo clean -p <crate> && cargo run`.  Workspace-level dep changes sometimes don't trigger a rebuild of binaries that look unaffected.
+3. **Click-vs-dispatch gap.**  Tests calling the dispatch path directly miss bugs in `on_click → cx.dispatch_action → handler`.  Suspect re-entrancy; switch to `window.dispatch_action`.  See the §GPUI dispatch invariants section above.
+4. **State-mutation vs render-trigger gap.**  The handler runs and mutates state, but no `cx.notify()` reaches the observer that drives the render.  Diagnose by adding `info!` logs at every layer of the state-change chain (action handler → entity update → observer → render-side accessor).
+5. **Live-window context mismatch.**  The handler is registered at the wrong context (App vs Window) and never receives bubbled actions.  Compare to a known-working sibling handler (e.g. `ToggleSidebar` is the canonical reference for title-bar action handlers).
+
+Diagnostic-first (instrument + ask the user for log output) beats speculative-fix when the bug doesn't reproduce in tests.  Ship the instrumentation as its own commit so the trace lands in the same place every future regression will use.
 
 ## Closing a phase
 
