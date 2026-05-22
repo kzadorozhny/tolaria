@@ -211,16 +211,28 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         // colour treatment is deferred (the React surface doesn't
         // paint one either; the visual feedback comes from the
         // note-list itself swapping its rows).
+        //
+        // Worklist 9.2.3 reopened-2 — dispatched via
+        // [`Window::dispatch_action`] (not `App::dispatch_action`).
+        // Click closures run inside `Window::dispatch_event`, which
+        // entered through `update_window_id` — the window slot in
+        // `cx.windows` is already taken for the current update.
+        // `App::dispatch_action` tries to re-enter via
+        // `active_window.update(self, …)` and fails silently with
+        // `.log_err()` because the slot's `take()` returns `None`.
+        // `Window::dispatch_action` defers internally via `cx.defer`,
+        // so the action lands AFTER the click update unwinds and the
+        // App-scope handler fires as expected.
         .child(toolbar_cell(
             "note-toolbar-neighborhood",
             IconName::Map,
             "Show neighborhood",
-            |_window, cx| {
-                cx.dispatch_action(&actions::EnterNeighborhood);
+            |window, cx| {
                 log::info!(
                     target: "note_item::toolbar",
-                    "neighborhood: dispatched EnterNeighborhood"
+                    "neighborhood: click registered, dispatching EnterNeighborhood"
                 );
+                window.dispatch_action(Box::new(actions::EnterNeighborhood), cx);
             },
         ))
         // Worklist 9.2.4 — clicking dispatches `ToggleRawEditor`; the
@@ -232,6 +244,10 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         // contrast lives in the cell chrome rather than the glyph.
         // TODO(visual-parity): adopt a true fill/outline pair when the
         // upstream icon set gains one (or commission a `square-terminal-fill`).
+        //
+        // Worklist 9.2.4 reopened-2 — see the
+        // `note-toolbar-neighborhood` comment above for why this is
+        // [`Window::dispatch_action`] rather than `App::dispatch_action`.
         .child(toolbar_cell_with_active(
             "note-toolbar-raw",
             IconName::SquareTerminal,
@@ -241,12 +257,12 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
                 "Show raw markdown"
             },
             raw_mode,
-            |_window, cx| {
-                cx.dispatch_action(&actions::ToggleRawEditor);
+            |window, cx| {
                 log::info!(
                     target: "note_item::toolbar",
-                    "raw: dispatched ToggleRawEditor"
+                    "raw: click registered, dispatching ToggleRawEditor"
                 );
+                window.dispatch_action(Box::new(actions::ToggleRawEditor), cx);
             },
         ))
         .child(stub_cell(
@@ -267,16 +283,20 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         // would couple `note_item` to the workspace dock, and the
         // dock toggle already gives the user visual feedback via the
         // panel itself appearing or disappearing.
+        //
+        // Worklist 9.2.6 reopened — see the
+        // `note-toolbar-neighborhood` comment above for why this is
+        // [`Window::dispatch_action`] rather than `App::dispatch_action`.
         .child(toolbar_cell(
             "note-toolbar-toc",
             IconName::Menu,
             "Table of contents",
-            |_window, cx| {
-                cx.dispatch_action(&actions::ToggleTableOfContents);
+            |window, cx| {
                 log::info!(
                     target: "note_item::toolbar",
-                    "toc: dispatched ToggleTableOfContents"
+                    "toc: click registered, dispatching ToggleTableOfContents"
                 );
+                window.dispatch_action(Box::new(actions::ToggleTableOfContents), cx);
             },
         ))
         .child(toolbar_cell(
@@ -292,16 +312,19 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
             move |_window, cx| copy_path_to_clipboard(&copy_path, cx),
         ))
         .child(more_overflow_cell(path.to_path_buf()))
+        // Worklist 9.2.13 reopened-2 — see the
+        // `note-toolbar-neighborhood` comment above for why this is
+        // [`Window::dispatch_action`] rather than `App::dispatch_action`.
         .child(toolbar_cell(
             "note-toolbar-inspector",
             IconName::PanelRight,
             "Toggle inspector",
-            |_window, cx| {
-                cx.dispatch_action(&actions::ToggleInspector);
+            |window, cx| {
                 log::info!(
                     target: "note_item::toolbar",
-                    "inspector: dispatched ToggleInspector"
+                    "inspector: click registered, dispatching ToggleInspector"
                 );
+                window.dispatch_action(Box::new(actions::ToggleInspector), cx);
             },
         ));
 

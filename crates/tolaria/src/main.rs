@@ -2018,6 +2018,160 @@ mod tests {
         );
     }
 
+    /// Worklist 9.2.3 + 9.2.4 + 9.2.6 + 9.2.13 reopened-2 — toolbar
+    /// click dispatch from inside an active-window `update` must
+    /// route to App-scope action handlers.  Pins the live shape of
+    /// the click chain: a click closure runs **inside** the window's
+    /// own `dispatch_event` update (the `cx.windows[id]` slot is
+    /// taken), and any nested `App::dispatch_action` would silently
+    /// fail the inner `cx.windows.get_mut(id)?.take()?` re-entrancy
+    /// guard via `.log_err()` swallowing the inner `update`.
+    ///
+    /// The four `Reopened-2` rows shared a single root cause: every
+    /// affected cell called `cx.dispatch_action(&action)` (App scope)
+    /// from inside the click closure, hitting the silent-fail path
+    /// described above.  The fix is to route through
+    /// [`Window::dispatch_action`] instead, which internally calls
+    /// `cx.defer(...)` to queue the dispatch for **after** the click
+    /// update unwinds — at which point the slot is back in
+    /// `cx.windows` and the dispatch proceeds normally, firing every
+    /// App-scope `cx.on_action(...)` listener registered for the
+    /// action's `TypeId` (handler fires during the bubble phase of
+    /// the action dispatch).
+    ///
+    /// This test simulates the exact production click path:
+    /// 1. open a window (so `cx.windows[id]` is populated),
+    /// 2. register an App-scope handler that increments a counter,
+    /// 3. `window.update(...)` to nest inside the window's update
+    ///    (mirrors `dispatch_event`'s `update_window_id` frame),
+    /// 4. from inside that update, dispatch via
+    ///    `Window::dispatch_action` (the new path used by every
+    ///    fixed toolbar cell),
+    /// 5. drain deferred work via `cx.run_until_parked`,
+    /// 6. assert the handler ran exactly once.
+    ///
+    /// If a future refactor swaps the toolbar cell back to
+    /// `cx.dispatch_action(&action)`, the assertion fails — the
+    /// re-entrancy guard rejects the nested update and the counter
+    /// stays at zero.
+    #[gpui::test]
+    fn toolbar_window_dispatch_reaches_app_action_handler_under_nested_update(
+        cx: &mut TestAppContext,
+    ) {
+        use workspace::TolariaWorkspace;
+
+        cx.update(gpui_component::init);
+
+        let window = cx.add_window(TolariaWorkspace::empty);
+        // Activate the window so `App::active_window()` resolves —
+        // mirrors the production frontmost-window state that drives
+        // `App::dispatch_action`'s "route through the active window"
+        // branch.  Without this, the dispatch falls through to the
+        // global-action path, which works regardless of nesting and
+        // would hide the regression this test pins.
+        window
+            .update(cx, |_root, window, _cx| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+
+        // Counter the App-scope handler increments — exactly mirrors
+        // the slot-reading shape every affected handler uses in
+        // `macos::run`.
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let calls_inner = calls.clone();
+        cx.update(|cx| {
+            cx.on_action(move |_: &actions::ToggleRawEditor, _cx| {
+                calls_inner.set(calls_inner.get() + 1);
+            });
+        });
+
+        // The load-bearing nested-update site: dispatch from inside
+        // `window.update`, which mirrors what gpui does in
+        // `Window::dispatch_event` (the dispatch frame for any mouse
+        // click).
+        window
+            .update(cx, |_root, window, cx| {
+                window.dispatch_action(Box::new(actions::ToggleRawEditor), cx);
+            })
+            .unwrap();
+        // `Window::dispatch_action` defers internally, so the actual
+        // dispatch lands after this drain.
+        cx.run_until_parked();
+
+        assert_eq!(
+            calls.get(),
+            1,
+            "Window::dispatch_action from inside a window-update frame must \
+             reach the App-scope on_action listener exactly once.  If this \
+             counter stays 0, a toolbar cell has regressed to `cx.dispatch_action` \
+             (App-level), which fails the re-entrancy guard in `update_window_id` \
+             when nested inside `dispatch_event`'s outer update."
+        );
+    }
+
+    /// Worklist 9.2.3 + 9.2.4 + 9.2.6 + 9.2.13 reopened-2 — the
+    /// **negative half** of the dispatch-route regression: calling
+    /// `App::dispatch_action(&action)` from inside an active window
+    /// update silently fails because `update_window_id`'s
+    /// `cx.windows.get_mut(id)?.take()?` re-entrancy guard returns
+    /// `None`, and the outer `.log_err()` swallows the error.  This
+    /// test pins that exact failure mode so a future helper that
+    /// re-introduces nested `App::dispatch_action` calls from click
+    /// handlers fails CI rather than silently regressing UX.
+    ///
+    /// Paired with the positive test
+    /// `toolbar_window_dispatch_reaches_app_action_handler_under_nested_update`
+    /// above — together they document why every toolbar cell must use
+    /// [`Window::dispatch_action`] (which defers internally via
+    /// `cx.defer`) rather than [`App::dispatch_action`] (which
+    /// synchronously re-enters the same window slot and fails).
+    #[gpui::test]
+    fn app_dispatch_action_from_inside_window_update_silently_drops(cx: &mut TestAppContext) {
+        use workspace::TolariaWorkspace;
+
+        cx.update(gpui_component::init);
+
+        let window = cx.add_window(TolariaWorkspace::empty);
+        // Activating the window puts `App::active_window` into the
+        // `Some(...)` branch — the exact production state where the
+        // re-entrancy guard fires.  Without `activate_window`, the
+        // dispatch falls through to the global-action path which
+        // works in either nesting state and would hide the regression.
+        window
+            .update(cx, |_root, window, _cx| window.activate_window())
+            .unwrap();
+        cx.run_until_parked();
+
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let calls_inner = calls.clone();
+        cx.update(|cx| {
+            cx.on_action(move |_: &actions::ToggleRawEditor, _cx| {
+                calls_inner.set(calls_inner.get() + 1);
+            });
+        });
+
+        // From inside the window's update — the broken pattern.  The
+        // inner `active_window.update(self, …)` call hits the
+        // re-entrancy guard, `update_window_id` returns
+        // `Err("window not found")`, and `.log_err()` swallows it.
+        window
+            .update(cx, |_root, _window, cx| {
+                cx.dispatch_action(&actions::ToggleRawEditor);
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        assert_eq!(
+            calls.get(),
+            0,
+            "App::dispatch_action from inside an active-window update must \
+             silently drop (regression guard — if this becomes >0 because \
+             gpui's re-entrancy semantics changed, revisit the toolbar's \
+             dispatch route and consider removing the Window::dispatch_action \
+             work-around)"
+        );
+    }
+
     /// Worklist 2.1 — end-to-end check that a sidebar selection event
     /// drives the note-list-pane header through the workspace event
     /// subscription, exactly as the live app wires them in

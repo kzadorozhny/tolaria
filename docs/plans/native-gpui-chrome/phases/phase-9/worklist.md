@@ -23,17 +23,17 @@
 
 9.2.1. ✅ Star toggle → favourite frontmatter + sidebar favourites section
 9.2.2. ✅ Organised toggle → inbox-advance frontmatter
-9.2.3. ⏳ Neighbourhood action → backlink filter in note-list
-9.2.4. ⏳ Raw-mode toggle → editor-host raw bridge
+9.2.3. ✅ Neighbourhood action → backlink filter in note-list
+9.2.4. ✅ Raw-mode toggle → editor-host raw bridge
 9.2.5. ➡️ AI button → attach `ai_panel` to right dock + `ToggleAiPanel`
-9.2.6. ⏳ ToC action → new `toc_panel` crate + headings bridge
+9.2.6. ✅ ToC action → new `toc_panel` crate + headings bridge
 9.2.7. ✅ More-overflow menu → archive / delete / collapse-when-narrow actions
 9.2.8. ✅ Note Inspector Panel content — backlinks, references, type instances, outline
 9.2.9. ✅ Star action stops working when the note is updated outside the UI
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
-9.2.13. ⏳ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
+9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 
 ## 3. Low Priority
 
@@ -226,6 +226,36 @@ note-list still shows the old scope, the regression is in
 Possible cause: the note-list pane is observing the wrong event
 type, or the scope-swap doesn't trigger `cx.notify()`.
 
+**Re-closure-3 (commit `<this-commit>`).**  Root cause turned out to
+be shared across all four `Reopened-2` rows (`9.2.3` + `9.2.4` +
+`9.2.6` + `9.2.13`): every affected toolbar cell called
+`cx.dispatch_action(&actions::EnterNeighborhood)`
+(`App::dispatch_action`) from inside an `on_click` closure.  Click
+closures run inside GPUI's `Window::dispatch_event`, which entered
+through `update_window_id` — the window slot in `cx.windows` is
+already `take()`-en for the current update.  `App::dispatch_action`
+then re-enters via `active_window.update(self, …)`, the inner
+`cx.windows.get_mut(id)?.take()?` returns `None`, and the outer
+`.log_err()` swallows the dispatch silently.  The handler at
+`tolaria/src/main.rs:1019` never fires; the note-list pane never
+sees a `set_scope` call.  Fix: every toolbar cell now uses
+[`Window::dispatch_action`] (`window.dispatch_action(Box::new(action), cx)`)
+which `cx.defer(...)`s the dispatch internally, queueing it for
+after the click update unwinds — at which point the window slot is
+back in `cx.windows` and the App-scope handler fires as expected.
+Regression test (in `crates/tolaria/src/main.rs`):
+`toolbar_window_dispatch_reaches_app_action_handler_under_nested_update`
+opens + activates a workspace window, registers an App-scope
+`ToggleRawEditor` handler, dispatches from inside `window.update`
+via `Window::dispatch_action`, and asserts the handler ran exactly
+once.  A paired negative test
+(`app_dispatch_action_from_inside_window_update_silently_drops`)
+pins the failure mode of the old `cx.dispatch_action` route so a
+future refactor that re-introduces it fails CI.  Per-click `info!`
+logs (`note_item::toolbar`) trace the click → dispatch boundary on
+every affected cell so live triage can confirm dispatch reaches the
+handler without rebuilding a special diagnostic binary.
+
 #### 9.2.4
 
 **Source row:** Phase 8 `8.2.12` (➡️).  **React reference:**
@@ -317,6 +347,25 @@ suspect `cx.dispatch_action` from inside the toolbar `on_click`
 closure not bubbling to the App-scope handler.  May share root
 cause with `9.2.6` / `9.2.13` (right-dock panels not appearing)
 and `9.2.3` (neighbourhood scope not swapping).
+
+**Re-closure-3 (commit `<this-commit>`).**  Suspicion confirmed:
+the dispatch was the regression, not the WebView surface or the
+JS bundle.  Shared root cause + fix with `9.2.3`'s Re-closure-3 —
+toolbar's `note-toolbar-raw` cell now uses
+`window.dispatch_action(Box::new(actions::ToggleRawEditor), cx)`
+(internally deferred), so the dispatch reaches the App-scope
+handler at `tolaria/src/main.rs:732` once the click update unwinds.
+The handler flips `raw_mode` via `NoteItem::toggle_raw_mode`, which
+calls `cx.notify()` + pushes `ToHost::SetRawMode` to the editor
+host.  Visible result: the toolbar's filled-background active
+treatment paints when raw is on (purely chrome-side, independent
+of any editor-host bundle freshness), and the WebView body flips
+to the raw CodeMirror surface assuming the `editor-host` JS bundle
+carries the `set_raw_mode` arm (which it has since `45b6622d`).
+See `9.2.3`'s Re-closure-3 paragraph for the full root-cause
+analysis (`cx.dispatch_action` re-entrancy in
+`update_window_id`'s `take()` of the window slot) and the
+regression-test pair that guards against the route regressing.
 
 #### 9.2.5
 
@@ -419,6 +468,21 @@ root cause with `9.2.13` (Inspector panel doesn't appear) since
 both use the same helper.  Diagnosis path: log
 `RUST_LOG=tolaria=info`, click TOC button, watch for
 "ToggleTableOfContents: dispatched" and any panel-attach traces.
+
+**Re-closure-3 (commit `<this-commit>`).**  Likelihood confirmed:
+the right-dock attach helper was fine; the dispatch never reached
+the handler at `tolaria/src/main.rs:805` because the toolbar's
+`note-toolbar-toc` cell used `cx.dispatch_action(&actions::ToggleTableOfContents)`
+(App-level), which silently fails when nested inside the click
+update.  Shared root-cause + fix with `9.2.3`'s Re-closure-3.  The
+cell now dispatches via
+`window.dispatch_action(Box::new(actions::ToggleTableOfContents), cx)`
+(internally deferred), and the handler attaches `toc_panel::TocPanel`
+to the right dock through `toggle_or_swap_right_dock_panel`.  The
+workspace's `cx.observe(&right_dock, ...)` then re-renders the
+shell with the right-dock column populated.  See `9.2.3`'s
+Re-closure-3 paragraph for the full GPUI re-entrancy analysis and
+the regression-test pair that guards the route.
 
 #### 9.2.7
 
@@ -1013,6 +1077,29 @@ anything).  Diagnosis: add `info!` log at every step of the
 dispatch chain — toolbar `on_click`, action handler entry,
 `dispatch_to_workspace` resolve, `toggle_or_swap_right_dock_panel`
 branch selection, `Dock::set_panel` invocation.
+
+**Re-closure-3 (commit `<this-commit>`).**  Cause **(1)** was the
+correct hypothesis: the toolbar's `note-toolbar-inspector` cell
+called `cx.dispatch_action(&actions::ToggleInspector)`, which
+re-enters `active_window.update(...)` while the window slot is
+already taken by the outer `dispatch_event` update and silently
+fails via `.log_err()`.  The dispatch never reached the App-scope
+handler at `tolaria/src/main.rs:826`; the
+`toggle_or_swap_right_dock_panel` helper and the right-dock
+observer were both fine (as `toggle_inspector_attaches_panel_and_swaps_with_toc`
+proved at the helper level).  Fix: shared with `9.2.3`'s
+Re-closure-3 — the cell now dispatches via
+`window.dispatch_action(Box::new(actions::ToggleInspector), cx)`
+(`Window::dispatch_action` internally defers, queueing for after
+the click update unwinds).  The handler at `:826` then attaches
+the `InspectorPanel` to the right dock through the existing helper.
+Same root-cause analysis + regression-test pair as `9.2.3`'s
+paragraph — the active-window-required regression test
+(`toolbar_window_dispatch_reaches_app_action_handler_under_nested_update`)
+guards against the route regressing.  The four `Reopened-2` rows
+turned out to be a single bug; each row's annotation flags the
+shared fix so future triage doesn't re-investigate each cell
+independently.
 
 ### Cross-row notes
 

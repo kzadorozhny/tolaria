@@ -132,8 +132,24 @@ impl Render for TitleBar {
             .rounded_sm()
             .cursor_pointer()
             .hover(|this| this.bg(gpui::hsla(0.0, 0.0, 0.5, 0.12)))
-            .on_click(|_, _window, cx| {
-                cx.dispatch_action(&actions::ToggleSidebar);
+            // Worklist 9.2.3+9.2.4+9.2.6+9.2.13 reopened-2 — dispatch
+            // via [`Window::dispatch_action`] (not
+            // `App::dispatch_action`).  The click closure runs inside
+            // an active window update (the slot in `cx.windows` is
+            // already taken), so `App::dispatch_action` would call
+            // `active_window.update(self, …)` which fails the inner
+            // `cx.windows.get_mut(id)?.take()?` re-entrancy guard and
+            // silently swallows the dispatch via `.log_err()`.
+            // `Window::dispatch_action` defers internally via
+            // `cx.defer`, queueing the dispatch for after the click
+            // update completes, so the App-scope `ToggleSidebar`
+            // handler fires.  ToggleSidebar happens to also be bound
+            // to `cmd-1`, which routes through the keymap dispatch
+            // path and doesn't hit this re-entrancy — that's why the
+            // title-bar button looked "fine" even though it shared
+            // the same regression as the note-toolbar dispatch sites.
+            .on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(actions::ToggleSidebar), cx);
             })
             .tooltip(|window, cx| Tooltip::new("Toggle sidebar").build(window, cx))
             .child(IconName::PanelLeft)
