@@ -557,9 +557,11 @@ pub(crate) mod macos {
         if count == 0 {
             log::warn!(
                 target: "tolaria::neighborhood",
-                "EnterNeighborhood: id={id:?} has no inbound or outbound \
-                 wikilinks — the note list will render empty.  Add a \
-                 [[wikilink]] to or from this note to populate the neighbourhood."
+                "EnterNeighborhood: id={id:?} has no inbound or outbound wikilinks — the note list will render empty.",
+            );
+            log::debug!(
+                target: "tolaria::neighborhood",
+                "EnterNeighborhood hint: add a [[wikilink]] to or from this note to populate the neighbourhood.",
             );
         }
         note_list.update(cx, |pane, cx| {
