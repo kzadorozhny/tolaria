@@ -1634,7 +1634,7 @@ unchanged for those scopes — only over-long neighbourhood
 titles get the `…` treatment.  Surface: 3 chained method calls
 + a comment paragraph.  **Size:** trivial.
 
-**Closure (commit `<this-commit>`).**  Applied
+**Closure (commit `54e7df0e`).**  Applied
 `.flex_1().min_w_0().truncate()` to the title element at
 `note_list_pane/src/lib.rs:1494`.  37 note_list_pane tests stay
 green.  No new test added — the change is a styling chain that
