@@ -15,6 +15,7 @@
 ## 1. Blockers
 
 10.1.1. ✅ WKWebView z-order fix
+10.1.2. ToggleElementInspector update failed: window not found
 
 ## 2. High Priority
 

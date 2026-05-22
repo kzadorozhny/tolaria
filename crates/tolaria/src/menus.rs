@@ -178,6 +178,7 @@ fn view_menu(state: MenuState) -> Menu {
         items: vec![
             MenuItem::action(sidebar_label, ToggleSidebar),
             MenuItem::action(properties_label, ToggleInspector),
+            MenuItem::separator(),
             MenuItem::action(inspector_label, ToggleElementInspector),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn),
