@@ -694,8 +694,15 @@ impl Render for StatusBar {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .on_click(|_, _window, cx| {
-                        cx.dispatch_action(&actions::OpenSettings);
+                    .on_click(|_, window, cx| {
+                        // `Window::dispatch_action` defers via `cx.defer`
+                        // so the dispatch lands after the click closure's
+                        // window update unwinds — `cx.dispatch_action`
+                        // would hit the active-window re-entrancy guard
+                        // and silently drop (see the regression test
+                        // `app_dispatch_action_from_inside_window_update_silently_drops`
+                        // in `crates/tolaria/src/main.rs`).
+                        window.dispatch_action(Box::new(actions::OpenSettings), cx);
                     })
                     .tooltip(|window, cx| Tooltip::new("Settings").build(window, cx))
                     .child(IconName::Settings)
@@ -904,9 +911,15 @@ mod tests {
     }
 
     /// Phase 8.6 — clicking the settings gear dispatches `OpenSettings`.
-    /// We verify by registering an `on_action` handler and simulating the
-    /// dispatch directly (mirrors `cmd_q_dispatches_quit_action` in the
-    /// actions crate tests).
+    /// Worklist 10.3.1 — switched from `cx.dispatch_action(&action)` to
+    /// `window.dispatch_action(Box::new(action), cx)` and activated the
+    /// window first; the previous shape sneaked past the re-entrancy
+    /// guard because the test window was never activated and the
+    /// dispatch fell through to the global-action path.  Mirrors the
+    /// production `on_click` body — see the negative regression
+    /// `app_dispatch_action_from_inside_window_update_silently_drops`
+    /// in `crates/tolaria/src/main.rs` for why the cell-level path
+    /// must defer instead of dispatching synchronously.
     #[gpui::test]
     fn status_bar_settings_gear_dispatches_open_settings(cx: &mut TestAppContext) {
         use std::cell::Cell;
@@ -923,12 +936,21 @@ mod tests {
         });
 
         let window = cx.add_window(|_window, _cx| StatusBar::empty());
+        // Without `activate_window` the dispatch falls through to the
+        // global-action path which works in either nesting state and
+        // hides the foot-gun.  Match the
+        // `toolbar_window_dispatch_reaches_app_action_handler_under_nested_update`
+        // setup so we exercise the same production re-entrancy frame.
+        window
+            .update(cx, |_bar, window, _cx| window.activate_window())
+            .unwrap();
         cx.run_until_parked();
 
-        // Dispatch the action as the settings gear's on_click would.
+        // Dispatch the action exactly as the settings gear's
+        // `on_click` body does in production.
         window
-            .update(cx, |_bar, _window, cx| {
-                cx.dispatch_action(&actions::OpenSettings);
+            .update(cx, |_bar, window, cx| {
+                window.dispatch_action(Box::new(actions::OpenSettings), cx);
             })
             .unwrap();
         cx.run_until_parked();
