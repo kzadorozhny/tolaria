@@ -302,19 +302,22 @@ pub(crate) mod macos {
         // *separate OS window* owned by `inspector_renderer`; the
         // menu label tracks that window's open/close state through
         // `InspectorBridge::is_window_open` instead of the per-Window
-        // `is_inspector_picking` flag (which is always `false` now
-        // that we no longer call `Window::toggle_inspector` — see the
-        // architectural note in `inspector_renderer.rs`).
+        // `is_inspector_picking` flag (a sub-state of the inspector
+        // that defaults to `true` only after our renderer auto-starts
+        // picking on first paint — so reading it directly would
+        // briefly flicker the menu label to "Show" between toggle and
+        // first paint).  See the InspectorPaneOpen doc-comment in
+        // `inspector_renderer.rs` for the full architectural note.
         let properties_open = workspace.is_right_dock_open(cx)
             && workspace.right_dock_panel_key(cx).as_deref() == Some("inspector");
-        let inspector_window_open = cx
-            .try_global::<crate::inspector_renderer::InspectorBridge>()
-            .is_some_and(crate::inspector_renderer::InspectorBridge::is_window_open);
+        let inspector_pane_open = cx
+            .try_global::<crate::inspector_renderer::InspectorPaneOpen>()
+            .is_some_and(crate::inspector_renderer::InspectorPaneOpen::is_open);
         let _ = window;
         let state = menus::MenuState {
             sidebar_open: workspace.is_sidebar_open(cx),
             properties_open,
-            inspector_overlay_picking: inspector_window_open,
+            inspector_overlay_picking: inspector_pane_open,
         };
         cx.set_menus(menus::app_menus(state));
     }
@@ -330,39 +333,6 @@ pub(crate) mod macos {
     /// window close and reopen) `dispatch_to_workspace` is a no-op,
     /// which leaves the previously-set labels in place — matching the
     /// `"Show …"` default we lay down before window open.
-    /// Locate the workspace window's current bounds (origin + size in
-    /// global screen-coordinate space) by iterating `cx.windows()` and
-    /// picking the one whose root downcasts to the workspace shape.
-    /// Returns `None` when the workspace window isn't open yet (early
-    /// startup) or has been dismissed.
-    ///
-    /// Used by [`crate::inspector_renderer::ensure_inspector_window_open`]
-    /// (worklist 10.1.3 third follow-up) to anchor the inspector window
-    /// flush against the workspace's right edge with matching height
-    /// rather than the fixed `(40, 40)` / `360×480` shape the earlier
-    /// cut used.
-    pub(crate) fn workspace_window_bounds(cx: &mut App) -> Option<gpui::Bounds<gpui::Pixels>> {
-        for handle in cx.windows() {
-            let maybe_bounds = handle
-                .update(cx, |root, window, app_cx| {
-                    let Ok(root_entity) = root.downcast::<gpui_component::Root>() else {
-                        return None;
-                    };
-                    let inner = root_entity.read(app_cx).view().clone();
-                    if inner.downcast::<workspace::TolariaWorkspace>().is_err() {
-                        return None;
-                    }
-                    Some(window.bounds())
-                })
-                .ok()
-                .flatten();
-            if let Some(bounds) = maybe_bounds {
-                return Some(bounds);
-            }
-        }
-        None
-    }
-
     pub(crate) fn rebuild_menus(cx: &mut App) {
         // Worklist 10.1.3 follow-up — the previous implementation went
         // through `dispatch_to_workspace`, which uses
@@ -966,21 +936,59 @@ pub(crate) mod macos {
                         // [`dispatch_to_workspace`] uses for every other
                         // window-touching action.
                         cx.defer(|cx| {
-                            // Worklist 10.1.3 (revised) — the
-                            // inspector lives in a separate OS window
-                            // owned by `inspector_renderer` whose
-                            // open/close state is the single source of
-                            // truth.  We deliberately do *not* call
-                            // `gpui::Window::toggle_inspector` on the
-                            // workspace because that flag forces GPUI
-                            // to shrink the workspace's root by a
-                            // hard-coded 30 rems on every paint (see
-                            // the `Worklist 10.1.3 architecture` note
-                            // in `inspector_renderer.rs`) — the
-                            // regression the user flagged as "main
-                            // tolaria window gets unnecessary resized"
-                            // on the first 10.1.3 cut.
-                            crate::inspector_renderer::toggle_inspector_window(cx);
+                            // Worklist 10.1.4 (option A) — use GPUI's
+                            // built-in inspector so the picker reads
+                            // every `insert_inspector_hitbox`-tagged
+                            // element (the full interactive tree),
+                            // not just the `.dump_as`-tagged subset
+                            // an external registry would expose.
+                            // GPUI carves a fixed 30-rem strip off the
+                            // workspace's root layout while
+                            // `Window.inspector.is_some()`; to keep
+                            // the workspace's visible chrome unchanged
+                            // on screen we *grow* the workspace's
+                            // window by the same amount on open and
+                            // *shrink* it back on close.  Net effect:
+                            // the workspace stays the same visible
+                            // size; the inspector pane appears as
+                            // additional width on the right edge.
+                            let Some(handle) = cx.active_window() else {
+                                log::warn!("ToggleElementInspector: no active window");
+                                return;
+                            };
+                            let was_open = cx
+                                .try_global::<crate::inspector_renderer::InspectorPaneOpen>()
+                                .is_some_and(
+                                    crate::inspector_renderer::InspectorPaneOpen::is_open,
+                                );
+                            let resize_outcome = handle.update(cx, |_, window, app_cx| {
+                                window.toggle_inspector(app_cx);
+                                let pane =
+                                    crate::inspector_renderer::inspector_pane_width(window);
+                                let current = window.viewport_size();
+                                let delta = if was_open {
+                                    // Closing — shrink back by the pane
+                                    // width.  Clamp at 0 so a freakishly
+                                    // small workspace doesn't underflow
+                                    // into negative `Pixels`.
+                                    (current.width - pane).max(px(0.0))
+                                } else {
+                                    current.width + pane
+                                };
+                                window.resize(gpui::Size {
+                                    width: delta,
+                                    height: current.height,
+                                });
+                            });
+                            if let Err(err) = resize_outcome {
+                                log::error!(
+                                    "ToggleElementInspector update failed: {err:#}"
+                                );
+                                return;
+                            }
+                            cx.set_global(crate::inspector_renderer::InspectorPaneOpen(
+                                !was_open,
+                            ));
                             rebuild_menus(cx);
                         });
                     }

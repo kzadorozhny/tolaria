@@ -17,7 +17,7 @@
 10.1.1. ⏳ WKWebView z-order fix
 10.1.2. ✅ ToggleElementInspector update failed: window not found
 10.1.3. ✅ ToggleElementInspector window shoud be a separate os window.
-10.1.4. Wire element-picker integration into the separate inspector window (custom mouse listener + `ui::tree_dump` lookup)
+10.1.4. ✅ Wire element-picker integration into the inspector pane (grow main window by 30 rems, use GPUI's built-in inspector — option A)
 
 ## 2. High Priority
 
@@ -458,6 +458,87 @@ inspector uses the standard opaque title bar, so we subtract
 content height to make its frame match the workspace's frame.
 Clamped at 0 so a freakishly small workspace doesn't underflow into
 negative `Pixels`.
+
+#### 10.1.4
+
+**Goal.** Wire the element-picker integration the 10.1.3 cut explicitly
+deferred — Cmd+Alt+I should leave the user with a usable picker, not
+a static placeholder.
+
+**Approach (option A — picked by user after a "which option?" check).**
+Use GPUI's built-in `Window::toggle_inspector` so the picker reads
+every `insert_inspector_hitbox`-tagged element (the full interactive
+tree), not just the `.dump_as`-tagged subset that
+`ui::tree_dump::lookup_at` exposes.  Trade-off: GPUI carves a fixed
+30-rem (~480 pt) strip off the workspace's root layout while
+`Window.inspector.is_some()` (see the
+`if self.inspector.is_some() { size.width -= 30rem }` block in
+`gpui::Window::draw_roots`) — the regression the user flagged in
+10.1.3 as "main tolaria window gets unnecessary resized".
+
+To neutralise that regression: when the inspector toggles on, the
+handler in `main.rs` *grows the workspace window* by
+`inspector_pane_width(window) = rems(30.0).to_pixels(rem_size)` — the
+exact amount GPUI shrinks the root by.  Net effect: the workspace's
+visible chrome stays the same size on screen; the inspector pane
+appears as additional width on the right edge of the (now-wider)
+window.  When the inspector toggles off, the window shrinks back by
+the same amount.
+
+**Renderer (`crates/tolaria/src/inspector_renderer.rs`).**
+
+- `render_tolaria_inspector` (the callback wired via
+  `cx.set_inspector_renderer` in `main.rs`) paints a three-row dev
+  panel (header / picking state / active element) into the 30-rem
+  reserved strip.  Width comes from
+  `gpui::Window::prepaint_inspector` so we use `size_full` to fill
+  it.
+- The renderer auto-calls `inspector.start_picking()` on every paint
+  (idempotent — flips a `bool`).  Skips the "find the start button"
+  step: Cmd+Alt+I → pane appears → hover any workspace element →
+  "Active element" row populates with its `GlobalElementId` debug
+  format + `source_location`.
+- `InspectorPaneOpen(bool)` is an `App`-level `Global` that mirrors
+  `Window.inspector.is_some()` (GPUI doesn't expose existence
+  directly — `is_inspector_picking` reads the sub-flag that defaults
+  to `true` only after `start_picking` fires on first paint, which
+  would flicker the menu label between toggle and first paint).
+  Written by the `ToggleElementInspector` handler; read by the menu
+  rebuild path to drive the View-menu `Show / Hide Inspector`
+  label.
+- `inspector_pane_width(window) -> Pixels` helper anchors the
+  `rems(30.0)` constant in one place so a future gpui upstream that
+  picks a different multiple drifts here and only here.
+
+**Toggle handler (`crates/tolaria/src/main.rs`).**
+
+- `cx.defer` wrapper from 10.1.2 stays in place so the menu-accelerator
+  re-entrancy path keeps working.
+- Inside the defer: `cx.active_window()` → `handle.update` →
+  `window.toggle_inspector(app_cx)` + read pre-state from the
+  `InspectorPaneOpen` global → compute the new content-size via
+  `window.viewport_size().width + pane_width` (open) or
+  `width - pane_width` (close, clamped at `px(0)`) → `window.resize`.
+- After the update, `cx.set_global(InspectorPaneOpen(!was_open))` so
+  the menu rebuild reads the new state.  `rebuild_menus(cx)` (the
+  10.1.3-follow-up that iterates `cx.windows()` instead of using
+  `cx.active_window()`) refreshes the View-menu label.
+
+**`ui::tree_dump::lookup_at` retained as a public primitive.**  Not
+used by 10.1.4's option-A path (GPUI's per-element hitbox tree gives
+broader coverage), but kept with its two tests
+(`lookup_at_returns_smallest_match_when_nested`,
+`lookup_at_returns_none_when_no_match`) because the registry is
+already used by periscope click-by-id, and the lookup is a natural
+companion primitive any future name-keyed hit-testing might want.
+
+**User manual validation.**  Cmd+Alt+I → workspace window grows by
+~480 pt; the additional strip on the right is the inspector pane
+showing "Picking: ON — hover an element".  Hover any workspace
+element with `dump_as` (sidebar row, toolbar button, status-bar chip,
+etc.) → "Active element" row updates with the `GlobalElementId` debug
+chain and source-line.  Cmd+Alt+I again → workspace shrinks back to
+its prior size; inspector pane gone.
 
 #### 10.2.1
 

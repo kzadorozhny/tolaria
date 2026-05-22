@@ -165,6 +165,43 @@ pub(crate) fn register(name: &str, bounds: Bounds<Pixels>) {
     state.map.insert(name.to_string(), nb);
 }
 
+/// Find the registered element whose bounds contain `point` and
+/// return its name + bounds — the topmost-by-specificity match
+/// (smallest area), since GPUI elements nest and a hover usually wants
+/// the leaf, not the root.  Coordinates are window-local logical
+/// points (same space as the registered bounds, same space as
+/// [`gpui::Window::mouse_position`]).
+///
+/// General-purpose point-in-bounds lookup over the dump registry.
+/// Currently unused by the worklist 10.1.4 inspector (which uses
+/// GPUI's broader per-paint hitbox machinery instead of just the
+/// `.dump_as`-tagged subset), but kept as a public primitive for any
+/// future name-keyed hit-testing — periscope click-by-id and the
+/// dump-tree CLI both already lean on the same registry.
+#[must_use]
+pub fn lookup_at(point: gpui::Point<gpui::Pixels>) -> Option<(String, NamedBounds)> {
+    let x = f32::from(point.x);
+    let y = f32::from(point.y);
+    let state = lock_registry();
+    state
+        .map
+        .iter()
+        .filter(|(_, nb)| x >= nb.x && x < nb.x + nb.width && y >= nb.y && y < nb.y + nb.height)
+        // Prefer the smallest area on ties — nested elements (e.g. a
+        // button inside a sidebar row) make the leaf the more useful
+        // hover target.  `BTreeMap::iter` is ordered by key, so
+        // `min_by` stays deterministic across runs (no random tie-
+        // breaking on equal-area matches).
+        .min_by(|(_, a), (_, b)| {
+            let area_a = a.width * a.height;
+            let area_b = b.width * b.height;
+            area_a
+                .partial_cmp(&area_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(name, nb)| (name.clone(), *nb))
+}
+
 /// Snapshot the registry to a JSON file at `path`.  Atomic via a
 /// `.tmp` file + rename so periscope can poll the path without ever
 /// reading a half-written file.  Bumps the on-disk `sequence`
@@ -434,5 +471,57 @@ mod tests {
         assert_eq!(p1, p2);
         assert_ne!(p1, p3);
         assert!(p1.to_string_lossy().contains("12345"));
+    }
+
+    /// Worklist 10.1.4 — `lookup_at` returns the leaf match when
+    /// elements nest.  Registers an outer container + an inner button
+    /// where the button's bounds are strictly inside the container's,
+    /// then checks that a hit inside the button returns the button
+    /// (not the container).  The smallest-area tie-break is what
+    /// makes the inspector picker name the most specific element
+    /// under the cursor.
+    #[test]
+    fn lookup_at_returns_smallest_match_when_nested() {
+        let outer = Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(1000.0), px(1000.0)),
+        };
+        let inner = Bounds {
+            origin: point(px(100.0), px(100.0)),
+            size: size(px(50.0), px(50.0)),
+        };
+        register("lookup-outer", outer);
+        register("lookup-inner", inner);
+
+        let hit = lookup_at(point(px(120.0), px(120.0)));
+        assert!(hit.is_some(), "point inside both bounds must resolve");
+        let (name, _) = hit.unwrap();
+        assert_eq!(
+            name, "lookup-inner",
+            "leaf match wins: smallest area is the more useful hover target"
+        );
+    }
+
+    /// `lookup_at` returns `None` when no registered element
+    /// contains the point.  Pins the empty-match branch so callers
+    /// can render an empty state without an explicit existence
+    /// check.  Uses an absurd coordinate (`1_000_000`, well outside
+    /// any other test's registered bounds — the registry is a
+    /// process-global `Mutex<BTreeMap>` shared across all tests in
+    /// this module) so a sibling test's leftover registration can't
+    /// false-positive this assertion.
+    #[test]
+    fn lookup_at_returns_none_when_no_match() {
+        let bounds = Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: size(px(10.0), px(10.0)),
+        };
+        register("lookup-miss-target", bounds);
+
+        let hit = lookup_at(point(px(1_000_000.0), px(1_000_000.0)));
+        assert!(
+            hit.is_none(),
+            "point outside every registered bound resolves to None"
+        );
     }
 }

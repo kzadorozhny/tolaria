@@ -1,332 +1,203 @@
-//! Tolaria's separate-window inspector dev-tool (worklist 10.1.3,
-//! superseding the in-workspace renderer from worklist 3.1).
+//! Tolaria-side renderer for GPUI's built-in [`gpui::Inspector`] view
+//! (worklist 3.1 follow-up; worklist 10.1.4 revision).
 //!
-//! **Worklist 10.1.3 architecture.**  The inspector lives in its own
-//! borderless NSWindow opened on `Cmd+Alt+I` (or `View → Show / Hide
-//! Inspector`).  We deliberately **do not** call
-//! [`gpui::Window::toggle_inspector`] on the workspace, because GPUI's
-//! built-in inspector reserves a hard-coded 30-rem (≈480 pt) strip on
-//! the right edge of the workspace's root layout — see
-//! `gpui::Window::draw_roots` (`~/.cargo/git/checkouts/.../gpui/src/window.rs`
-//! around the `if self.inspector.is_some() { … }` branch).  That width
-//! shrink is unavoidable while `Window.inspector.is_some()`, which
-//! made the workspace reflow every time the user opened the
-//! inspector — the regression the user flagged as "main tolaria
-//! window gets unnecessary resized" on the first 10.1.3 cut.
+//! GPUI ships an `Inspector` entity that tracks an active element id +
+//! "picking" mode; its `Render` impl delegates the actual UI to a
+//! callback stored on `App` (`cx.inspector_renderer`).  Without that
+//! callback the inspector view renders as `Empty`, which means the
+//! `Cmd+Alt+I` toggle flips the internal state but no overlay ever
+//! appears.  See `~/.cargo/git/checkouts/.../crates/gpui/src/inspector.rs`
+//! around `impl Render for Inspector`.
 //!
-//! We therefore manage the inspector's lifetime entirely from this
-//! module:
+//! **Worklist 10.1.4 architecture (option A).**  The inspector is
+//! GPUI's built-in [`Window::toggle_inspector`] pane composited as a
+//! 30-rem (~480 pt) strip on the right edge of the workspace window
+//! — the per-paint code in `gpui::Window::draw_roots` always reserves
+//! that strip while `Window.inspector.is_some()` (see the
+//! `if self.inspector.is_some() { size.width -= 30rem }` block).
+//! We use GPUI's built-in path because it's the only one that
+//! populates `insert_inspector_hitbox` per-paint from *every*
+//! interactive element (broader coverage than the `.dump_as`-tagged
+//! subset that `ui::tree_dump` exposes).
 //!
-//! - [`InspectorBridge`] (App-level [`gpui::Global`]) carries an
-//!   `Option<WindowHandle<InspectorWindow>>` — the typed handle to the
-//!   open inspector window (or `None` when closed).
-//! - [`toggle_inspector_window`] is the user-facing toggle.  It reads
-//!   `bridge.window`'s shape to decide whether the next press opens or
-//!   closes; the workspace window is left untouched.
-//! - [`InspectorWindow`] is the root view of the separate OS window.
-//!   It currently renders a static placeholder ("Element picker not
-//!   yet wired") because GPUI's per-window `Inspector` is the only
-//!   path that registers `insert_inspector_hitbox` from the per-paint
-//!   pipeline, and we just opted out of that path.  Hooking the
-//!   picker back up via a custom mouse listener + the `ui::tree_dump`
-//!   registry is tracked separately so this row can land the
-//!   "separate OS window" half of the ask without dragging the picker
-//!   rewrite in with it.
+//! To avoid the workspace's visible region shrinking when the
+//! inspector opens (the user-flagged "main tolaria window gets
+//! unnecessary resized" regression on the 10.1.3 first cut), the
+//! toggle handler in `main.rs` *grows the workspace window* by
+//! `INSPECTOR_PANE_WIDTH_PT` (the same 30 rems GPUI carves off) when
+//! the inspector opens, and *shrinks it back* when the inspector
+//! closes.  Net effect: the workspace's visible chrome stays the
+//! same size on screen; the inspector pane appears as additional
+//! width on the right edge of the (now-wider) window.
 //!
-//! [`render_tolaria_inspector`] is retained as the
-//! `cx.set_inspector_renderer` callback so that if a future change
-//! ever re-enables `Window::toggle_inspector` on this workspace, the
-//! in-workspace render path stays empty rather than reverting to
-//! GPUI's default panel (which our chrome is no longer designed to
-//! accommodate).  In the current 10.1.3 setup, `toggle_inspector` is
-//! never called, so this callback is dormant.
+//! The renderer below paints a small dev-tool panel showing the
+//! picking state + the currently-active element.  It also auto-
+//! enables picking on every render via [`gpui::Inspector::start_picking`]
+//! so the user doesn't have to hunt for a "start" button — Cmd+Alt+I
+//! → pane appears → hovering a workspace element immediately updates
+//! the "Active element" row.  `start_picking` is idempotent so
+//! calling it on every paint is cheap.
 //!
-//! Gated on `#[cfg(debug_assertions)]` because
-//! [`gpui::App::set_inspector_renderer`] is gated on
-//! `cfg(any(feature = "inspector", debug_assertions))`, and our
-//! workspace doesn't enable the `inspector` feature in release.
+//! Gated on `#[cfg(debug_assertions)]` because both
+//! [`gpui::Window::toggle_inspector`] and [`gpui::App::set_inspector_renderer`]
+//! are gated on `cfg(any(feature = "inspector", debug_assertions))`,
+//! and our workspace doesn't enable the `inspector` feature in
+//! release.
 
 #![cfg(debug_assertions)]
 
 use gpui::{
-    div, px, AnyElement, App, AppContext as _, BorrowAppContext as _, Bounds, Context, Empty,
-    Global, Inspector, IntoElement, ParentElement, Render, SharedString, Styled, TitlebarOptions,
-    Window, WindowBounds, WindowHandle, WindowOptions,
+    div, px, rems, AnyElement, Context, Inspector, IntoElement, ParentElement, Pixels,
+    SharedString, Styled, Window,
 };
 use gpui_component::ActiveTheme;
 
-/// Process-global state for the separate inspector window.
+/// Width GPUI's `draw_roots` carves off the workspace's root layout
+/// while the inspector is open — `rems(30.0).to_pixels(rem_size)`.
+/// We compute this lazily at toggle time (because `rem_size` is a
+/// per-window value) and use it both to grow the workspace window
+/// when the inspector opens and to shrink it when the inspector
+/// closes.  Keeping the constant in one place anchors the
+/// "grow-by-the-amount-GPUI-shrinks-by" invariant against a future
+/// gpui upstream that picks a different rem multiple.
+pub(crate) fn inspector_pane_width(window: &Window) -> Pixels {
+    rems(30.0).to_pixels(window.rem_size())
+}
+
+/// Renderer wired via `cx.set_inspector_renderer` in `main.rs`.  Paints
+/// the in-workspace inspector pane and auto-enables picking so a fresh
+/// inspector toggle is immediately useful.
 ///
-/// The bridge stores nothing more than the open-window handle.  Toggle
-/// state is `bridge.window.is_some()`; menu labels and the
-/// `ToggleElementInspector` handler both read this single source of
-/// truth so the View-menu "Show / Hide Inspector" label and the
-/// physical window stay in lockstep.
-#[derive(Default)]
-pub struct InspectorBridge {
-    window: Option<WindowHandle<InspectorWindow>>,
-}
-
-impl Global for InspectorBridge {}
-
-impl InspectorBridge {
-    /// `true` when the separate inspector window is currently open.
-    /// Used by [`crate::rebuild_menus_with_workspace`] to drive the
-    /// View-menu label without re-reading per-Window inspector state
-    /// (which is no longer the source of truth — see the
-    /// "Worklist 10.1.3 architecture" note at the module head).
-    #[must_use]
-    pub fn is_window_open(&self) -> bool {
-        self.window.is_some()
-    }
-}
-
-/// Install the bridge global if not already present, then run the
-/// callback against a mutable reference to it.  Both the toggle
-/// handler and the menu rebuild path call this — keeping the
-/// install-on-first-touch in one place avoids a startup-order
-/// dependency on `main.rs`.
-fn with_bridge<R>(cx: &mut App, f: impl FnOnce(&mut InspectorBridge) -> R) -> R {
-    if !cx.has_global::<InspectorBridge>() {
-        cx.set_global(InspectorBridge::default());
-    }
-    cx.update_global::<InspectorBridge, _>(|bridge, _cx| f(bridge))
-}
-
-/// Dormant `cx.set_inspector_renderer` callback.  Returns `Empty` so
-/// that if a future change ever calls
-/// [`gpui::Window::toggle_inspector`] on this workspace the
-/// in-workspace panel stays empty — the separate window owns the UI.
-/// Currently no callsite reaches this code path; see the
-/// "Worklist 10.1.3 architecture" note at the module head.
+/// Three rows: header (title + dismiss hint), picking state,
+/// active-element details (or "No element selected").  Width is
+/// taken from GPUI's reserved 30-rem strip (the renderer is
+/// prepainted into a fixed-width box by
+/// `gpui::Window::prepaint_inspector`), so we use `size_full` to fill
+/// it cleanly.
 pub fn render_tolaria_inspector(
-    _inspector: &mut Inspector,
+    inspector: &mut Inspector,
     _window: &mut Window,
-    _cx: &mut Context<Inspector>,
+    cx: &mut Context<Inspector>,
 ) -> AnyElement {
-    Empty.into_any_element()
-}
-
-/// Top-level toggle for the separate inspector window.  Called from
-/// the `ToggleElementInspector` action handler in `main.rs`.
-///
-/// Reads `bridge.window` to decide open vs. close — the bridge is the
-/// single source of truth for "is the inspector visible?".  This is
-/// what lets us avoid `gpui::Window::toggle_inspector` (and its
-/// hard-coded workspace-width shrink, see module head).
-pub fn toggle_inspector_window(cx: &mut App) {
-    let was_open = with_bridge(cx, |bridge| bridge.window.is_some());
-    if was_open {
-        close_inspector_window(cx);
-    } else {
-        ensure_inspector_window_open(cx);
+    // Auto-enable picking so the user doesn't have to find a "start"
+    // button — Cmd+Alt+I → hover any element → "Active element" row
+    // populates.  `start_picking` flips a `bool` on the entity;
+    // calling it when already picking is a no-op (cheap to run on
+    // every paint).
+    if !inspector.is_picking() {
+        inspector.start_picking();
     }
-}
 
-/// Width of the inspector window in logical points.  Wide enough to
-/// hold a typical `GlobalElementId` debug-format chain on one line
-/// before the picker-not-wired follow-up (`10.1.4`) fills the body
-/// with real content.
-const INSPECTOR_WINDOW_WIDTH_PT: f32 = 360.0;
+    let theme = cx.theme();
+    let bg = theme.background;
+    let border = theme.border;
+    let fg = theme.foreground;
+    let muted = theme.muted_foreground;
 
-/// Standard macOS NSWindow title-bar height in logical points
-/// (`NSWindowStyleMaskTitled` default).  We subtract this from the
-/// inspector's height because:
-///
-/// - `Window::bounds()` returns the workspace's **frame** rect
-///   (`NSWindow::frame`, includes the title-bar zone) — see
-///   `gpui_macos/src/window.rs` around `fn bounds(&self) -> Bounds`.
-/// - `cx.open_window` passes `WindowBounds::Windowed(bounds).size`
-///   through `initWithContentRect:` (`gpui_macos/src/window.rs`
-///   around the `initWithContentRect_styleMask_backing_defer_screen_`
-///   call), which makes it the **content** rect.
-///
-/// Result: passing `workspace.frame.size.height` straight through
-/// produced an inspector whose *frame* was 28 pt taller than the
-/// workspace (the title bar got added on top).  The user reported it
-/// as "inspector window height more than the main window".
-///
-/// The workspace itself uses an opaque-transparent title bar
-/// (`titlebar.appears_transparent = true` in `main.rs`), so its
-/// title-bar zone is hidden inside the workspace's frame and we
-/// don't double-count.  The inspector window uses the standard
-/// opaque title bar (`appears_transparent: false`) so we do need
-/// the subtraction.
-const STANDARD_MACOS_TITLE_BAR_HEIGHT_PT: f32 = 28.0;
-
-/// Fallback inspector-window bounds for the early-startup race where
-/// the workspace window isn't open yet (so
-/// [`crate::macos::workspace_window_bounds`] returns `None`).  Keeps
-/// the inspector visible at a sensible spot near the top-left rather
-/// than failing to open.
-const INSPECTOR_FALLBACK_BOUNDS: Bounds<gpui::Pixels> = Bounds {
-    origin: gpui::Point {
-        x: gpui::px(40.0),
-        y: gpui::px(40.0),
-    },
-    size: gpui::Size {
-        width: gpui::px(INSPECTOR_WINDOW_WIDTH_PT),
-        height: gpui::px(480.0),
-    },
-};
-
-fn ensure_inspector_window_open(cx: &mut App) {
-    // Worklist 10.1.3 third follow-up — anchor the inspector flush
-    // against the workspace's right edge, matching its height, rather
-    // than the previous fixed `(40, 40)` / `360×480` placement.  The
-    // bounds come from `Window::bounds()` on the workspace window
-    // (global screen-coordinate space).  When no workspace window
-    // exists yet (early startup race) fall back to the original
-    // sensible default so the inspector still opens visibly.
-    let inspector_bounds = crate::macos::workspace_window_bounds(cx)
-        .map(|ws| Bounds {
-            origin: gpui::Point {
-                x: ws.origin.x + ws.size.width,
-                y: ws.origin.y,
-            },
-            size: gpui::Size {
-                width: px(INSPECTOR_WINDOW_WIDTH_PT),
-                // Subtract the standard macOS title bar height so the
-                // inspector's *frame* (content + 28 pt title bar)
-                // matches the workspace's *frame* height.  See the
-                // `STANDARD_MACOS_TITLE_BAR_HEIGHT_PT` doc-comment for
-                // the frame/content-rect mismatch this works around.
-                // Clamp at 0 so a freakishly small workspace (or a
-                // hypothetical future change that gives the inspector
-                // a taller chrome) doesn't underflow into negative
-                // `Pixels`.
-                height: (ws.size.height - px(STANDARD_MACOS_TITLE_BAR_HEIGHT_PT)).max(px(0.0)),
-            },
-        })
-        .unwrap_or(INSPECTOR_FALLBACK_BOUNDS);
-
-    let opts = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(inspector_bounds)),
-        titlebar: Some(TitlebarOptions {
-            title: Some(SharedString::new_static("Inspector — Tolaria")),
-            appears_transparent: false,
-            traffic_light_position: None,
-        }),
-        focus: true,
-        show: true,
-        ..Default::default()
-    };
-
-    match cx.open_window(opts, |window, cx| {
-        // Worklist 10.1.3 follow-up — register a should-close hook so
-        // the bridge state stays in sync when the user dismisses the
-        // window via the macOS traffic-light close button (rather
-        // than via Cmd+Alt+I).  Without this, `bridge.window` keeps a
-        // stale handle, the next Cmd+Alt+I sees `is_some()`, takes
-        // the close branch, and does nothing visible — the user
-        // reported "Closing window using system close button does not
-        // update the state".  The closure also fires the menu rebuild
-        // so `View → Show Inspector` reads correctly after the close.
-        window.on_window_should_close(cx, |_window, app_cx| {
-            with_bridge(app_cx, |bridge| {
-                bridge.window = None;
-            });
-            crate::macos::rebuild_menus(app_cx);
-            true
-        });
-        cx.new(|_cx| InspectorWindow)
-    }) {
-        Ok(handle) => {
-            with_bridge(cx, move |bridge| {
-                bridge.window = Some(handle);
-            });
-        }
-        Err(err) => {
-            log::error!("toggle_inspector_window: open_window failed: {err:#}");
-        }
-    }
-}
-
-fn close_inspector_window(cx: &mut App) {
-    let handle = with_bridge(cx, |bridge| bridge.window.take());
-    let Some(handle) = handle else {
-        return;
-    };
-    if let Err(err) = handle.update(cx, |_root, window, _cx| {
-        window.remove_window();
-    }) {
-        log::warn!(
-            "toggle_inspector_window: close failed: {err:#} \
-             (window may have already been dismissed by the user)"
+    let header = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .px(px(10.0))
+        .py(px(8.0))
+        .border_b_1()
+        .border_color(border)
+        .child(
+            div()
+                .text_color(fg)
+                .text_sm()
+                .child(SharedString::new_static("Inspector — Tolaria")),
+        )
+        .child(
+            div()
+                .text_color(muted)
+                .text_xs()
+                .child(SharedString::new_static("⌘⌥I to close")),
         );
-    }
+
+    let (picking_label, picking_color) = if inspector.is_picking() {
+        (
+            SharedString::new_static("Picking: ON — hover an element"),
+            fg,
+        )
+    } else {
+        (SharedString::new_static("Picking: OFF"), muted)
+    };
+    let picking_row = div()
+        .px(px(10.0))
+        .py(px(6.0))
+        .text_xs()
+        .text_color(picking_color)
+        .child(picking_label);
+
+    let active_row = match inspector.active_element_id() {
+        Some(id) => {
+            let global_id_text: SharedString = format!("{:?}", id.path.global_id).into();
+            let source_text: SharedString = format!(
+                "{}:{}",
+                id.path.source_location.file(),
+                id.path.source_location.line()
+            )
+            .into();
+            div()
+                .px(px(10.0))
+                .py(px(6.0))
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(fg)
+                        .child(SharedString::new_static("Active element")),
+                )
+                .child(div().text_xs().text_color(muted).child(global_id_text))
+                .child(div().text_xs().text_color(muted).child(source_text))
+        }
+        None => div()
+            .px(px(10.0))
+            .py(px(6.0))
+            .text_xs()
+            .text_color(muted)
+            .child(SharedString::new_static("No element selected")),
+    };
+
+    div()
+        .size_full()
+        .bg(bg)
+        .text_color(fg)
+        .flex()
+        .flex_col()
+        .child(header)
+        .child(picking_row)
+        .child(active_row)
+        .into_any_element()
 }
 
-/// Root view of the separate inspector window.
+/// Process-global flag tracking whether the workspace's GPUI
+/// inspector pane is currently open.  GPUI doesn't expose
+/// `Window.inspector.is_some()` directly (only `is_inspector_picking`,
+/// which reads the sub-flag, not the option), so we track our own
+/// bool alongside every `Window::toggle_inspector` call.
 ///
-/// Renders a static placeholder until the picker integration lands.
-/// The picker rewrite is deferred so 10.1.3 can land the "separate OS
-/// window" half of the ask without coupling it to the larger custom-
-/// mouse-listener + `ui::tree_dump`-query work the picker would need
-/// (since we explicitly opted out of GPUI's per-window `Inspector`
-/// path — see the module head).
-pub struct InspectorWindow;
+/// Read by the menu rebuild path (so the "Show / Hide Inspector"
+/// label tracks the pane's open/close state without depending on the
+/// `is_picking` sub-state) and written by the
+/// `ToggleElementInspector` handler in `main.rs`.
+#[derive(Default)]
+pub struct InspectorPaneOpen(pub bool);
 
-impl Render for InspectorWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let bg = theme.background;
-        let border = theme.border;
-        let fg = theme.foreground;
-        let muted = theme.muted_foreground;
+impl gpui::Global for InspectorPaneOpen {}
 
-        let header = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .px(px(10.0))
-            .py(px(8.0))
-            .border_b_1()
-            .border_color(border)
-            .child(
-                div()
-                    .text_color(fg)
-                    .text_sm()
-                    .child(SharedString::new_static("Inspector — Tolaria")),
-            )
-            .child(
-                div()
-                    .text_color(muted)
-                    .text_xs()
-                    .child(SharedString::new_static("⌘⌥I to close")),
-            );
-
-        let body = div()
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .px(px(10.0))
-            .py(px(10.0))
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(fg)
-                    .child(SharedString::new_static("Element picker: not yet wired")),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(SharedString::new_static(
-                        "Worklist 10.1.3 lands the separate OS window.  Picker integration \
-                 (custom mouse listener + tree_dump lookup) is a follow-up.",
-                    )),
-            );
-
-        div()
-            .size_full()
-            .bg(bg)
-            .text_color(fg)
-            .flex()
-            .flex_col()
-            .child(header)
-            .child(body)
+impl InspectorPaneOpen {
+    /// `true` while the workspace's GPUI inspector pane is mounted
+    /// (`Window.inspector.is_some()`).  Used by
+    /// [`crate::macos::rebuild_menus_with_workspace`] to drive the
+    /// View-menu label.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        self.0
     }
 }
 
@@ -337,10 +208,8 @@ mod tests {
 
     /// Installing `render_tolaria_inspector` via the public
     /// `set_inspector_renderer` boxing path must accept our function
-    /// signature — even though the callback is dormant in 10.1.3's
-    /// architecture, the signature must still match
-    /// `gpui::InspectorRenderer` so a future caller of
-    /// `Window::toggle_inspector` doesn't crash on install.
+    /// signature — protects against renderer parameters drifting away
+    /// from `gpui::InspectorRenderer`.
     #[gpui::test]
     fn render_tolaria_inspector_signature_matches_gpui_renderer(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
@@ -350,50 +219,42 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// `toggle_inspector_window` with no prior state opens a fresh
-    /// bridge and routes to the open branch; on the next call the
-    /// bridge's `window.is_some()` flips and the close branch fires.
-    /// Pins the single-source-of-truth invariant — we never touch
-    /// `Window::toggle_inspector` (no workspace resize) and the
-    /// open/close cycle reads from `bridge.window` alone.
+    /// Toggling the inspector on a live window must not panic when the
+    /// renderer is installed.  This is the path `Cmd+Alt+I` actually
+    /// drives in production: `cx.set_inspector_renderer(...)` first,
+    /// then `window.toggle_inspector(cx)`.
     #[gpui::test]
-    fn toggle_inspector_window_alternates_open_and_close(cx: &mut TestAppContext) {
+    fn toggle_inspector_with_renderer_installed_does_not_panic(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
         cx.update(|cx| {
-            toggle_inspector_window(cx);
+            cx.set_inspector_renderer(Box::new(render_tolaria_inspector));
         });
-        cx.run_until_parked();
-        cx.update(|cx| {
-            let open = cx
-                .try_global::<InspectorBridge>()
-                .is_some_and(InspectorBridge::is_window_open);
-            assert!(
-                open,
-                "first toggle must open the inspector window (bridge.window = Some)"
-            );
+        let (_root, vcx) = cx.add_window_view(|_window, _cx| EmptyRoot);
+        vcx.update(|window, cx| {
+            window.toggle_inspector(cx);
         });
-        cx.update(|cx| {
-            toggle_inspector_window(cx);
-        });
-        cx.run_until_parked();
-        cx.update(|cx| {
-            let open = cx
-                .try_global::<InspectorBridge>()
-                .is_some_and(InspectorBridge::is_window_open);
-            assert!(
-                !open,
-                "second toggle must close the inspector window (bridge.window = None)"
-            );
-        });
+        vcx.run_until_parked();
     }
 
-    /// `InspectorBridge::is_window_open` is the source of truth for the
-    /// View-menu `Show / Hide Inspector` label.  Default is `false`
-    /// (no window open) so menu labels lay down as "Show …" before
-    /// the user ever presses Cmd+Alt+I.
+    /// `InspectorPaneOpen::is_open` is the source of truth for the
+    /// menu label — default is `false` so labels render "Show …"
+    /// before the user ever presses Cmd+Alt+I.
     #[test]
-    fn inspector_bridge_default_is_closed() {
-        let bridge = InspectorBridge::default();
-        assert!(!bridge.is_window_open());
+    fn inspector_pane_open_default_is_false() {
+        assert!(!InspectorPaneOpen::default().is_open());
+    }
+
+    /// A minimal root view used solely as the host for the
+    /// `toggle_inspector` regression test.
+    struct EmptyRoot;
+
+    impl gpui::Render for EmptyRoot {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::Empty
+        }
     }
 }
