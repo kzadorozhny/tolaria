@@ -1488,7 +1488,7 @@ overrides BlockNote's default; port it to `editor-host/`.
 
 **Surface:** `editor-host/` TS+CSS.  **Size:** medium.
 
-**Closure (commit `<pending>`).**  Mirrored 9.3.1's SideMenu port for
+**Closure (commit `140fb64c`).**  Mirrored 9.3.1's SideMenu port for
 the BlockNote selection menu / formatting toolbar.  Two new editor-host
 files: `tolariaBlockNoteFormattingToolbar.tsx` (mantine-free port of
 the React `tolariaEditorFormatting.tsx` — `TolariaBasicTextStyleButton`,
