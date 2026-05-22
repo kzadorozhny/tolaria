@@ -36,15 +36,17 @@
 9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
 9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
+9.2.16. Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
 
 ## 3. Low Priority
 
-9.3.1. ⏳ Block editor drag handles do not Cary React side styling
+9.3.1. ✅ Block editor drag handles do not Cary React side styling
 9.3.2. ✅ Inspector panel should open at least the default width of the sidebar
 9.3.3. ✅ Inspector panel header — same height as note header, title reads `Properties`
 9.3.4. ✅ Inspector open/close button migrates to the panel header when open
-9.3.5. ✅ Inspector toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
+9.3.5. Note properties panel toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
 9.3.6. ✅ Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
+9.3.7. Block editor selection menu should have React side styling
 
 ---
 
@@ -1107,6 +1109,62 @@ guards against the route regressing.  The four `Reopened-2` rows
 turned out to be a single bug; each row's annotation flags the
 shared fix so future triage doesn't re-investigate each cell
 independently.
+
+#### 9.3.1
+
+**Source:** user-reported polish on the embedded BlockNote editor,
+2026-05-21.  **Symptom:** the SideMenu drag handles (`+` add-block
+button + `⋮⋮` drag grip) inside the editor-host WebView look like
+BlockNote's stock controls — clipped grip glyph, BlockNote's stock
+"Colors" pane in the drag-handle menu, jittery HTML-5 dragstart on
+reorder — instead of the polished treatment the React app ships
+through `src/components/tolariaBlockNoteSideMenu.tsx`.
+
+**Discovery:** the React app replaces BlockNote's default SideMenu
+with a 800-line `TolariaSideMenu` component (mounted via
+`<SideMenuController sideMenu={TolariaSideMenu} />` at
+`src/components/SingleEditorView.tsx:1170`) that wraps the default
+`<SideMenu>` with three custom controls — `TolariaAddBlockButton`,
+`TolariaDragHandleButton` (the `.tolaria-block-drag-handle` CSS hook),
+and `TolariaDragHandleMenu` (markdown-safe Delete + table-header
+items, no Colors).  It also runs a pointer-based reorder gesture
+inside ProseMirror's `transact()` so the OS-drag flow the WKWebView
+mishandles is bypassed entirely, plus a `useSideMenuTextAlignment`
+hook that pins the floating menu to the block's first text-line
+centre.  The editor-host port had the CSS rules already (ported in
+Phase 8's `EditorTheme.css` migration into `editor-host/src/style.css`
+— see the `.editor-host-container .tolaria-block-drag-handle` rule
+at line 421) but never landed the component; the class never appeared
+on any DOM node, so the rules were dead.
+
+**Scope:** verbatim TypeScript port of `tolariaBlockNoteSideMenu.tsx`
+into `editor-host/src/tolariaBlockNoteSideMenu.tsx`, mounted via
+`<SideMenuController sideMenu={TolariaSideMenu} />` from
+`editor-host/src/menus.tsx`.  Phosphor icons are *not* added — the
+single-file bundle would balloon ~100 kB.  Two inline SVGs match
+the visual weight (`Plus` 20-px line glyph + a 6-dot `DotsSixVertical`
+column).  The editor-host's `sideMenuElementForEditor` selector
+keys off `.editor-host-container` instead of the React-side
+`.editor__blocknote-container` so the alignment math finds the
+correct scope.
+
+**Closure (commit `<this-commit>`).**  Landed a 600-line
+`editor-host/src/tolariaBlockNoteSideMenu.tsx` (verbatim port of
+the React component with the inline-SVG icons + scope rename) and
+a 175-line vitest at
+`editor-host/src/tolariaBlockNoteSideMenu.test.tsx` (mocks
+BlockNote's components, asserts the `.tolaria-block-drag-handle`
+CSS hook lands on a DOM `HTMLElement` and that the drag-handle
+menu carries the markdown-safe `Delete` item rename).  Mount is
+the single-line swap in `editor-host/src/menus.tsx` —
+`<SideMenuController />` → `<SideMenuController sideMenu={TolariaSideMenu} />`.
+Tests: 379 → 381.  Bundle: 2,497,279 → 2,508,200 B (+10,921 B,
++0.44%).  Out of scope: the pointer-reorder geometry + alignment
+math are exercised transitively by the React-side
+`src/components/tolariaBlockNoteSideMenu.test.tsx` suite (~600
+lines of fixtures); duplicating them in the host would just bind
+the same logic to the same shape.  The smoke test pins the
+*wiring* (CSS hook + DOM shape), not the math.
 
 #### 9.3.2
 

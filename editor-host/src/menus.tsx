@@ -9,6 +9,7 @@ import {
 } from "@blocknote/react";
 import { useBlockNoteSideMenuHoverGuard } from "./blockNoteSideMenuHoverGuard.ts";
 import { useBlockNoteFormattingToolbarHoverGuard } from "./blockNoteFormattingToolbarHoverGuard.ts";
+import { TolariaSideMenu } from "./tolariaBlockNoteSideMenu.tsx";
 
 // ---------------------------------------------------------------------------
 // EditorMenus — slash / side / formatting menus + hover guards (Phase 8.25)
@@ -136,8 +137,16 @@ export function EditorMenus({ editor }: EditorMenusProps) {
              * against that provider's components map instead of `undefined`,
              * so the first mousemove no longer throws and the WKWebView
              * keeps its drag-handle gutter.
+             *
+             * Worklist 9.3.1: mount our `TolariaSideMenu` instead of the
+             * BlockNote default so the drag-handle picks up the
+             * `.tolaria-block-drag-handle` CSS hook (declared in
+             * `style.css` — see the `.editor-host-container
+             * .tolaria-block-drag-handle` rule) and the pointer-based
+             * reorder gesture takes over from the wonky HTML-5 drag
+             * flow that BlockNote's stock control uses.
              */}
-            <SideMenuController />
+            <SideMenuController sideMenu={TolariaSideMenu} />
             <FormattingToolbarController />
             <SuggestionMenuController
                 triggerCharacter="/"
