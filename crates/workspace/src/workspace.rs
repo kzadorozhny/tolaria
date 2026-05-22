@@ -57,6 +57,18 @@ pub const NATIVE_TITLE_BAR_HEIGHT_PT: f32 = 34.0;
 /// initial width to a shared constant eliminates the drift.
 pub const WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT: f32 = 200.0;
 
+/// Right-dock (Inspector panel) opening width in points.  Worklist
+/// 9.3.2 Reopened — the dock column's `.size(...)` on the
+/// `resizable_panel()` is what actually paints the column width on
+/// first attach; `InspectorPanel::default_size()` is read by
+/// `Dock::set_panel` but the dock's render for `DockPosition::Right`
+/// uses `size_full()` and the resizable wrapper owns the width.
+/// Independent from `WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT` (200pt)
+/// because the sidebar (tree rows) and inspector (property-value
+/// pairs) have different content density.  Mirrors the React app's
+/// `inspector: 280` default in `src/hooks/useLayoutPanels.ts:20`.
+pub const WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT: f32 = 280.0;
+
 use crate::{
     dock::Dock,
     modal_layer::{ModalLayer, ModalView},
@@ -447,10 +459,15 @@ impl Render for TolariaWorkspace {
                 if let Some(right_dock) = right_dock {
                     panels.push(
                         resizable_panel()
-                            // Worklist 9.3.2 — track the sidebar's initial
-                            // width so the right dock opens at the same
-                            // column rhythm.
-                            .size(px(WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT))
+                            // Worklist 9.3.2 Reopened — paint at the
+                            // inspector's content-density-appropriate
+                            // 280pt instead of the sidebar's 200pt.
+                            // The right dock holds property-value
+                            // pairs that wrap below ~260pt, so opening
+                            // at 200pt left the panel too narrow to
+                            // read property labels alongside values
+                            // (user-reported regression).
+                            .size(px(WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT))
                             .flex_none()
                             .child(
                                 div()

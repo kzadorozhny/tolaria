@@ -1458,14 +1458,19 @@ impl Panel for InspectorPanel {
     }
 
     fn default_size(&self, _cx: &App) -> Pixels {
-        // Worklist 9.3.2 — match the sidebar's opening width so the
-        // right dock lands on the same column rhythm the user already
-        // has muscle memory for on the left.  Tracks
-        // `workspace::workspace::WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT`
-        // (the value the left dock's `.size(...)` paints with on first
-        // mount); keeping both values in lockstep avoids the right dock
-        // opening visibly narrower than the sidebar.
-        px(workspace::workspace::WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT)
+        // Worklist 9.3.2 Reopened — the initial closure (`d9766aa5`)
+        // pinned this to the sidebar's 200-pt opening width per the
+        // row spec "at least the default width of the sidebar", but
+        // the user reported the panel reads as too narrow for the
+        // property labels.  React's app defaults to **280pt** for the
+        // inspector (`src/hooks/useLayoutPanels.ts:20` `inspector:
+        // 280`); that's the muscle-memory width users carry over.
+        // Pin to 280 directly here instead of inheriting the sidebar
+        // constant — the two columns have different content density
+        // (the sidebar holds tree rows; the inspector holds
+        // property-value pairs that wrap at narrow widths), so they
+        // shouldn't share one knob.
+        px(workspace::workspace::WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT)
     }
 
     fn icon(&self) -> Option<&str> {
@@ -1723,20 +1728,23 @@ mod tests {
         });
     }
 
-    /// Worklist 9.3.2 — the inspector panel's `default_size` must track
-    /// the workspace-level shared constant so the right dock opens at
-    /// the same column width as the sidebar.  Pins the contract so a
-    /// future tweak to either side's literal can't silently regress the
-    /// alignment.
+    /// Worklist 9.3.2 Reopened — the inspector panel's `default_size`
+    /// must track the workspace's right-dock initial width constant
+    /// (280pt — wider than the sidebar's 200pt to accommodate
+    /// property-value pair content density).  Pins the contract so a
+    /// future tweak to either side's literal can't silently regress
+    /// the inspector's opening width.
     #[gpui::test]
-    fn default_size_matches_left_dock_initial_width(cx: &mut TestAppContext) {
+    fn default_size_matches_right_dock_initial_width(cx: &mut TestAppContext) {
         cx.update(|cx| {
             let panel = InspectorPanel::new();
             let size = panel.default_size(cx);
             assert_eq!(
                 size,
-                gpui::px(workspace::workspace::WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT),
-                "right-dock width must mirror the sidebar's initial width",
+                gpui::px(workspace::workspace::WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT),
+                "inspector panel default_size must match the workspace \
+                 right-dock initial width (280pt, distinct from the \
+                 sidebar's 200pt for content density)",
             );
         });
     }

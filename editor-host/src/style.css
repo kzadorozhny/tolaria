@@ -1,7 +1,20 @@
 /* BlockNote ships its own bundle of editor styles.  Importing it here
    lets `vite-plugin-singlefile` inline the rules into the same
-   `<style>` block as our own theme variables. */
-@import "@blocknote/react/style.css";
+   `<style>` block as our own theme variables.
+
+   Worklist 9.3.1 Reopened — must import `@blocknote/shadcn/style.css`
+   (NOT `@blocknote/react/style.css`).  The editor-host mounts
+   `@blocknote/shadcn`'s `<BlockNoteView>` (see `EditorApp.tsx`), and
+   shadcn ships 16 `.bn-shadcn`-prefixed rules that govern SVG sizing,
+   side-menu alignment, button sizing (`.bn-shadcn .bn-side-menu
+   .bn-button { padding: 0; height: 24px }`), toolbar overflow, etc.
+   Importing only `@blocknote/react/style.css` (the headless variant)
+   leaves the host with BlockNote's base layout but no `.bn-shadcn`
+   chrome — the symptom the user reported as "drag-handle styling
+   still missing" after the 9.3.1 initial closure (`fa740de6`).  The
+   shadcn style.css transitively imports the same base react styles,
+   so this swap is additive, not exclusive. */
+@import "@blocknote/shadcn/style.css";
 
 :root {
     color-scheme: light dark;
