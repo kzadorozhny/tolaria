@@ -38,6 +38,8 @@ use gpui_component::{
 use ui::tree_dump::DumpAsExt as _;
 use vault::{NoteId, Vault};
 
+use crate::NeighborhoodAnchor;
+
 /// Height of the note toolbar strip, in logical points.
 ///
 /// Pinned to React's `.breadcrumb-bar { height: 52px }`
@@ -76,6 +78,15 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
                 .map(|note| (note.is_favorite(), note.is_organized()))
         })
         .unwrap_or((false, false));
+
+    // Worklist 9.2.14 — the neighbourhood cell paints in its active
+    // state when the note-list pane is currently scoped to this note's
+    // neighbourhood.  `EnterNeighborhood` sets the anchor; any sidebar
+    // selection clears it.  Absent global (mock-mode chrome tests
+    // without the workspace's global wiring) reads as `false`.
+    let is_neighborhood_active = cx
+        .try_global::<NeighborhoodAnchor>()
+        .is_some_and(|anchor| anchor.matches(id));
 
     let stem: SharedString = path
         .file_stem()
@@ -207,10 +218,7 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         // note-list pane.  The React reference's tooltip is "Show
         // notes that link to this note" rather than "Show neighborhood
         // graph" — the row is a filter, not a graph view.  Glyph stays
-        // `IconName::Map` per the React parity reference.  Active-state
-        // colour treatment is deferred (the React surface doesn't
-        // paint one either; the visual feedback comes from the
-        // note-list itself swapping its rows).
+        // `IconName::Map` per the React parity reference.
         //
         // Worklist 9.2.3 reopened-2 — dispatched via
         // [`Window::dispatch_action`] (not `App::dispatch_action`).
@@ -223,10 +231,22 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         // `Window::dispatch_action` defers internally via `cx.defer`,
         // so the action lands AFTER the click update unwinds and the
         // App-scope handler fires as expected.
-        .child(toolbar_cell(
+        //
+        // Worklist 9.2.14 — paints the active-state glyph colour when
+        // the note-list pane is currently filtered to this note's
+        // neighbourhood.  Mirrors the star cell's `GlyphColor` pattern
+        // (worklist 9.2.11): the glyph itself carries the active
+        // signal in the theme's accent colour, no separate filled
+        // variant required (`gpui-component-assets` has no `Map`
+        // fill/outline pair).  The `NeighborhoodAnchor` global is
+        // written by the `EnterNeighborhood` handler in `tolaria::main`
+        // and cleared on the next sidebar selection.
+        .child(toolbar_cell_with_active_color(
             "note-toolbar-neighborhood",
             IconName::Map,
             "Show neighborhood",
+            is_neighborhood_active,
+            neighborhood_active_color(cx),
             |window, cx| {
                 log::info!(
                     target: "note_item::toolbar",
@@ -556,6 +576,17 @@ fn star_active_color() -> Hsla {
 /// follows light / dark mode without an extra constant.
 fn organized_active_color(cx: &App) -> Hsla {
     cx.theme().success
+}
+
+/// Active-state colour for the neighbourhood toolbar cell (worklist
+/// 9.2.14).  Tracks `theme.primary` directly so the cell paints in
+/// the theme's accent hue — the same colour the sidebar uses for the
+/// row-selection highlight, so users read "currently filtering on
+/// this note" the same way they read "currently selected sidebar
+/// row".  Theme-aware (light + dark palettes carry their own
+/// `primary` mapping) without an extra constant.
+fn neighborhood_active_color(cx: &App) -> Hsla {
+    cx.theme().primary
 }
 
 /// Glyph chosen for the organized toolbar cell at the given active
@@ -1173,5 +1204,75 @@ mod tests {
         let path = std::path::PathBuf::from("/tmp/foo/procedure-bar.md");
         let _cell = more_overflow_cell(path);
         // No panic — the Popover + PopupMenu chain constructs.
+    }
+
+    /// Worklist 9.2.14 — the neighbourhood cell's active-state colour
+    /// must paint `theme.primary` (the same accent the sidebar uses for
+    /// the selected-row highlight).  Anchors the toolbar's choice of
+    /// token so a future palette refactor that retargets the accent
+    /// can't silently desync the toolbar.
+    #[gpui::test]
+    fn neighborhood_active_color_matches_theme_primary(cx: &mut gpui::TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(|cx| {
+            let color = neighborhood_active_color(cx);
+            let expected = cx.theme().primary;
+            assert_eq!(color.h, expected.h);
+            assert_eq!(color.s, expected.s);
+            assert_eq!(color.l, expected.l);
+            assert_eq!(color.a, expected.a);
+        });
+    }
+
+    /// Worklist 9.2.14 — the toolbar must paint the neighbourhood cell
+    /// in the active state when the `NeighborhoodAnchor` global names
+    /// the same note id as the rendered toolbar, and in the muted
+    /// state otherwise.  `NeighborhoodAnchor::matches` is the single
+    /// branch the render path consults; pinning both arms here means a
+    /// future regression that drops the anchor read (or flips the
+    /// equality) surfaces as a failing assertion rather than a silent
+    /// visual desync.
+    #[test]
+    fn neighborhood_anchor_matches_only_named_id() {
+        use crate::NeighborhoodAnchor;
+        let id = NoteId::from_raw(7);
+        let other = NoteId::from_raw(99);
+        // No anchor installed — every id reads as "not active".
+        let empty = NeighborhoodAnchor::default();
+        assert!(!empty.matches(id));
+        assert!(!empty.matches(other));
+        // Anchor names `id` — only the matching id reads as active.
+        let anchored = NeighborhoodAnchor(Some(id));
+        assert!(anchored.matches(id));
+        assert!(!anchored.matches(other));
+    }
+
+    /// Worklist 9.2.14 — the neighbourhood cell helper must build
+    /// successfully in both states.  Mirrors the
+    /// `toolbar_cell_with_active_color_builds_in_both_states` shape for
+    /// the star cell — the load-bearing concern is that the
+    /// `active = true` branch wires the glyph colour through without
+    /// tripping a builder invariant.  Click behaviour is covered by
+    /// the live `EnterNeighborhood` dispatch test in
+    /// `tolaria::main::tests`.
+    #[test]
+    fn neighborhood_cell_with_active_color_builds_in_both_states() {
+        let accent: Hsla = gpui::rgb(0x155DFF).into();
+        let _on = toolbar_cell_with_active_color(
+            "note-toolbar-neighborhood",
+            IconName::Map,
+            "Show neighborhood",
+            true,
+            accent,
+            |_window, _cx| {},
+        );
+        let _off = toolbar_cell_with_active_color(
+            "note-toolbar-neighborhood",
+            IconName::Map,
+            "Show neighborhood",
+            false,
+            accent,
+            |_window, _cx| {},
+        );
     }
 }

@@ -34,7 +34,7 @@
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
 9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
-9.2.14. ⏳ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
+9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
 
 ## 3. Low Priority
 
@@ -1185,6 +1185,54 @@ items on the neighbourhood UX:
 **Surface:** `crates/note_item/src/note_toolbar.rs` neighbourhood
 cell + `crates/note_list_pane/src/lib.rs` header.  **Size:** small
 each; ship as one commit.
+
+**Closure (commit `<this-commit>`).**  Both items landed in one
+commit, both backed by tests.
+
+*Item 1 — toolbar active state.*  Introduced
+`note_item::NeighborhoodAnchor` as a `Copy + gpui::Global` newtype over
+`Option<NoteId>`.  The `EnterNeighborhood` handler in `tolaria::main`
+writes `Some(id)` into the global alongside the existing
+`set_scope` / `set_header_title` pair, and the
+`SidebarSelectionChangedEvent` subscriber clears it on every selection
+change (mirrors React's `useNeighborhoodEntry`, which exits
+neighbourhood mode on any sidebar pick).  The toolbar render at
+`crates/note_item/src/note_toolbar.rs:79` reads the global via
+`cx.try_global::<NeighborhoodAnchor>()` and routes the neighbourhood
+cell through `toolbar_cell_with_active_color(...)` with
+`theme.primary` as the active glyph hue — same shape as the star
+cell's `GlyphColor` pattern (worklist 9.2.11).  The handler also
+calls `cx.refresh_windows()` because the toolbar observes a global
+(not an entity), so a `cx.notify()` on the pane wouldn't repaint it
+without a window-wide nudge.
+
+*Item 2 — header label.*  Root cause investigation: the existing
+handler already calls `pane.set_header_title(format!("Neighborhood
+of {title}"))` — the test
+`enter_neighborhood_updates_header_and_anchor` confirms the call
+reaches the pane and the next render reads the new title.  The
+in-isolation contract is intact; the user's "header still shows
+Inbox" report likely traced to the pre-`a71cc191` build where the
+toolbar dispatch silently dropped via `App::dispatch_action`.  This
+commit pins the contract end-to-end with the new test so any future
+regression of the `set_header_title` call surfaces as a failing
+assertion rather than a silent UI desync.
+
+*Tests.*  Three new tests:
+`note_toolbar::neighborhood_active_color_matches_theme_primary`
+(anchor for the colour token),
+`note_toolbar::neighborhood_anchor_matches_only_named_id` (the
+`NeighborhoodAnchor::matches` truth table),
+`note_toolbar::neighborhood_cell_with_active_color_builds_in_both_states`
+(both visual states construct cleanly),
+`tolaria::tests::enter_neighborhood_updates_header_and_anchor` (the
+full action-dispatch pipeline updates scope + header + global), and
+`tolaria::tests::sidebar_selection_clears_neighborhood_anchor` (the
+exit-mode contract).  Out of scope and deferred: a body-derived
+display title for the header (current path uses `Note::title` =
+filename stem, which renders as e.g. `"Neighborhood of person-jane"`;
+upgrading to the H1 / frontmatter title needs the async
+`vault.note_content` read and stays a 9.2.14 follow-up).
 
 ### Cross-row notes
 

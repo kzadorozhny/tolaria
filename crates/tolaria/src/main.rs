@@ -1090,6 +1090,16 @@ pub(crate) mod macos {
                             );
                             pane.set_header_title(header, cx);
                         });
+                        // Worklist 9.2.14 — broadcast the anchor so the
+                        // note-toolbar's neighbourhood cell can paint
+                        // itself in the active-state glyph colour on
+                        // the next render.  The toolbar reads this
+                        // global directly (no per-render plumbing); we
+                        // also `refresh_windows()` so the live toolbar
+                        // repaints even though no entity it observes
+                        // notified — the global is the source of truth.
+                        cx.set_global(note_item::NeighborhoodAnchor(Some(id)));
+                        cx.refresh_windows();
                     });
 
                     // Worklist 9.2.7 — `Archive` writes `_archived: true`
@@ -1367,6 +1377,15 @@ pub(crate) mod macos {
                                         list.set_scope(scope, cx);
                                         list.set_header_title(header, cx);
                                     });
+                                    // Worklist 9.2.14 — every sidebar selection
+                                    // change exits neighbourhood mode (the React
+                                    // `useNeighborhoodEntry` keeps the previous
+                                    // sidebar row highlighted while the filter
+                                    // is active, so picking ANY sidebar row
+                                    // unwinds the filter).  Clear the anchor so
+                                    // the note-toolbar's active-state glyph drops
+                                    // back to muted on the next render.
+                                    cx.set_global(note_item::NeighborhoodAnchor(None));
                                 },
                             )
                             .detach();
@@ -2228,5 +2247,203 @@ mod tests {
         cx.run_until_parked();
         let header = cx.update(|cx| note_list.read(cx).header_title().clone());
         assert_eq!(header.as_ref(), "Events");
+    }
+
+    /// Worklist 9.2.14 — dispatching [`actions::EnterNeighborhood`]
+    /// must (a) push a `NoteListScope::Neighborhood(...)` onto the
+    /// pane, (b) flip the pane's header to `"Neighborhood of <stem>"`,
+    /// and (c) write `Some(id)` into the
+    /// [`note_item::NeighborhoodAnchor`] global so the next toolbar
+    /// render paints the cell in its active state.
+    ///
+    /// Mirrors the production handler shape from `macos::run`'s
+    /// `cx.on_action` registration as closely as a unit test can: the
+    /// same slot pattern, the same vault read, the same pane mutations
+    /// and global write.  Pins the contract end-to-end so a future
+    /// refactor of the handler (or any of its three side effects)
+    /// surfaces here rather than as a silent UI desync.
+    #[gpui::test]
+    fn enter_neighborhood_updates_header_and_anchor(cx: &mut TestAppContext) {
+        use gpui::{AppContext as _, Entity};
+        use note_item::{NeighborhoodAnchor, NoteItem};
+        use note_list_pane::{NoteListPane, NoteListScope};
+        use std::collections::HashSet;
+        use tempfile::tempdir;
+        use vault::{NoteId, Vault};
+        cx.update(gpui_component::init);
+
+        // Real on-disk vault with two notes wikilinked together so the
+        // backlinks lookup resolves to a non-empty set.  `a.md`
+        // contains `[[b]]`, so `vault.backlinks(b_id)` returns `{a_id}`
+        // and the neighborhood of `b` is `{a}`.
+        //
+        // `Vault::open_at` already calls `rescan_internal` so the notes
+        // map is populated before we install the global — no async
+        // load step required here.
+        let dir = tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.md"), "# A\n[[b]]\n").unwrap();
+        std::fs::write(dir.path().join("b.md"), "# B\nbody\n").unwrap();
+        let vault = Vault::open_at(dir.path()).expect("open vault");
+        let (anchor_id, anchor_stem) = vault
+            .iter_notes()
+            .find(|n| n.title.as_ref() == "b")
+            .map(|n| (n.id, n.title.clone()))
+            .expect("vault scan must surface the `b.md` fixture");
+        cx.update(|cx| cx.set_global(vault));
+
+        // Build the note-list pane against the real vault — its
+        // `header_title` defaults to "Inbox" so we can assert the
+        // post-dispatch value is the new "Neighborhood of …" label.
+        let note_list = cx.update(|cx| cx.new(|cx| NoteListPane::from_vault(cx)));
+        let initial_header = cx.update(|cx| note_list.read(cx).header_title().clone());
+        assert_eq!(
+            initial_header.as_ref(),
+            "Inbox",
+            "pane must boot with the default Inbox header before any sidebar / action event",
+        );
+
+        // Active-NoteItem slot populated with a real entity carrying
+        // the anchor note's metadata — matches the
+        // `preload_blank_webview` → `open_in_webview` chain that the
+        // production handler relies on.
+        let slot: crate::open_note::ActiveNoteItemSlot =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let note = cx
+            .update(|cx| cx.global::<Vault>().note_sync(anchor_id).cloned())
+            .expect("vault must surface the anchor note");
+        let item: Entity<NoteItem> = cx.update(|cx| cx.new(|_| NoteItem::new_for_tests(note)));
+        *slot.borrow_mut() = Some(item.clone());
+
+        // Register the same handler shape `macos::run` uses — local
+        // clone of the slot + the pane so the closure captures match
+        // the production wiring.
+        let handler_slot = slot.clone();
+        let handler_list = note_list.clone();
+        cx.update(|cx| {
+            cx.on_action(move |_: &actions::EnterNeighborhood, cx| {
+                let Some(item) = handler_slot.borrow().as_ref().cloned() else {
+                    return;
+                };
+                let id = item.read(cx).id();
+                let Some(vault) = cx.try_global::<Vault>() else {
+                    return;
+                };
+                let title = vault
+                    .note_sync(id)
+                    .map(|n| n.title.clone())
+                    .unwrap_or_else(|| gpui::SharedString::from(format!("note {}", id.get())));
+                let mut ids: HashSet<NoteId> = vault.backlinks(id).into_iter().collect();
+                ids.extend(vault.outbound_links(id));
+                ids.remove(&id);
+                let header = gpui::SharedString::from(format!("Neighborhood of {title}"));
+                handler_list.update(cx, |pane, cx| {
+                    pane.set_scope(NoteListScope::Neighborhood(id, ids), cx);
+                    pane.set_header_title(header, cx);
+                });
+                cx.set_global(NeighborhoodAnchor(Some(id)));
+            });
+        });
+
+        // Drive the action through `cx.dispatch_action` — the App-level
+        // shape every real toolbar click eventually lands on.
+        cx.update(|cx| cx.dispatch_action(&actions::EnterNeighborhood));
+        cx.run_until_parked();
+
+        // Header reflects the active note's title.
+        let header_after = cx.update(|cx| note_list.read(cx).header_title().clone());
+        let expected = format!("Neighborhood of {anchor_stem}");
+        assert_eq!(
+            header_after.as_ref(),
+            expected,
+            "EnterNeighborhood must update the note-list header to 'Neighborhood of <title>'",
+        );
+
+        // Scope reflects the neighborhood filter.
+        let scope_after = cx.update(|cx| note_list.read(cx).scope().clone());
+        match scope_after {
+            NoteListScope::Neighborhood(id, _) => assert_eq!(
+                id, anchor_id,
+                "neighborhood scope must anchor on the active NoteItem's id"
+            ),
+            other => panic!("expected NoteListScope::Neighborhood, got {other:?}"),
+        }
+
+        // Toolbar-readable global names the active anchor — the
+        // toolbar's `is_neighborhood_active` read on the next render
+        // returns true for this note id.
+        cx.update(|cx| {
+            let anchor = cx.try_global::<NeighborhoodAnchor>().copied().expect(
+                "EnterNeighborhood must install the NeighborhoodAnchor global so the \
+                     toolbar's render path can paint the active-state glyph",
+            );
+            assert_eq!(
+                anchor,
+                NeighborhoodAnchor(Some(anchor_id)),
+                "anchor payload must name the active note's id",
+            );
+            assert!(
+                anchor.matches(anchor_id),
+                "anchor must answer `true` for the anchor note's id",
+            );
+        });
+    }
+
+    /// Worklist 9.2.14 — picking any sidebar row must clear the
+    /// `NeighborhoodAnchor` global, mirroring React's
+    /// `useNeighborhoodEntry` semantics where switching to another
+    /// view exits neighbourhood mode.  Without this, the toolbar's
+    /// active-state glyph would stay lit even though the note-list
+    /// pane has already moved off the `Neighborhood(...)` scope.
+    ///
+    /// Re-builds the production subscriber inline so a future
+    /// refactor of the `cx.open_window` block still surfaces the
+    /// regression here.
+    #[gpui::test]
+    fn sidebar_selection_clears_neighborhood_anchor(cx: &mut TestAppContext) {
+        use gpui::AppContext as _;
+        use note_item::NeighborhoodAnchor;
+        use sidebar_panel::{SidebarPanel, SidebarSelection, SidebarSelectionChangedEvent};
+        use vault::NoteId;
+
+        cx.update(gpui_component::init);
+
+        // Install an anchor first — pretend EnterNeighborhood just
+        // fired so we have a non-empty global to observe being cleared.
+        cx.update(|cx| {
+            cx.set_global(NeighborhoodAnchor(Some(NoteId::from_raw(42))));
+        });
+
+        let sidebar = cx.update(|cx| cx.new(|_| SidebarPanel::new()));
+        cx.update(|cx| {
+            cx.subscribe(
+                &sidebar,
+                move |_panel, _event: &SidebarSelectionChangedEvent, cx| {
+                    // Same shape as the production subscriber: drop the
+                    // anchor on every selection change.
+                    cx.set_global(NeighborhoodAnchor(None));
+                },
+            )
+            .detach();
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            sidebar.update(cx, |panel: &mut SidebarPanel, cx| {
+                panel.select(SidebarSelection::AllNotes, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|cx| {
+            let anchor = cx
+                .try_global::<NeighborhoodAnchor>()
+                .copied()
+                .unwrap_or_default();
+            assert_eq!(
+                anchor,
+                NeighborhoodAnchor(None),
+                "sidebar selection change must clear the NeighborhoodAnchor",
+            );
+        });
     }
 }

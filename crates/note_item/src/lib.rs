@@ -260,6 +260,46 @@ impl LinkTarget {
 }
 
 // ---------------------------------------------------------------------------
+// Toolbar globals
+// ---------------------------------------------------------------------------
+
+/// Anchor of the note-list pane's active neighbourhood-mode filter, or
+/// `None` when the pane is in any other scope.  Updated by the
+/// `EnterNeighborhood` action handler in `tolaria::main` whenever the
+/// user activates neighbourhood mode, and cleared whenever the sidebar
+/// selection changes (which moves the pane back to a regular scope).
+///
+/// The toolbar's neighbourhood cell reads this global on every render
+/// and paints itself in the active-state treatment when the anchor's
+/// id matches the toolbar's note id — mirrors the star (9.2.11) and
+/// organized (9.2.10) cells, except the source of truth is the
+/// pane's scope rather than a per-note frontmatter flag.
+///
+/// `gpui::Global` is the lightest cross-crate pipe for transient UI
+/// state that doesn't belong to a single entity: the workspace
+/// (`tolaria::main`) writes through `cx.set_global`, and chrome
+/// surfaces (`note_toolbar::render`) read through `cx.try_global` from
+/// any context that holds an `&App`.  Worklist 9.2.14.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NeighborhoodAnchor(pub Option<NoteId>);
+
+impl NeighborhoodAnchor {
+    /// `true` if the toolbar's `id` matches the active anchor.  Returns
+    /// `false` when no neighbourhood mode is active (the common case).
+    ///
+    /// Takes `self` by value because [`NeighborhoodAnchor`] is `Copy` —
+    /// the borrow form would force callers (the toolbar render path)
+    /// to chain through a temporary that the borrow checker often
+    /// can't see through cleanly.
+    #[must_use]
+    pub fn matches(self, id: NoteId) -> bool {
+        self.0 == Some(id)
+    }
+}
+
+impl gpui::Global for NeighborhoodAnchor {}
+
+// ---------------------------------------------------------------------------
 // Outcome
 // ---------------------------------------------------------------------------
 
