@@ -14,7 +14,7 @@
 
 ## 1. Blockers
 
-10.1.1. WKWebView z-order fix
+10.1.1. ⏳ WKWebView z-order fix
 
 ## 2. High Priority
 
@@ -25,6 +25,8 @@
 10.2.5. `vault_lifecycle` — open / switch / rename-detection state machine
 
 ## 3. Low Priority
+
+10.3.1. address review feedback from `review.md`
 
 ---
 
