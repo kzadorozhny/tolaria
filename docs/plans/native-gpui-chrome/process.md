@@ -4,7 +4,7 @@ Workflow, naming, and verification rules that apply throughout the ADR-0115 migr
 
 ## Top-level invariants
 
-1. **Worklist row titles are written once and never edited.**  They exist to be scanned and recognised at a glance by the user.  The *only* permitted in-place edit to an existing row is the leading status emoji (✅, ⏳, ➡️, ❌).  All context — commit hashes, deferral targets, won't-fix reasons, root-cause notes, design alternatives — goes to `### Annotations and details § #### <phase>.<severity>.<number>`, never to the row line itself.
+1. **Worklist row titles are written once and never edited.**  They exist to be scanned and recognised at a glance by the user.  The *only* permitted in-place edit to an existing row is the leading status emoji (✅, ⏳, ➡️, ❌).  All context — commit hashes, deferral targets, won't-fix reasons, root-cause notes, design alternatives — goes to `### Annotations and details § #### <phase>.<severity>.<number>`, never to the row line itself.  Those four status emojis live ONLY on worklist row lines — never in commit subjects, commit bodies, branch names, or PR titles (see `feedback_no_status_emoji_in_commits.md`).
 2. **Row IDs are stable.**  Numbers are assigned once when a row is added and never renumber even if the row is reopened, deferred, or won't-fixed.
 3. **Three-segment row IDs.**  Every worklist row reads as `<phase>.<severity>.<number>` (e.g. `9.2.7`).  The phase prefix is written on the row even though the row lives inside a phase-scoped file, so the same identifier reads correctly in commit messages, cross-phase references, and out-of-context citations.
 4. **User-driven verification.**  Every ✅ is validated live by the user in the running app.  Subagents never auto-validate via periscope or any other oracle (`feedback_manual_validation.md`).
@@ -141,6 +141,7 @@ Cross-references to the durable-memory entries that govern subagent dispatch.  T
 - `feedback_periscope_followup_test.md` — every periscope-driven UI finding gets a `#[gpui::test]` regression in the same commit.
 - `feedback_orchestrator_post_dispatch_verify.md` — every dispatch ends with `git status --short` + `git log --oneline -3` + (if worktree) FF-merge + `git worktree remove -f -f`.  Subagents skip the commit step ~80% of the time; worktrees leak ~10GB of `target/` cache each.
 - `feedback_gpui_dispatch_from_click_closure.md` — when an action is dispatched from inside an `on_click` closure, use `window.dispatch_action(Box::new(action), cx)` NOT `cx.dispatch_action(&action)`; the latter silently fails because we're already inside the window's update.
+- `feedback_no_status_emoji_in_commits.md` — the worklist status emojis (`⏳ ✅ ➡️ ❌`) live on worklist row lines only; never in commit subjects, commit bodies, or branch names.  "stamp 9.2.7 ⏳" → "pick up 9.2.7" or "stamp 9.2.7 in progress" in commit subjects.
 
 ### Pre-dispatch hygiene check
 
@@ -164,6 +165,27 @@ Every code-writing dispatch carries these sections in order:
 6. **Worktree contract** (verbatim, when the dispatch lands in a worktree — see below).
 7. **Critical files.**  Absolute paths with line numbers for the load-bearing references.
 8. **Report back template.**  Final commit sha(s), files changed, test delta, MAY findings.
+
+### Parallel dispatch is the default
+
+Before every code-writing dispatch, scan the pending row queue for **disjoint-scope rows** that can run concurrently.  If 2-3 candidates exist, send them as **multiple `Agent` tool calls in a single response** so the harness spawns them in parallel.  Wall-clock time then equals the slowest row, not the sum.
+
+Observed in Phase 9: ~15-18 subagent dispatches, all serialized 1-at-a-time.  Missed parallelism opportunities: at least 3-5 row pairs that touched disjoint files / stacks.  Going forward, the orchestrator's first thought at every "what's next" gate is "what 2-3 rows could run together?", not "which single row is next?".
+
+**Disjoint-scope decision matrix:**
+
+| Scope shape | Parallel? |
+|---|---|
+| Rust crate A + TypeScript editor-host work | ✅ always |
+| Rust crate A + Rust crate B with zero shared files | ✅ always |
+| Docs-only edits + code work | ✅ always |
+| Two rows both touching `Cargo.lock` | ⚠️ serialize the lock-file write |
+| Two rows both adding `editor_bridge` variants | ⚠️ serialize the enum addition |
+| Two rows in same crate, different files | ⚠️ usually safe; verify no shared struct definitions |
+| Row B depends on Row A's output (e.g. `vault::backlinks` from A, consumed by B) | ❌ must serialize |
+| Two rows editing the same function | ❌ must serialize |
+
+Cap: **3 concurrent dispatches** when the disjoint-scope check passes.  Each lands in its own worktree (per the worktree contract below), so cross-dispatch interference is impossible at the working-tree level.
 
 ### Worktree contract (paste verbatim into every code-writing dispatch)
 
