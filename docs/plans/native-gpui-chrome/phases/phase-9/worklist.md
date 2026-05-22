@@ -1357,7 +1357,7 @@ at 94pt.  User's hint: "Read the ResizablePanel source to
 understand the behavior" — exactly: the always-push + invisible
 path doesn't set state, so subsequent ratio math pollutes it.
 
-**Re-closure-4 (commit `<this-commit>`).**  Hold the
+**Re-closure-4 (commit `144a8884`).**  Hold the
 `ResizableState` externally on `TolariaWorkspace`
 (`main_resizable_state: Entity<ResizableState>` — see field doc
 for the full rationale).  Bind via the `with_state(&entity)`
