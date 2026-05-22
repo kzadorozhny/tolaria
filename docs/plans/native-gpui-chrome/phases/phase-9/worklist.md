@@ -39,7 +39,7 @@
 
 ## 3. Low Priority
 
-9.3.1. Block editor drag handles do not Cary React side styling
+9.3.1. ⏳ Block editor drag handles do not Cary React side styling
 9.3.2. ✅ Inspector panel should open at least the default width of the sidebar
 9.3.3. ✅ Inspector panel header — same height as note header, title reads `Properties`
 9.3.4. ✅ Inspector open/close button migrates to the panel header when open
