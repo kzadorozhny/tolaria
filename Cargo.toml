@@ -69,13 +69,6 @@ raw-window-handle = "0.6"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
-# Direct dep with `objc2-core-foundation` feature so `CALayer::setZPosition`
-# is available — `objc2-app-kit` pulls `objc2-quartz-core` in transitively
-# but only enables `CALayer` / `CADisplayLink` / `CAMediaTimingFunction`,
-# leaving every `CGFloat`-returning setter (including `setZPosition`,
-# needed by `note_item::macos::fix_overlay_compositing` for worklist
-# 10.1.1) cfg-gated out.
-objc2-quartz-core = { version = "0.3", features = ["CALayer", "objc2-core-foundation"] }
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"

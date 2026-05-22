@@ -1086,7 +1086,7 @@ mod macos {
         fix_draws_background(&webview_raw);
         fix_window_background(&handle);
         fix_under_page_background(&webview_raw);
-        fix_overlay_compositing(&webview_raw);
+        fix_z_order_send_to_back(&webview_raw);
 
         Ok(cx.new(|cx: &mut Context<WebView>| WebView::new(webview_raw, window, cx)))
     }
@@ -1193,140 +1193,52 @@ mod macos {
         unsafe { wk.setValue_forKey(Some(&color), ns_string!("underPageBackgroundColor")) }
     }
 
-    /// Fix 5 — Re-parent the WKWebView as a sibling of GPUI's `native_view`
-    /// under `contentView`, then push its layer behind via `zPosition`
-    /// (worklist 10.1.1).
+    /// Fix 5 — Send WKWebView to the back of its superview's z-order
+    /// (Angle-C2 Phase 2).
     ///
-    /// **Background.** `lb-wry::WebViewBuilder::build_as_child` calls
-    /// `ns_view.addSubview(&webview)` where `ns_view` is the pointer
-    /// `raw_window_handle::AppKitWindowHandle::ns_view`, which `gpui_macos`
-    /// fills with its own *layer-hosting* `native_view` (the view whose
-    /// `makeBackingLayer` returns the `CAMetalLayer` GPUI renders into) —
-    /// **not** the NSWindow's `contentView`.  So out of the box the WKWebView
-    /// is a *child* of the Metal-hosting view, which makes WebView's
-    /// `CALayer` a sublayer of the `CAMetalLayer`.  Per Core Animation's
-    /// documented compositing order (parent layer's contents draw first,
-    /// then sublayers from back to front), the WebView pixels *always*
-    /// painted over GPUI's Metal-drawn content inside the WebView's frame —
-    /// invisibly hiding every `deferred()`-painted overlay (tooltips,
-    /// popovers, slash menu, dialog stack) that anchored over the editor
-    /// body.  Earlier Phase 8 "send to back" reorders happened within
-    /// `native_view`'s own subview array, where WebView was the sole
-    /// subview, so they were no-ops for visible compositing.
+    /// `lb-wry`'s `WebViewBuilder::build_as_child` adds the WKWebView as a
+    /// sibling NSView under the GPUI window's contentView, *above* GPUI's
+    /// Metal layer in the subview stack.  That is why pre-Phase-2 every GPUI
+    /// surface that crossed the WebView rect (tooltips, popups, scrollbars,
+    /// note-toolbar) got occluded.
     ///
-    /// **Fix.** Re-parent the WebView from `native_view` to `contentView`,
-    /// then add it at `NSWindowAbove` so AppKit `hitTest:withEvent:` finds
-    /// the WebView *first* for editor-body clicks (NSView hit-test traverses
-    /// subviews front-to-back, by array position) — keeping native editor
-    /// interactivity intact.  Then set the WebView's `CALayer.zPosition` to
-    /// a negative value so Core Animation composites the WebView's layer
-    /// *behind* `native_view`'s `CAMetalLayer` sibling.  Net effect:
-    ///   * Visual: GPUI overlays painted into the Metal layer composite *on
-    ///     top of* the WebView pixels even when anchored inside the editor
-    ///     frame — the worklist 10.1.1 bug.
-    ///   * Events: AppKit hit-test traverses subviews front-to-back; with
-    ///     WebView in front, editor-body clicks route to the WebView (typing
-    ///     in BlockNote keeps working), and clicks outside the WebView frame
-    ///     cascade to `native_view` for GPUI to handle.
+    /// This helper reorders the WKWebView to the bottom of its superview
+    /// via `[parent addSubview:wkWebView positioned:NSWindowBelow
+    /// relativeTo:nil]`, which AppKit interprets as "place this view below
+    /// every other sibling".  Combined with Phase 1's transparent NSWindow
+    /// (`WindowBackgroundAppearance::Transparent`) and the matching
+    /// `clearColor` fill in [`fix_window_background`], GPUI chrome composites
+    /// naturally on top of the WebView — no per-tooltip overlay machinery
+    /// required (Phase 3 reverts those call sites).
     ///
-    /// **Known limitation (handled in a follow-up row).** Because the
-    /// AppKit-level hit test is purely geometric (it has no idea where
-    /// GPUI's `deferred()` overlays paint), clicks landing on a GPUI overlay
-    /// that *anchors inside the editor body* (e.g. a popover that expands
-    /// downward from a toolbar trigger into the editor area) currently
-    /// route to the WebView instead of the overlay — the overlay paints
-    /// correctly but isn't interactive in that region.  Tracked alongside
-    /// the dialog-stack work; the eventual fix is either an overlay-region
-    /// registry the hit-test consults or a child `NSPanel` for surfaces
-    /// that need editor-body interactivity.
-    ///
-    /// If the WebView has no `superview` (teardown race) or `contentView`
-    /// is unreachable, the call is a no-op and logs a warning.
-    fn fix_overlay_compositing(webview: &wry::WebView) {
+    /// If the WebView has no `superview` yet (would only happen during a
+    /// teardown race), the call is a no-op and logs a warning.
+    fn fix_z_order_send_to_back(webview: &wry::WebView) {
         let wk: objc2::rc::Retained<wry::WryWebView> = webview.webview();
-        // SAFETY-scoped invariants for the `unsafe { wk_view.superview() }`
-        // calls below (`addSubview`, `layer`, `setZPosition`, `zPosition`
-        // are safe wrappers in objc2-app-kit 0.3.2 / objc2-quartz-core
-        // 0.3.2 and don't need an `unsafe` block): runs on the main
-        // thread during `spawn_webview` on a freshly-built WKWebView
-        // whose AppKit graph has just been mounted into a layer-hosting
-        // parent NSView (GPUI's `native_view`), and the `Retained`
-        // values we capture are not aliased elsewhere.  `superview` is
-        // documented to return `nil` only when the view is unparented;
-        // we handle every nil branch explicitly.  Each `superview()`
-        // call returns an independent `Retained<NSView>`, so re-calling
-        // it in the post-condition assert below is safe and does not
-        // alias the bindings captured here.
-
-        // `wry::WryWebView` derefs to `NSView` via the objc2 class
-        // hierarchy; rebind explicitly so the method signatures below
-        // resolve unambiguously against the `NSView` impl.
-        let wk_view: &NSView = &wk;
-        // Each `superview()` call returns an independent `Retained<NSView>`,
-        // so re-calling it in the post-condition assert below is safe and
-        // does not alias the bindings captured here.
-        let Some(native_view) = (unsafe { wk_view.superview() }) else {
-            log::warn!(
-                "note_item::fix_overlay_compositing: WKWebView has no superview; \
-                 skipping re-parent (overlays will paint behind the editor body)"
-            );
-            return;
-        };
-        let Some(content_view) = (unsafe { native_view.superview() }) else {
-            log::warn!(
-                "note_item::fix_overlay_compositing: native_view has no superview; \
-                 skipping re-parent (overlays will paint behind the editor body)"
-            );
-            return;
-        };
-        // Re-parent: front-of-contentView (so hitTest finds it before
-        // native_view) but z-pushed behind via CALayer.zPosition (so
-        // CoreAnimation composites the Metal layer above it).
-        //
-        // `addSubview:positioned:Above relativeTo:nil` is the documented
-        // AppKit idiom for "place at the end of `contentView.subviews`"
-        // (= top of z-order = first to be visited by `hitTest:`).
-        content_view.addSubview_positioned_relativeTo(wk_view, NSWindowOrderingMode::Above, None);
-        let Some(wk_layer) = wk_view.layer() else {
-            log::warn!(
-                "note_item::fix_overlay_compositing: WKWebView has no layer; \
-                 skipping zPosition push (overlays will paint behind the editor body)"
-            );
-            return;
-        };
-        // -1.0 is enough to drop the WebView behind any sibling whose
-        // zPosition is the default 0.0 (i.e. `native_view`'s Metal
-        // layer).  The exact magnitude doesn't matter — Core Animation
-        // sorts sibling layers by `zPosition`, then by sublayer-array
-        // index for ties; any strictly-negative value wins.
-        wk_layer.setZPosition(-1.0);
-
-        // Debug-only post-condition checks pinning the worklist 10.1.1
-        // invariant so any future refactor that re-introduces the
-        // sub-layer parenting (or drops the zPosition push) trips
-        // immediately on the next debug `spawn_webview`.  Release builds
-        // skip the asserts — the warnings on the early-return branches
-        // above already cover the recoverable cases.
-        debug_assert!(
-            unsafe { wk_view.superview() }.as_ref().is_some_and(|sv| {
-                // `objc2` 0.6 doesn't expose `Retained::ptr_eq`; compare
-                // the raw pointers via `Retained::as_ptr`.  Pointer
-                // identity *is* NSView identity for AppKit, so this is
-                // exactly the check we want.
-                std::ptr::eq(
-                    objc2::rc::Retained::as_ptr(sv),
-                    objc2::rc::Retained::as_ptr(&content_view),
-                )
-            }),
-            "fix_overlay_compositing post-condition: WebView superview must be contentView \
-             (was re-parented out of native_view)"
-        );
-        debug_assert!(
-            wk_layer.zPosition() < 0.0,
-            "fix_overlay_compositing post-condition: WebView layer zPosition must be < 0 \
-             (got {}) — Metal layer needs to composite above the WebView",
-            wk_layer.zPosition(),
-        );
+        // SAFETY: Same threading and aliasing guarantees as the other
+        // `fix_*` helpers in this module: runs on the main thread during
+        // `spawn_webview` on a freshly-built WKWebView whose AppKit graph
+        // has just been mounted into the window contentView, and the
+        // returned `Retained` values are not aliased elsewhere.  `superview`
+        // is documented to return `nil` only when the view is unparented,
+        // which we handle explicitly.  `addSubview:positioned:relativeTo:`
+        // with `NSWindowOrderingMode::Below` and `relativeTo: nil` is the
+        // documented AppKit way to push a subview to the bottom of its
+        // sibling stack without removing/re-inserting it.
+        unsafe {
+            // `wry::WryWebView` derefs to `NSView` via the objc2 class
+            // hierarchy; pass it explicitly as an `&NSView` to keep the
+            // method signatures unambiguous.
+            let wk_view: &NSView = &wk;
+            let Some(parent) = wk_view.superview() else {
+                log::warn!(
+                    "note_item::fix_z_order_send_to_back: WKWebView has no superview; \
+                     skipping z-order reversal (Phase 2 effect will be absent)"
+                );
+                return;
+            };
+            parent.addSubview_positioned_relativeTo(wk_view, NSWindowOrderingMode::Below, None);
+        }
     }
 }
 

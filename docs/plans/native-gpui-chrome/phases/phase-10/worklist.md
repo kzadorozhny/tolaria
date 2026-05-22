@@ -14,7 +14,7 @@
 
 ## 1. Blockers
 
-10.1.1. ✅ WKWebView z-order fix
+10.1.1. ⏳ WKWebView z-order fix
 10.1.2. ToggleElementInspector update failed: window not found
 
 ## 2. High Priority
@@ -27,7 +27,7 @@
 
 ## 3. Low Priority
 
-10.3.1. ✅ address review feedback from `review.md`
+10.3.1. ✅ address review feedback from `review.md` (first pass) — see annotation below for the five per-fix shas
 
 ---
 
@@ -158,58 +158,57 @@ verification through periscope today.
 back up after (a) confirms which overlays we're covering and (b)
 picks the approach.
 
-**2026-05-22 fix landed (re-parent path, user-picked).**
+**2026-05-22 re-parent attempt landed at `3cdd2f66` then reverted.**
 
-User manually confirmed (a) — "toolbar More popover, tooltips all
-definitely are drawn under the web view" — and picked candidate (1):
-re-parent WKWebView as sibling of `native_view` under `contentView`.
+Implemented candidate (1) in `note_item::macos::fix_overlay_compositing`:
+walked `wk_view.superview().superview()` to reach `contentView`, then
+`addSubview:positioned:Above relativeTo:nil` + `wk_layer.setZPosition(-1.0)`.
+User-confirmed result on a fresh debug build:
 
-Implementation in `crates/note_item/src/lib.rs` —
-`fix_overlay_compositing` (replaces the no-op
-`fix_z_order_send_to_back`):
+- ✅ Toolbar More popover, tooltips, every GPUI overlay now composites
+  *above* the editor body.  The visual layer-ordering bug was fixed.
+- ❌ WKWebView's pixels stopped rendering.  The editor area is blank
+  (the note still loads — `vault.save` IPC fires on open — but the
+  rendered DOM never paints visibly).  Reverting `workspace.rs` root
+  `.bg(theme.background)` and forcing `contentView.setWantsLayer(YES)`
+  did not help; same blank editor.
 
-1. `wk_view.superview()` → `native_view` (GPUI's Metal-hosting view).
-2. `native_view.superview()` → `contentView` (NSWindow's content
-   view).
-3. `content_view.addSubview_positioned_relativeTo(wk_view,
-   NSWindowOrderingMode::Above, None)` — re-parents the WebView to be
-   the *front-most* subview of `contentView` (so AppKit `hitTest:`
-   walks subviews back-to-front and finds the WebView first for
-   editor-body clicks; native editor interactivity intact).
-4. `wk_view.layer().setZPosition(-1.0)` — pushes the WebView's
-   `CALayer` behind `native_view`'s sibling `CAMetalLayer` for Core
-   Animation's sibling-layer ordering pass.  GPUI overlays painted
-   into the Metal layer now composite above the WebView even when
-   anchored inside the editor frame.
+Hypothesis (not yet verified): WKWebView's `CALayer` is a remote-layer
+client tied to its initial parent.  Re-parenting via
+`addSubview:positioned:relativeTo:` survives the NSView graph move but
+the remote-CALayer / WebKit GPU-process surface either (a) doesn't
+follow the move and ends up off-screen, or (b) is composited in a
+3D-flattening pass that hides it when its `zPosition` is non-zero
+under a non-3D `contentView` layer.  Either is plausible; both would
+need a more aggressive AppKit/CALayer trace than this session could
+budget.
 
-Side dep: `Cargo.toml` adds `objc2-quartz-core = { version = "0.3",
-features = ["CALayer", "objc2-core-foundation"] }` so
-`CALayer::setZPosition` (cfg-gated on `objc2-core-foundation`) is in
-scope — `objc2-app-kit` pulls `objc2-quartz-core` transitively but
-only enables `CALayer` / `CADisplayLink` / `CAMediaTimingFunction`,
-leaving every `CGFloat`-returning setter (including `setZPosition`)
-cfg'd out.
+**Reverted at the next commit.**  Phase 8's original
+`fix_z_order_send_to_back` is back in place — overlays anchored inside
+the editor body remain hidden, but the editor renders again.
 
-Debug-only post-condition `debug_assert!`s in the helper pin the
-invariant so any future refactor that re-introduces sub-layer
-parenting (or drops the zPosition push) trips immediately on the
-next debug `spawn_webview`.  Release builds skip the asserts —
-the warnings on the early-return branches already cover the
-recoverable cases.
+*Re-ranked candidates for the next attempt:*
 
-Known limitation (deferred to a follow-up row): the AppKit-level hit
-test is purely geometric (no awareness of where GPUI's `deferred()`
-overlays paint), so clicks landing on an overlay anchored *inside*
-the editor body still route to the WebView instead of the overlay.
-The overlay paints correctly but isn't interactive in that region.
-Eventual fix is either an overlay-region registry the hit-test
-consults or a child `NSPanel` for surfaces that need editor-body
-interactivity (the `dialog_stack` work in 10.4 will surface the right
-shape).
-
-User manually validated via `pnpm tauri`-equivalent run of
-`./target/debug/tolaria --vault demo-vault-v2 --theme light` —
-toolbar More popover + tooltips now paint above the editor body.
+1. **Child `NSPanel` (was approach 2).**  Now the leading candidate.
+   Re-introduce a minimal child-window mechanism for the overlay
+   surfaces that actually need to anchor over the editor body
+   (popovers + dialogs, possibly slash-menu).  Don't try to revive the
+   full `OverlayTooltipExt` — tooltips already work outside the editor
+   frame, and Phase 12 needs the child-window infrastructure regardless.
+2. **CALayer mask on WKWebView**, updated when overlays show.  Mask
+   out the overlay region from the WebView's `CALayer.mask` so the
+   transparent mask reveals the Metal-drawn overlay underneath.  No
+   re-parent.  Per-overlay-show: compute the union of overlay rects and
+   set as the inverse mask.  Risk: WKWebView may use its own `mask`
+   internally for accessibility / scroll-clipping — verify before
+   committing.
+3. **Re-parent with WebView in front (no zPosition trick).**  Same
+   re-parent as the reverted attempt, but order WebView at the FRONT
+   in subview order *without* the `zPosition = -1` push.  Visual
+   ordering breaks (WebView still on top), but the rendering survives.
+   Useless on its own, but worth re-trying with `contentView` made
+   layer-backed to see whether the issue is `zPosition` interacting
+   badly with the non-layer-backed default.
 
 #### 10.2.1
 
