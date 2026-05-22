@@ -26,7 +26,7 @@
 
 ## 3. Low Priority
 
-10.3.1. address review feedback from `review.md`
+10.3.1. ✅ address review feedback from `review.md` (first pass) — sha tbd
 
 ---
 
@@ -160,3 +160,65 @@ picks the approach.
 #### 10.2.1
 
 Consumed by `actions` and Phase 12.1 `command_palette`
+
+#### 10.3.1
+
+First pass — five MUST / SHOULD findings from
+[`review.md`](review.md) landed as separate commits.  Each fix is a
+real bug or release-readiness gate; the larger refactors flagged in
+the cross-cutting themes (foreground-thread blocking I/O, bool-pair
+→ enum migrations, log-level discipline, mutex-poison handling,
+string-typed panel keys) stay deferred to their own rows because
+they touch more code than a single review-pass should bundle.
+
+**Fixes landed:**
+
+1. `eaa05800` — `crates/tolaria/src/main.rs:420-430`,
+   `TOLARIA_BUILD_TAG` printed `git:tolaria` because `concat!`
+   silently substituted `env!("CARGO_PKG_NAME")` for the rejected
+   `option_env!("GIT_HASH")`.  Split into
+   `TOLARIA_BUILD_VERSION` + `TOLARIA_BUILD_GIT_HASH` consts and
+   compose at the format-string level.
+2. `45777a60` — `crates/workspace/src/workspace.rs:203`, magic
+   index `3` in the right-dock observer's
+   `ResizableState::resize_panel(3, …)` call was wrong for any
+   workspace that never calls `attach_note_list_column` (panel
+   vec is `[left, center, right]`, right dock at index 2).  Added
+   private `right_dock_panel_index(&self)` helper, `debug_assert!`
+   anchoring the invariant at the panel-push site, and a
+   `#[gpui::test]` pinning both arms of the conditional.
+3. `0ce2db16` — `crates/note_item/src/lib.rs:1044`,
+   `WebViewBuilder::with_devtools(true)` shipped in release.
+   Gated on `cfg!(debug_assertions)` so optimised builds drop the
+   Safari Web Inspector hook.
+4. `8bbe3501` — `crates/status_bar/src/lib.rs:697`, settings
+   gear's `on_click` called `cx.dispatch_action(&action)` from
+   inside the click frame — the active-window re-entrancy guard
+   silently dropped it in production.  Routed through
+   `window.dispatch_action(Box::new(action), cx)` and tightened
+   the existing test by activating the window first (mirrors the
+   `toolbar_window_dispatch_reaches_app_action_handler_under_nested_update`
+   fixture so the regression is actually catchable).
+5. `5e5974a8` — `crates/note_item/src/note_toolbar.rs`, dropped
+   two tombstone blocks (the "Defeered" commented-out `stub_cell`
+   call between active children and the 7-line "no stub_cell
+   callers remain" preamble) and removed the dangling `[stub_cell]`
+   rustdoc reference.
+
+**Deferred (each warrants its own worklist row):**
+
+- Foreground-thread blocking I/O in `7ced27dd`, `9a3839c9`,
+  `c1f896b3`, `13bbc646` — push to `cx.background_spawn` with
+  an event when the result is ready.
+- `bool` pairs / triples for domain state — `MenuState`,
+  organized-icon `(Option, Option, Option)`, editor
+  `raw_mode` + `wide_mode`, `right_dock_ever_opened`.
+- Log-level churn across `d209bfb0` / `148378eb` / `b1614df8` /
+  `a71cc191` / `40fd9f44` / `d9766aa5` — land at the final level
+  with a stable `target` so the gradient is env-filter-driven.
+- `expect(POISON_MSG)` on the inspector-slot mutex hit from the
+  menu-rebuild hot path (`2e666913` + `6796dc0a`) — needs
+  poison-recovery or `parking_lot::Mutex`.
+- String-typed panel keys / `SidebarSelection::Favorite(u64)`
+  vs newtype `PanelKey` / `NoteId`.
+- Lumped `// SAFETY:` invariants in `0206465d` / `a20b1295`.
