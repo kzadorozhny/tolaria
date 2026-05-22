@@ -15,6 +15,11 @@ gpui.workspace = true
 gpui-component.workspace = true
 log.workspace = true
 mock_fixtures = { path = "../mock_fixtures" }
+# Worklist 9.3.3 — the panel header strip reuses
+# `note_item::note_toolbar::NOTE_TOOLBAR_HEIGHT_PT` so the header sits
+# flush with the note toolbar's baseline.  `note_item` depends on
+# `workspace`, not on `inspector_panel`, so the edge is acyclic.
+note_item = { path = "../note_item" }
 vault = { path = "../vault" }
 workspace = { path = "../workspace" }
 

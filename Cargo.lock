@@ -3812,6 +3812,7 @@ dependencies = [
  "gpui_platform",
  "log",
  "mock_fixtures",
+ "note_item",
  "serde_json",
  "tempfile",
  "vault",

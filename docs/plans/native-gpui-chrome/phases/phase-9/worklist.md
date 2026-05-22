@@ -40,11 +40,11 @@
 ## 3. Low Priority
 
 9.3.1. Block editor drag handles do not Cary React side styling
-9.3.2. ⏳ Inspector panel should open at least the default width of the sidebar
-9.3.3. ⏳ Inspector panel header — same height as note header, title reads `Properties`
-9.3.4. ⏳ Inspector open/close button migrates to the panel header when open
-9.3.5. ⏳ Inspector toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
-9.3.6. ⏳ Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
+9.3.2. ✅ Inspector panel should open at least the default width of the sidebar
+9.3.3. ✅ Inspector panel header — same height as note header, title reads `Properties`
+9.3.4. ✅ Inspector open/close button migrates to the panel header when open
+9.3.5. ✅ Inspector toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
+9.3.6. ✅ Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
 
 ---
 
@@ -1122,6 +1122,15 @@ opening width with the user's existing left-dock muscle memory.
 Surface: `crates/inspector_panel/src/lib.rs` `default_size` impl.
 **Size:** trivial.
 
+**Closure (commit `<this-commit>`).**  Introduced a shared
+`workspace::workspace::WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT` constant
+(`200.0`) so the left dock's `.size(px(...))` paint, the right
+dock's `.size(px(...))` paint, and `InspectorPanel::default_size`
+all read from one source of truth.  The right dock used to mount at
+`px(240.0)` and the inspector panel reported `default_size` =
+`px(320.0)`; both now resolve to the sidebar's 200-pt baseline so
+the user's muscle memory carries across.
+
 #### 9.3.3
 
 **Source:** user-reported polish, 2026-05-21, with attached Image #6.
@@ -1134,6 +1143,18 @@ the panel header sits flush with the toolbar across the workspace.
 Header content: a `Properties` text label (theme.foreground, same
 weight as note-toolbar breadcrumb segments).  Surface:
 `crates/inspector_panel/src/lib.rs` render path.  **Size:** small.
+
+**Closure (commit `<this-commit>`).**  Added a 52-pt header strip
+to `InspectorPanel::render` via a private `render_header_strip`
+helper.  The strip mirrors the note-toolbar chrome
+(`theme.background` background, `border_b_1` in `theme.border`) so
+the two strips read as one continuous band across the workspace
+row.  The `Properties` label sits in the centre slot in
+`theme.foreground` at `font_semibold` weight — same weight as the
+section labels below.  Required adding `note_item = { path =
+"../note_item" }` to `inspector_panel`'s Cargo deps so the height
+constant comes from a single source of truth; the edge stays
+acyclic (`note_item → workspace`, no path back).
 
 #### 9.3.4
 
@@ -1153,6 +1174,19 @@ panel is open (read `workspace.is_right_dock_open(cx)` +
 `right_dock_panel_key == Some("inspector")` — both accessors already
 exist).  When the panel closes, the cell reappears in the toolbar.
 **Deps:** depends on `9.3.3` (header strip) shipping first.  **Size:** small.
+
+**Closure (commit `<this-commit>`).**  The header strip (added in
+`9.3.3` above) carries both buttons: `IconName::PanelRight` on the
+left, `IconName::Close` on the right, both dispatching
+`actions::ToggleInspector` via `Window::dispatch_action` (the same
+re-entrancy-safe route the `a71cc191` analysis documented).  Both
+clicks close the panel because the action is a toggle — symmetry
+the user sees as "two ways out".  The original spec called for the
+note-toolbar inspector cell to hide while the panel was open;
+worklist `9.3.5` overrode that by lifting the toolbar cell to the
+title bar entirely, so the show / hide branch is no longer needed
+— the title-bar button is the closed-state primary, this header's
+buttons are the open-state primary.
 
 #### 9.2.14
 
@@ -1306,6 +1340,20 @@ button is the closed-state affordance, the panel-header X is the
 open-state affordance.  **Size:** small.  **Deps:** none, but
 coordinate sequencing with `9.3.4`.
 
+**Closure (commit `<this-commit>`).**  Added a
+`title-bar-toggle-inspector` cell to the right cluster of
+`workspace::title_bar`, mirroring the existing
+`title-bar-toggle-sidebar` cell on the left.  Same shape (28x20-pt
+hit target, `rounded_sm`, 12 % grey hover overlay,
+`Tooltip::new("Toggle inspector")`).  Dispatches
+`actions::ToggleInspector` via `Window::dispatch_action` (the
+re-entrancy-safe route the `a71cc191` analysis pinned).  The
+note-toolbar's `note-toolbar-inspector` cell was removed in the
+same commit — title-bar = closed-state primary, panel header =
+open-state primary (per `9.3.4`).  Updated the actions docstring
+and the `tolaria::main` mount comment so future grep traces land
+on the new dispatch sites.
+
 #### 9.3.6
 
 **Source:** user-reported polish, 2026-05-21.  **Symptom:** the
@@ -1320,6 +1368,14 @@ to `debug!`.  Keep the per-handler `info!` traces at
 `tolaria::*` (those are useful when diagnosing a future regression
 and don't fire as often).  Surface: `crates/note_item/src/note_toolbar.rs`
 toolbar cells.  **Size:** trivial.
+
+**Closure (commit `<this-commit>`).**  Downgraded the three
+remaining `info!` "click registered" lines (neighborhood, raw,
+toc) at `note_item::toolbar` to `debug!`.  The fourth (inspector)
+went away with the cell removal in `9.3.5` — no log to downgrade
+there.  The per-handler `info!` traces at `tolaria::*` stay
+unchanged so a future dispatch regression still surfaces in
+production logs without the per-click noise.
 
 ### Cross-row notes
 

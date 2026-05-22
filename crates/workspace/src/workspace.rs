@@ -48,6 +48,15 @@ use ui::tree_dump::DumpAsExt as _;
 /// named constant avoids two magic numbers drifting apart.
 pub const NATIVE_TITLE_BAR_HEIGHT_PT: f32 = 34.0;
 
+/// Initial width (in logical points) of the workspace's left dock —
+/// the column the `sidebar_panel` crate paints into.  The right dock
+/// (Inspector / ToC) and the inspector panel's `default_size` both
+/// track this value so the two columns open at the same width on
+/// first mount.  Worklist 9.3.2 — the user's report flagged the
+/// right dock opening visibly narrower than the sidebar; pinning the
+/// initial width to a shared constant eliminates the drift.
+pub const WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT: f32 = 200.0;
+
 use crate::{
     dock::Dock,
     modal_layer::{ModalLayer, ModalView},
@@ -399,7 +408,7 @@ impl Render for TolariaWorkspace {
                 let mut panels: Vec<gpui_component::resizable::ResizablePanel> = Vec::new();
                 panels.push(
                     resizable_panel()
-                        .size(px(200.0))
+                        .size(px(WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT))
                         .visible(left_dock_visible)
                         .child(
                             div()
@@ -437,12 +446,18 @@ impl Render for TolariaWorkspace {
                 );
                 if let Some(right_dock) = right_dock {
                     panels.push(
-                        resizable_panel().size(px(240.0)).flex_none().child(
-                            div()
-                                .size_full()
-                                .child(right_dock)
-                                .dump_as("workspace-right-dock"),
-                        ),
+                        resizable_panel()
+                            // Worklist 9.3.2 — track the sidebar's initial
+                            // width so the right dock opens at the same
+                            // column rhythm.
+                            .size(px(WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT))
+                            .flex_none()
+                            .child(
+                                div()
+                                    .size_full()
+                                    .child(right_dock)
+                                    .dump_as("workspace-right-dock"),
+                            ),
                     );
                 }
                 // `min_h_0` + `overflow_hidden` is the classic flex

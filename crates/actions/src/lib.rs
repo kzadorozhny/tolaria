@@ -40,9 +40,11 @@ gpui::actions!(
         /// Chrome owns the dock state; the action handler in
         /// `tolaria/src/main.rs` resolves the active workspace and
         /// either attaches a fresh `InspectorPanel` or toggles an
-        /// already-attached one.  Dispatched from the note-toolbar
-        /// `note-toolbar-inspector` cell (worklist 2.18) and from
-        /// `View → Show / Hide Inspector` (`menus.rs`).  No default
+        /// already-attached one.  Dispatched from the workspace
+        /// title-bar's `title-bar-toggle-inspector` cell (worklist
+        /// 9.3.5), the inspector panel's own header toggle / close
+        /// buttons (worklist 9.3.4), and `View → Show / Hide
+        /// Properties` (`menus.rs`, worklist 9.2.15).  No default
         /// keybinding — React parity (the React `BreadcrumbBar`
         /// inspector button is mouse-only).
         ToggleInspector,

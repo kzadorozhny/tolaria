@@ -62,8 +62,9 @@ use gpui::{
     div, px, AnyElement, App, Context, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, Pixels, Render, SharedString, StatefulInteractiveElement, Styled, Window,
 };
-use gpui_component::{ActiveTheme, StyledExt as _};
+use gpui_component::{tooltip::Tooltip, ActiveTheme, IconName, StyledExt as _};
 use mock_fixtures::{MockCommit, MockGit, MockNote, MockVault};
+use note_item::NOTE_TOOLBAR_HEIGHT_PT;
 use vault::{FrontmatterValue, NoteId, Vault};
 use workspace::panel::{DockPosition, Panel};
 
@@ -1457,7 +1458,14 @@ impl Panel for InspectorPanel {
     }
 
     fn default_size(&self, _cx: &App) -> Pixels {
-        px(320.0)
+        // Worklist 9.3.2 — match the sidebar's opening width so the
+        // right dock lands on the same column rhythm the user already
+        // has muscle memory for on the left.  Tracks
+        // `workspace::workspace::WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT`
+        // (the value the left dock's `.size(...)` paints with on first
+        // mount); keeping both values in lockstep avoids the right dock
+        // opening visibly narrower than the sidebar.
+        px(workspace::workspace::WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT)
     }
 
     fn icon(&self) -> Option<&str> {
@@ -1543,6 +1551,26 @@ impl Render for InspectorPanel {
             }
         }
 
+        // Worklist 9.3.3 + 9.3.4 — header strip pinned to the same
+        // 52-pt baseline as the note toolbar (`NOTE_TOOLBAR_HEIGHT_PT`)
+        // so the inspector header sits flush with the editor's
+        // breadcrumb across the workspace.  Background + border match
+        // the note toolbar's chrome (`theme.background` + `border_b_1`
+        // in `theme.border`) so the two strips read as one continuous
+        // strip across the row.  Layout: left cluster carries the
+        // panel-right toggle that dispatches `ToggleInspector`,
+        // centre carries the `Properties` label, right cluster
+        // carries a close `X` that also dispatches `ToggleInspector`
+        // (the action is a toggle — both clicks close the panel).
+        let header_strip = render_header_strip(cx);
+
+        let sections = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .overflow_hidden()
+            .children(children);
+
         div()
             .flex()
             .flex_col()
@@ -1550,8 +1578,103 @@ impl Render for InspectorPanel {
             .overflow_hidden()
             .bg(background)
             .text_color(foreground)
-            .children(children)
+            .child(header_strip)
+            .child(sections)
     }
+}
+
+/// Render the inspector panel's header strip (worklist 9.3.3 + 9.3.4).
+///
+/// The strip is `NOTE_TOOLBAR_HEIGHT_PT`-tall and carries three
+/// children laid out left / centre / right:
+///
+/// - **Left** — a [`IconName::PanelRight`] glyph that dispatches
+///   [`actions::ToggleInspector`] on click, closing the panel.  Mirrors
+///   the React reference's in-panel toggle glyph; the title-bar's
+///   new right-side toggle (worklist 9.3.5) is the closed-state
+///   affordance, this one is the open-state affordance.
+/// - **Centre** — the `Properties` label, painted in
+///   `theme.foreground` at the same weight as the section headers
+///   below it so the user reads the strip as the panel's title bar.
+/// - **Right** — a [`IconName::Close`] glyph that also dispatches
+///   [`actions::ToggleInspector`].  Both clicks close the panel since
+///   the action is a toggle.
+///
+/// Dispatch routes through [`Window::dispatch_action`] (not
+/// `App::dispatch_action`) for the same re-entrancy reason the
+/// note-toolbar's cells route that way — the click closure runs
+/// inside an active window update, so `App::dispatch_action` would
+/// trip the `cx.windows.get_mut(id)?.take()?` re-entrancy guard and
+/// silently swallow the dispatch via `.log_err()`.  See the
+/// `note_toolbar.rs` neighbourhood-cell comment for the full story.
+///
+/// The helper takes `cx: &App` and resolves theme tokens itself rather
+/// than accepting three same-typed [`Hsla`] parameters — keeping the
+/// signature one-parameter eliminates the colour-swap footgun that
+/// three positional `Hsla` values would invite at a future call site.
+fn render_header_strip(cx: &App) -> AnyElement {
+    let theme = cx.theme();
+    let border_color = theme.border;
+    let foreground = theme.foreground;
+    let muted = theme.muted_foreground;
+    let cell_tint = gpui::hsla(0.0, 0.0, 0.5, 0.12);
+
+    let toggle_button = div()
+        .id("inspector-panel-header-toggle")
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(24.0))
+        .w(px(24.0))
+        .rounded_sm()
+        .cursor_pointer()
+        .text_color(muted)
+        .hover(move |this| this.bg(cell_tint))
+        .on_click(|_, window, cx| {
+            window.dispatch_action(Box::new(actions::ToggleInspector), cx);
+        })
+        .tooltip(|window, cx| Tooltip::new("Hide Inspector").build(window, cx))
+        .child(IconName::PanelRight);
+
+    let close_button = div()
+        .id("inspector-panel-header-close")
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(24.0))
+        .w(px(24.0))
+        .rounded_sm()
+        .cursor_pointer()
+        .text_color(muted)
+        .hover(move |this| this.bg(cell_tint))
+        .on_click(|_, window, cx| {
+            window.dispatch_action(Box::new(actions::ToggleInspector), cx);
+        })
+        .tooltip(|window, cx| Tooltip::new("Close Inspector").build(window, cx))
+        .child(IconName::Close);
+
+    let title = div()
+        .flex_1()
+        .text_sm()
+        .font_semibold()
+        .text_color(foreground)
+        .child(SharedString::new_static("Properties"));
+
+    div()
+        .id("inspector-panel-header")
+        .flex()
+        .flex_row()
+        .items_center()
+        .h(px(NOTE_TOOLBAR_HEIGHT_PT))
+        .min_h(px(NOTE_TOOLBAR_HEIGHT_PT))
+        .px(px(12.0))
+        .gap(px(8.0))
+        .border_b_1()
+        .border_color(border_color)
+        .child(toggle_button)
+        .child(title)
+        .child(close_button)
+        .into_any_element()
 }
 
 // ---------------------------------------------------------------------------
@@ -1592,6 +1715,48 @@ mod tests {
             let panel = InspectorPanel::new();
             assert_eq!(panel.position(cx), DockPosition::Right);
         });
+    }
+
+    /// Worklist 9.3.2 — the inspector panel's `default_size` must track
+    /// the workspace-level shared constant so the right dock opens at
+    /// the same column width as the sidebar.  Pins the contract so a
+    /// future tweak to either side's literal can't silently regress the
+    /// alignment.
+    #[gpui::test]
+    fn default_size_matches_left_dock_initial_width(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            let panel = InspectorPanel::new();
+            let size = panel.default_size(cx);
+            assert_eq!(
+                size,
+                gpui::px(workspace::workspace::WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT),
+                "right-dock width must mirror the sidebar's initial width",
+            );
+        });
+    }
+
+    /// Worklist 9.3.3 — the panel header strip must build cleanly when
+    /// invoked through the same `cx: &App` route the render path uses.
+    /// The full render path is covered by `panel_renders_without_panic`
+    /// (below); this pins the new helper so a future refactor that
+    /// breaks the click closure chain or the icon child surfaces as a
+    /// builder panic instead of a runtime-only regression.
+    #[gpui::test]
+    fn header_strip_helper_builds(cx: &mut TestAppContext) {
+        install_theme(cx);
+        cx.update(|cx| {
+            let _strip = super::render_header_strip(cx);
+        });
+    }
+
+    /// Worklist 9.3.3 — render must not panic with the header strip in
+    /// place.  Mirrors `title_bar::title_bar_renders` for the panel's
+    /// composite render chain (header + sections column).
+    #[gpui::test]
+    fn panel_renders_without_panic(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let _window = cx.add_window(|_window, _cx| InspectorPanel::new());
+        cx.run_until_parked();
     }
 
     /// Toggle must move a section from collapsed → expanded → collapsed.

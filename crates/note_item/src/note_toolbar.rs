@@ -6,10 +6,12 @@
 //!
 //! - **Left** — breadcrumb (type label · `›` · filename stem · sync
 //!   glyph).
-//! - **Right** — 11 action cells matching React's `BreadcrumbActions`
+//! - **Right** — 10 action cells matching React's `BreadcrumbActions`
 //!   order: favourite, organised, neighbourhood, raw mode, note width,
-//!   AI, table of contents, reveal in Finder, copy path, more, toggle
-//!   inspector.
+//!   AI, table of contents, reveal in Finder, copy path, more.
+//!   Worklist 9.3.5 moved the trailing `note-toolbar-inspector` cell
+//!   to the workspace title bar (`workspace::title_bar`); the toggle
+//!   is workspace-level chrome, not per-note state.
 //!
 //! Height is pinned to `NOTE_TOOLBAR_HEIGHT_PT` (52 pt) so the strip
 //! aligns row-for-row with the `note_list_pane` header to its left.
@@ -132,12 +134,13 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
         );
 
     // Action cluster — mirrors `BreadcrumbActions` (BreadcrumbBar.tsx
-    // L811-890) left-to-right, plus the trailing inspector toggle
-    // (L987-994).  Star / organized (worklist 9.2.1 / 9.2.2) dispatch
-    // through `Vault::set_frontmatter_bool`; reveal / copy-path /
-    // inspector (2.15 / 2.16 / 2.18) dispatch real handlers; the
-    // remaining cells keep a log-only stub until their Phase 9 rows
-    // ship.
+    // L811-890) left-to-right.  Star / organized (worklist 9.2.1 /
+    // 9.2.2) dispatch through `Vault::set_frontmatter_bool`; reveal /
+    // copy-path (2.15 / 2.16) dispatch real handlers; the remaining
+    // cells keep a log-only stub until their Phase 9 rows ship.  The
+    // trailing `note-toolbar-inspector` cell that mirrored React's
+    // `L987-994` toggle moved to the workspace title bar in worklist
+    // 9.3.5 — see `crates/workspace/src/title_bar.rs`.
     let reveal_path = path.to_path_buf();
     let copy_path = path.to_path_buf();
     // Filled-vs-outline star glyph mirrors the React `FavoriteAction`
@@ -248,7 +251,12 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
             is_neighborhood_active,
             neighborhood_active_color(cx),
             |window, cx| {
-                log::info!(
+                // Worklist 9.3.6 — downgraded from `info!` to `debug!`
+                // (per-click traces are noise at info level now that
+                // the dispatch chain is wired correctly; the handler-
+                // level `info!` traces at `tolaria::*` stay for
+                // diagnostic value).
+                log::debug!(
                     target: "note_item::toolbar",
                     "neighborhood: click registered, dispatching EnterNeighborhood"
                 );
@@ -278,7 +286,9 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
             },
             raw_mode,
             |window, cx| {
-                log::info!(
+                // Worklist 9.3.6 — downgraded from `info!` to `debug!`,
+                // see the neighbourhood cell above for the rationale.
+                log::debug!(
                     target: "note_item::toolbar",
                     "raw: click registered, dispatching ToggleRawEditor"
                 );
@@ -312,7 +322,9 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
             IconName::Menu,
             "Table of contents",
             |window, cx| {
-                log::info!(
+                // Worklist 9.3.6 — downgraded from `info!` to `debug!`,
+                // see the neighbourhood cell above for the rationale.
+                log::debug!(
                     target: "note_item::toolbar",
                     "toc: click registered, dispatching ToggleTableOfContents"
                 );
@@ -331,22 +343,12 @@ pub(crate) fn render(id: NoteId, path: &Path, raw_mode: bool, cx: &App) -> AnyEl
             "Copy note path",
             move |_window, cx| copy_path_to_clipboard(&copy_path, cx),
         ))
-        .child(more_overflow_cell(path.to_path_buf()))
-        // Worklist 9.2.13 reopened-2 — see the
-        // `note-toolbar-neighborhood` comment above for why this is
-        // [`Window::dispatch_action`] rather than `App::dispatch_action`.
-        .child(toolbar_cell(
-            "note-toolbar-inspector",
-            IconName::PanelRight,
-            "Toggle inspector",
-            |window, cx| {
-                log::info!(
-                    target: "note_item::toolbar",
-                    "inspector: click registered, dispatching ToggleInspector"
-                );
-                window.dispatch_action(Box::new(actions::ToggleInspector), cx);
-            },
-        ));
+        .child(more_overflow_cell(path.to_path_buf()));
+    // Worklist 9.3.5 — the note-toolbar's `note-toolbar-inspector`
+    // cell moved to the workspace title bar (the inspector is
+    // workspace-level state, not a per-note one).  The title-bar
+    // toggle is the closed-state primary; the in-panel close button
+    // (worklist 9.3.4) is the open-state primary.
 
     h_flex()
         .h(px(NOTE_TOOLBAR_HEIGHT_PT))
@@ -888,18 +890,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn toolbar_cell_builds_inspector_button() {
-        // Worklist 2.18 — same shape assertion as the other wired
-        // cells.  The real handler dispatches `actions::ToggleInspector`
-        // via `cx.dispatch_action`, which requires a live `App`.
-        let _cell = toolbar_cell(
-            "note-toolbar-inspector",
-            IconName::PanelRight,
-            "Toggle inspector",
-            |_window, _cx| {},
-        );
-    }
+    // Worklist 9.3.5 — `toolbar_cell_builds_inspector_button` was
+    // dropped along with the `note-toolbar-inspector` cell itself;
+    // the inspector toggle now lives in the title bar
+    // (`workspace::title_bar`) and the panel header
+    // (`inspector_panel`).  No equivalent toolbar shape test remains
+    // here because the toolbar no longer carries the cell.
 
     #[test]
     fn toolbar_height_matches_react_breadcrumb_bar() {

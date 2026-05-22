@@ -787,16 +787,19 @@ pub(crate) mod macos {
                 > = std::rc::Rc::new(std::cell::RefCell::new(None));
 
                 // Worklist 9.2.13 — sibling slot for the InspectorPanel,
-                // promoted to a real mount: the toolbar's
-                // `note-toolbar-inspector` cell now dispatches the
-                // application's `ToggleInspector` and lands here
-                // (the previous GPUI debug element-picker moved to
-                // `ToggleElementInspector`, bound to `Cmd+Alt+I`).
-                // The slot keeps the entity alive across right-dock
-                // swaps with the ToC panel so the subscribers below
-                // (HeadingsUpdated / OpenNote) can continue writing
-                // through to the same panel without re-resolving the
-                // workspace.
+                // promoted to a real mount.  Worklist 9.3.5 moved the
+                // primary toggle from the note toolbar to the workspace
+                // title bar (`title-bar-toggle-inspector`); the in-
+                // panel header toggle / close buttons (worklist 9.3.4)
+                // dispatch the same `ToggleInspector` action so the
+                // open-state and closed-state affordances funnel
+                // through one handler.  The previous GPUI debug
+                // element-picker moved to `ToggleElementInspector`,
+                // bound to `Cmd+Alt+I`.  The slot keeps the entity
+                // alive across right-dock swaps with the ToC panel so
+                // the subscribers below (HeadingsUpdated / OpenNote)
+                // can continue writing through to the same panel
+                // without re-resolving the workspace.
                 let inspector_panel_slot: std::rc::Rc<
                     std::cell::RefCell<Option<gpui::Entity<inspector_panel::InspectorPanel>>>,
                 > = std::rc::Rc::new(std::cell::RefCell::new(None));

@@ -175,6 +175,35 @@ impl Render for TitleBar {
                 "Go forward",
             ));
 
+        // Worklist 9.3.5 — workspace-level Inspector toggle, the mirror
+        // image of the sidebar toggle on the left edge.  Same shape
+        // (24-pt square cell, rounded_sm, hover overlay, tooltip) and
+        // the same dispatch route — [`Window::dispatch_action`] (not
+        // `App::dispatch_action`) for the re-entrancy reason documented
+        // in the `toggle_sidebar` block above.  The right-dock toggle
+        // used to live in the note toolbar; lifting it to title-bar
+        // chrome reflects that the Inspector is workspace-level state,
+        // not a per-note one (worklist 9.3.4 also adds an in-panel
+        // close affordance for the open state — this title-bar button
+        // is the closed-state primary).
+        let toggle_inspector = div()
+            .id("title-bar-toggle-inspector")
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(20.0))
+            .w(px(28.0))
+            .rounded_sm()
+            .cursor_pointer()
+            .hover(|this| this.bg(gpui::hsla(0.0, 0.0, 0.5, 0.12)))
+            .on_click(|_, window, cx| {
+                window.dispatch_action(Box::new(actions::ToggleInspector), cx);
+            })
+            .tooltip(|window, cx| Tooltip::new("Toggle inspector").build(window, cx))
+            .child(IconName::PanelRight)
+            .dump_as("title-bar-toggle-inspector")
+            .into_any_element();
+
         let right = div()
             .flex()
             .flex_row()
@@ -186,7 +215,8 @@ impl Render for TitleBar {
                 "title-bar-search",
                 IconName::Search,
                 "Search",
-            ));
+            ))
+            .child(toggle_inspector);
 
         // Vertically centre the action clusters within the strip
         // (issue 009 / issue 016).  Traffic lights are pinned to
@@ -254,6 +284,19 @@ mod tests {
     /// global installed.
     #[gpui::test]
     fn title_bar_renders(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let _window = cx.add_window(|_window, _cx| TitleBar::new());
+        cx.run_until_parked();
+    }
+
+    /// Worklist 9.3.5 — render with the new inspector toggle cell must
+    /// succeed.  The cell sits in the right cluster, mirroring the
+    /// sidebar toggle on the left edge; this test pins that adding the
+    /// toggle to the render tree doesn't break the strip's layout
+    /// chain or trip a builder invariant.  Click behaviour is covered
+    /// by the live dispatch path in `tolaria::main`.
+    #[gpui::test]
+    fn title_bar_renders_with_inspector_toggle(cx: &mut TestAppContext) {
         install_theme(cx);
         let _window = cx.add_window(|_window, _cx| TitleBar::new());
         cx.run_until_parked();
