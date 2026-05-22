@@ -1496,12 +1496,23 @@ impl Render for NoteListPane {
                     .text_sm()
                     .font_semibold()
                     .text_color(fg)
-                    // Sidebar labels are short enough (longest is
-                    // "Responsibilities" at 16 chars) that the 52-pt
-                    // header strip fits every label without
-                    // truncation.  Skipping `text_overflow` keeps the
-                    // element non-stateful, matching `note-list-header`
-                    // children for consistency.
+                    // Worklist 9.2.18 — note titles can be arbitrarily
+                    // long (9.3.8 closed by reading the H1 / frontmatter
+                    // title for neighbourhood mode, which can blow past
+                    // the strip's width).  `flex_1` + `min_w_0` lets the
+                    // title cell take the remaining row width while
+                    // remaining shrinkable below its content size; the
+                    // `truncate` helper composes `overflow_hidden +
+                    // whitespace_nowrap + text_ellipsis` so an
+                    // overflowing title renders with a trailing `…`
+                    // instead of wrapping (which would blow the 52pt
+                    // header height) or pushing the right-side controls
+                    // out of view.  Sidebar / view labels (≤16 chars)
+                    // never trigger the truncate path, so the visual
+                    // is unchanged for the existing scopes.
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
                     .child(header_title)
                     .dump_as("note-list-pane-header-title")
                     .into_any_element(),

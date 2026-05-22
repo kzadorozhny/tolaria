@@ -38,7 +38,7 @@
 9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
 9.2.16. ✅ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
 9.2.17. ✅ The note width toggle (wide/narrow) does not work
-9.2.18. Add text_overflow ellipsis to note header_strip note titles
+9.2.18. ✅ Add text_overflow ellipsis to note header_strip note titles
 
 ## 3. Low Priority
 
@@ -1606,6 +1606,41 @@ ToC so the toolbar reads consistently.  No new Phosphor icons —
 wide-mode glyph.  Bundle: 2,492.64 kB → 2,492.87 kB (+0.23 kB
 from the bridge handler + CSS rule).  Rust test counts grew by
 2 in `note_item` (47) and 2 in `editor_bridge` (45).
+
+#### 9.2.18
+
+**Source:** user-filed, 2026-05-22.  **Symptom:** the
+`note_list_pane` header strip's title element has no
+`text-overflow` handling.  With `9.3.8` closed, the
+neighbourhood-mode header reads the active note's H1 /
+frontmatter display title, which can be arbitrarily long — and a
+title past the strip's width currently either wraps (blows the
+52pt header height) or pushes the right-side controls cluster
+(sort / search / `+`) out of view.
+
+**Scope:** the title `div` at
+`crates/note_list_pane/src/lib.rs:1494` lives inside an
+`h_flex().justify_between()` next to the controls cluster.  Add
+`.flex_1()` + `.min_w_0()` + `.truncate()` so the title:
+1. Grows to fill remaining row width (`flex_1`).
+2. Can shrink below its content's natural width (`min_w_0`).
+3. Truncates overflow with a trailing `…`
+   (`truncate` composes `overflow_hidden + whitespace_nowrap +
+   text_ellipsis` from gpui's `Styled`).
+
+Sidebar / view labels (Inbox, Favorites, Archive, type names ≤16
+chars) never trigger the truncate path, so the visual is
+unchanged for those scopes — only over-long neighbourhood
+titles get the `…` treatment.  Surface: 3 chained method calls
++ a comment paragraph.  **Size:** trivial.
+
+**Closure (commit `<this-commit>`).**  Applied
+`.flex_1().min_w_0().truncate()` to the title element at
+`note_list_pane/src/lib.rs:1494`.  37 note_list_pane tests stay
+green.  No new test added — the change is a styling chain that
+GPUI doesn't surface back to test queries; visual confirmation
+needs a periscope screenshot the user can drive in the running
+app.
 
 #### 9.3.7
 
