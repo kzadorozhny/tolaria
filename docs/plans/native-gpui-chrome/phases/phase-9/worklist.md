@@ -1167,7 +1167,7 @@ keys off `.editor-host-container` instead of the React-side
 `.editor__blocknote-container` so the alignment math finds the
 correct scope.
 
-**Closure (commit `<this-commit>`).**  Landed a 600-line
+**Closure (commit `fa740de6`).**  Landed a 600-line
 `editor-host/src/tolariaBlockNoteSideMenu.tsx` (verbatim port of
 the React component with the inline-SVG icons + scope rename) and
 a 175-line vitest at
@@ -1429,7 +1429,7 @@ again → exit back to the previous scope.
 **Surface:** `tolaria/src/main.rs` `EnterNeighborhood` handler;
 optional small state in `note_item` or a new slot.  **Size:** small.
 
-**Closure (commit `<this-commit>`).**  Extracted the handler body
+**Closure (commit `fa740de6`).**  Extracted the handler body
 into a `handle_enter_neighborhood(active_note_item, note_list,
 prev_scope, cx)` free function in `tolaria/src/main.rs::macos` so
 both the production `cx.on_action` closure and the new
