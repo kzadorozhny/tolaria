@@ -1163,7 +1163,7 @@ shape used by helper-direct tests bypasses the root downcast in
 `dispatch_to_workspace` promoted from `fn` to `pub(crate) fn` so
 the test can register a handler shaped like production.
 
-**Re-closure-4 (commit `<this-commit>`).**  User's production
+**Re-closure-4 (commit `c66b6e1a`).**  User's production
 stderr trace (2026-05-22) confirmed the dispatch chain runs
 **end-to-end successfully**: title-bar click → handler entered →
 fresh-attach branch → slot empty → factory invoked.  The panel
