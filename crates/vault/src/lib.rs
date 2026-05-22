@@ -705,15 +705,13 @@ impl Vault {
     ///   instead of a missing entry.
     pub fn create_note(&mut self, stem: &str) -> Result<NoteId, VaultError> {
         let path = self.allocate_note_path(stem)?;
-        // `create_new(true)` makes the open atomic w.r.t. the
-        // existence check — if a parallel writer materialised the
-        // file between `allocate_note_path` and here, the open errors
-        // out instead of silently truncating.  Empty body matches the
-        // React variant; users rename or populate the note next.
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
+        // `File::create_new` is atomic w.r.t. the existence check —
+        // if a parallel writer materialised the file between
+        // `allocate_note_path` and here, the open errors out instead
+        // of silently truncating.  Empty body matches the React
+        // variant; users rename or populate the note next.
+        std::fs::File::create_new(&path)
+            .map(drop)
             .map_err(|source| VaultError::Io {
                 path: path.clone(),
                 source,
