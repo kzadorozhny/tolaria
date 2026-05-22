@@ -17,6 +17,7 @@
 10.1.1. ⏳ WKWebView z-order fix
 10.1.2. ✅ ToggleElementInspector update failed: window not found
 10.1.3. ✅ ToggleElementInspector window shoud be a separate os window.
+10.1.4. Wire element-picker integration into the separate inspector window (custom mouse listener + `ui::tree_dump` lookup)
 
 ## 2. High Priority
 
@@ -316,6 +317,66 @@ opens at (40, 40) with a 360×480 frame, title "Inspector — Tolaria".
 Hovering elements in the workspace updates the panel's "Active
 element" rows.  `Cmd+Alt+I` again: window closes; the workspace exits
 pick mode.
+
+**2026-05-22 follow-up — first cut had two regressions, rewritten.**
+
+The original 10.1.3 implementation called
+[`gpui::Window::toggle_inspector`] on the workspace + observed the
+captured `Inspector` entity from the separate window.  Two user-
+visible bugs surfaced on first manual validation:
+
+1. **Workspace shrinks by 30 rems every time Cmd+Alt+I fires.**
+   `gpui::Window::draw_roots` hard-codes
+   `if self.inspector.is_some() { size.width -= 30rem }` on every
+   prepaint, regardless of what `set_inspector_renderer` returns.
+   The renderer returning `Empty` left a blank 480-pt strip on the
+   right edge of the workspace, which the user correctly read as
+   "main tolaria window gets unnecessary resized".
+2. **Separate window doesn't open on the first press.**  The renderer
+   captures `cx.entity()` only when the workspace next paints.  The
+   `cx.defer` toggle ran before the workspace's first
+   inspector-aware paint, so when `toggle_inspector_window(true,
+   …)` consulted the bridge for an inspector entity to hand to the
+   new window's view it found `None` and logged
+   `"no inspector entity captured yet"` instead of opening the
+   window.
+
+**Revised architecture — `Window::toggle_inspector` is no longer
+called at all.**  The separate window manages its own lifetime via
+the bridge:
+
+- `InspectorBridge` drops the `Entity<Inspector>` field.  Sole
+  state is `Option<WindowHandle<InspectorWindow>>`; toggle decisions
+  read `bridge.window.is_some()`.
+- `toggle_inspector_window(cx)` now takes only `&mut App` (no
+  `workspace_inspector_on` arg).  It reads the bridge to choose
+  open vs. close.
+- `InspectorWindow` no longer holds an `Entity<Inspector>` — it
+  renders a static placeholder ("Element picker: not yet wired").
+  Hooking the picker back up requires either re-entering GPUI's
+  `Window::toggle_inspector` path (which brings back the resize) or
+  rolling our own per-Window mouse listener + `ui::tree_dump`
+  lookup.  Deferred to **`10.1.4`** below so this row can land the
+  "separate OS window" half of the user ask without dragging the
+  picker rewrite in with it.
+- `render_tolaria_inspector` is retained as the
+  `cx.set_inspector_renderer` callback (returns `Empty`) so that if
+  a future change ever re-enables `Window::toggle_inspector` on
+  this workspace, the in-workspace panel stays empty rather than
+  reverting to GPUI's default panel.
+
+The View-menu `Show / Hide Inspector` label now reads from
+`InspectorBridge::is_window_open` instead of the per-Window
+`is_inspector_picking` flag (the latter is always `false` now that
+nothing calls `toggle_inspector`).  The label still reflects the
+separate window's open/close state in real time.
+
+Tests refreshed: the two original idempotency / no-renderer tests
+are replaced by
+`toggle_inspector_window_alternates_open_and_close` (drives the
+toggle through `bridge.window`'s open → close cycle) and
+`inspector_bridge_default_is_closed` (pins the default-label
+invariant for the menu rebuild path).
 
 #### 10.2.1
 

@@ -297,15 +297,24 @@ pub(crate) mod macos {
         // `ToggleInspector` (the action verb kept its legacy name; the
         // menu label reads `Properties` since worklist 9.2.15), so the
         // label tracks the right dock's mounted-panel state.  Worklist
-        // 9.2.15 — the restored `Show / Hide Inspector` entry
-        // dispatches `ToggleElementInspector`, so its label follows
-        // GPUI's element-picker state on the active window.
+        // 10.1.3 — the restored `Show / Hide Inspector` entry
+        // dispatches `ToggleElementInspector`, which now toggles a
+        // *separate OS window* owned by `inspector_renderer`; the
+        // menu label tracks that window's open/close state through
+        // `InspectorBridge::is_window_open` instead of the per-Window
+        // `is_inspector_picking` flag (which is always `false` now
+        // that we no longer call `Window::toggle_inspector` — see the
+        // architectural note in `inspector_renderer.rs`).
         let properties_open = workspace.is_right_dock_open(cx)
             && workspace.right_dock_panel_key(cx).as_deref() == Some("inspector");
+        let inspector_window_open = cx
+            .try_global::<crate::inspector_renderer::InspectorBridge>()
+            .is_some_and(crate::inspector_renderer::InspectorBridge::is_window_open);
+        let _ = window;
         let state = menus::MenuState {
             sidebar_open: workspace.is_sidebar_open(cx),
             properties_open,
-            inspector_overlay_picking: window.is_inspector_picking(cx),
+            inspector_overlay_picking: inspector_window_open,
         };
         cx.set_menus(menus::app_menus(state));
     }
@@ -899,43 +908,21 @@ pub(crate) mod macos {
                         // [`dispatch_to_workspace`] uses for every other
                         // window-touching action.
                         cx.defer(|cx| {
-                            let Some(handle) = cx.active_window() else {
-                                log::warn!("ToggleElementInspector: no active window");
-                                return;
-                            };
-                            // Worklist 10.1.3 — the toggle alternates
-                            // `Window.inspector` between `Some` and
-                            // `None`, but GPUI doesn't expose
-                            // existence directly
-                            // (`is_inspector_picking` reads the
-                            // `Inspector::is_picking` sub-flag, not
-                            // the `Option` itself).  Compute the
-                            // pre-toggle state inside the same
-                            // `update` so the post-toggle on/off is
-                            // `!pre_state` — the value the
-                            // separate-window opener needs.  A
-                            // freshly-toggled-on inspector has
-                            // `is_picking = false` by default, which
-                            // is why we read pre-state instead of
-                            // post-state.
-                            let new_state = match handle.update(cx, |_, window, app_cx| {
-                                let pre = window.is_inspector_picking(app_cx);
-                                window.toggle_inspector(app_cx);
-                                !pre
-                            }) {
-                                Ok(s) => s,
-                                Err(err) => {
-                                    log::error!(
-                                        "ToggleElementInspector update failed: {err:#}"
-                                    );
-                                    return;
-                                }
-                            };
-                            // After the workspace toggles, route the
-                            // open/close to the separate inspector
-                            // window so 10.1.3's "Inspector lives in
-                            // its own OS window" invariant holds.
-                            crate::inspector_renderer::toggle_inspector_window(new_state, cx);
+                            // Worklist 10.1.3 (revised) — the
+                            // inspector lives in a separate OS window
+                            // owned by `inspector_renderer` whose
+                            // open/close state is the single source of
+                            // truth.  We deliberately do *not* call
+                            // `gpui::Window::toggle_inspector` on the
+                            // workspace because that flag forces GPUI
+                            // to shrink the workspace's root by a
+                            // hard-coded 30 rems on every paint (see
+                            // the `Worklist 10.1.3 architecture` note
+                            // in `inspector_renderer.rs`) — the
+                            // regression the user flagged as "main
+                            // tolaria window gets unnecessary resized"
+                            // on the first 10.1.3 cut.
+                            crate::inspector_renderer::toggle_inspector_window(cx);
                             rebuild_menus(cx);
                         });
                     }

@@ -1,79 +1,89 @@
-//! Tolaria-side rendering for GPUI's built-in [`gpui::Inspector`] dev-
-//! tool (worklist 3.1 follow-up, expanded for worklist 10.1.3).
+//! Tolaria's separate-window inspector dev-tool (worklist 10.1.3,
+//! superseding the in-workspace renderer from worklist 3.1).
 //!
-//! GPUI ships an `Inspector` entity that tracks an active element id +
-//! "picking" mode on a per-Window basis; its `Render` impl delegates the
-//! actual UI to a callback stored on `App` (`cx.inspector_renderer`).
-//! Without that callback the inspector view renders as `Empty`, which
-//! means the `Cmd+Alt+I` toggle flips the internal state but no overlay
-//! ever appears.  See `~/.cargo/git/checkouts/.../crates/gpui/src/inspector.rs`
-//! around `impl Render for Inspector`.
+//! **Worklist 10.1.3 architecture.**  The inspector lives in its own
+//! borderless NSWindow opened on `Cmd+Alt+I` (or `View → Show / Hide
+//! Inspector`).  We deliberately **do not** call
+//! [`gpui::Window::toggle_inspector`] on the workspace, because GPUI's
+//! built-in inspector reserves a hard-coded 30-rem (≈480 pt) strip on
+//! the right edge of the workspace's root layout — see
+//! `gpui::Window::draw_roots` (`~/.cargo/git/checkouts/.../gpui/src/window.rs`
+//! around the `if self.inspector.is_some() { … }` branch).  That width
+//! shrink is unavoidable while `Window.inspector.is_some()`, which
+//! made the workspace reflow every time the user opened the
+//! inspector — the regression the user flagged as "main tolaria
+//! window gets unnecessary resized" on the first 10.1.3 cut.
 //!
-//! **Worklist 10.1.3** — the inspector UI now lives in a separate
-//! borderless NSWindow rather than being composited into the workspace
-//! window's top-right corner.  Architecture:
+//! We therefore manage the inspector's lifetime entirely from this
+//! module:
 //!
-//! - The workspace window stays in pick mode via the standard
-//!   [`gpui::Window::toggle_inspector`] flag, so GPUI's per-paint
-//!   `insert_inspector_hitbox` machinery keeps populating the
-//!   workspace's `Inspector` entity from cursor hits.
-//! - [`render_tolaria_inspector`] (the renderer GPUI invokes for the
-//!   workspace's inspector) captures `cx.entity()` (an
-//!   `Entity<gpui::Inspector>`) into an App-level [`InspectorBridge`]
-//!   global on every paint, then returns `Empty` so nothing composites
-//!   inside the workspace.  Capturing every frame is idempotent —
-//!   GPUI's entity registry returns the same handle while the inspector
-//!   is alive, and the cost is one global write per inspector-on paint.
-//! - [`toggle_inspector_window`] (called from the
-//!   `ToggleElementInspector` handler in `main.rs` right after
-//!   `window.toggle_inspector(app_cx)`) opens or closes a separate
-//!   window whose [`InspectorWindow`] view holds the captured inspector
-//!   entity and `cx.observe`s it.  When the workspace's inspector
-//!   updates (pick state, active element id), the observer re-renders
-//!   the separate window.
+//! - [`InspectorBridge`] (App-level [`gpui::Global`]) carries an
+//!   `Option<WindowHandle<InspectorWindow>>` — the typed handle to the
+//!   open inspector window (or `None` when closed).
+//! - [`toggle_inspector_window`] is the user-facing toggle.  It reads
+//!   `bridge.window`'s shape to decide whether the next press opens or
+//!   closes; the workspace window is left untouched.
+//! - [`InspectorWindow`] is the root view of the separate OS window.
+//!   It currently renders a static placeholder ("Element picker not
+//!   yet wired") because GPUI's per-window `Inspector` is the only
+//!   path that registers `insert_inspector_hitbox` from the per-paint
+//!   pipeline, and we just opted out of that path.  Hooking the
+//!   picker back up via a custom mouse listener + the `ui::tree_dump`
+//!   registry is tracked separately so this row can land the
+//!   "separate OS window" half of the ask without dragging the picker
+//!   rewrite in with it.
 //!
-//! The separate-window approach matches the user-driven 10.1.3 ask:
-//! Cmd+Alt+I now spawns a floating, draggable, resizable OS window with
-//! the inspector content, freeing the workspace's top-right corner for
-//! whatever live UI is anchored there.
+//! [`render_tolaria_inspector`] is retained as the
+//! `cx.set_inspector_renderer` callback so that if a future change
+//! ever re-enables `Window::toggle_inspector` on this workspace, the
+//! in-workspace render path stays empty rather than reverting to
+//! GPUI's default panel (which our chrome is no longer designed to
+//! accommodate).  In the current 10.1.3 setup, `toggle_inspector` is
+//! never called, so this callback is dormant.
 //!
-//! Gated on `#[cfg(debug_assertions)]` because both
-//! [`gpui::Window::toggle_inspector`] and [`gpui::App::set_inspector_renderer`]
-//! are gated on `cfg(any(feature = "inspector", debug_assertions))`,
-//! and our workspace doesn't enable the `inspector` feature in release.
+//! Gated on `#[cfg(debug_assertions)]` because
+//! [`gpui::App::set_inspector_renderer`] is gated on
+//! `cfg(any(feature = "inspector", debug_assertions))`, and our
+//! workspace doesn't enable the `inspector` feature in release.
 
 #![cfg(debug_assertions)]
 
 use gpui::{
     div, point, px, size, AnyElement, App, AppContext as _, BorrowAppContext as _, Bounds, Context,
-    Empty, Entity, EventEmitter, Global, Inspector, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle,
-    WindowOptions,
+    Empty, Global, Inspector, IntoElement, ParentElement, Render, SharedString, Styled,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions,
 };
 use gpui_component::ActiveTheme;
 
-/// Process-global bridge between the workspace's `Inspector` entity and
-/// the separate inspector window.  GPUI's `Inspector` is Window-bound,
-/// so the only place we can grab a handle to it is the renderer
-/// callback (which receives `&mut Inspector` + a context that yields
-/// `cx.entity()`).  Stashing the handle in an App global lets the
-/// separate window observe the workspace's inspector even though they
-/// live in different windows.
+/// Process-global state for the separate inspector window.
 ///
-/// `window` carries the typed [`WindowHandle<InspectorWindow>`] for the
-/// separate window so [`toggle_inspector_window`] can close it on the
-/// inverse toggle without doing a workspace-wide window scan.
+/// The bridge stores nothing more than the open-window handle.  Toggle
+/// state is `bridge.window.is_some()`; menu labels and the
+/// `ToggleElementInspector` handler both read this single source of
+/// truth so the View-menu "Show / Hide Inspector" label and the
+/// physical window stay in lockstep.
 #[derive(Default)]
 pub struct InspectorBridge {
-    inspector: Option<Entity<Inspector>>,
     window: Option<WindowHandle<InspectorWindow>>,
 }
 
 impl Global for InspectorBridge {}
 
+impl InspectorBridge {
+    /// `true` when the separate inspector window is currently open.
+    /// Used by [`crate::rebuild_menus_with_workspace`] to drive the
+    /// View-menu label without re-reading per-Window inspector state
+    /// (which is no longer the source of truth — see the
+    /// "Worklist 10.1.3 architecture" note at the module head).
+    #[must_use]
+    pub fn is_window_open(&self) -> bool {
+        self.window.is_some()
+    }
+}
+
 /// Install the bridge global if not already present, then run the
-/// callback against a mutable reference to it.  Both this module's
-/// rendering hot path and the toggle handler call this — keeping the
+/// callback against a mutable reference to it.  Both the toggle
+/// handler and the menu rebuild path call this — keeping the
 /// install-on-first-touch in one place avoids a startup-order
 /// dependency on `main.rs`.
 fn with_bridge<R>(cx: &mut App, f: impl FnOnce(&mut InspectorBridge) -> R) -> R {
@@ -83,64 +93,37 @@ fn with_bridge<R>(cx: &mut App, f: impl FnOnce(&mut InspectorBridge) -> R) -> R 
     cx.update_global::<InspectorBridge, _>(|bridge, _cx| f(bridge))
 }
 
-/// Inspector renderer invoked by GPUI on every paint while the
-/// workspace window has `window.inspector = Some(…)`.  Captures the
-/// inspector entity into the [`InspectorBridge`] (so the separate
-/// window can observe it) and returns `Empty` — the workspace itself
-/// no longer paints a top-right inspector panel because that UI lives
-/// in the separate [`InspectorWindow`] instead.
-///
-/// Wired in `main.rs` via
-/// `cx.set_inspector_renderer(Box::new(render_tolaria_inspector))`.
+/// Dormant `cx.set_inspector_renderer` callback.  Returns `Empty` so
+/// that if a future change ever calls
+/// [`gpui::Window::toggle_inspector`] on this workspace the
+/// in-workspace panel stays empty — the separate window owns the UI.
+/// Currently no callsite reaches this code path; see the
+/// "Worklist 10.1.3 architecture" note at the module head.
 pub fn render_tolaria_inspector(
     _inspector: &mut Inspector,
     _window: &mut Window,
-    cx: &mut Context<Inspector>,
+    _cx: &mut Context<Inspector>,
 ) -> AnyElement {
-    let entity = cx.entity();
-    with_bridge(cx, move |bridge| {
-        bridge.inspector = Some(entity);
-    });
     Empty.into_any_element()
 }
 
-/// Open / close the separate inspector window.  Idempotent — calling
-/// twice in a row in the same direction (open + open) is a no-op.
-/// Called from the `ToggleElementInspector` action handler in
-/// `main.rs` immediately after `window.toggle_inspector(app_cx)` so
-/// the workspace's pick mode and the separate window's lifetime stay
-/// in sync.
+/// Top-level toggle for the separate inspector window.  Called from
+/// the `ToggleElementInspector` action handler in `main.rs`.
 ///
-/// `workspace_inspector_on` mirrors the workspace's
-/// `Window.inspector.is_some()` state *after* the toggle has run:
-/// `true` means "the workspace just turned the inspector on, open the
-/// window"; `false` means "the workspace just turned it off, close
-/// the window".  The caller computes this from the toggle's pre-state
-/// because GPUI doesn't expose `Option<Inspector>` existence directly
-/// (only [`Window::is_inspector_picking`], which checks the sub-flag
-/// `Inspector::is_picking`, not whether the inspector exists at all).
-pub fn toggle_inspector_window(workspace_inspector_on: bool, cx: &mut App) {
-    if workspace_inspector_on {
-        ensure_inspector_window_open(cx);
-    } else {
+/// Reads `bridge.window` to decide open vs. close — the bridge is the
+/// single source of truth for "is the inspector visible?".  This is
+/// what lets us avoid `gpui::Window::toggle_inspector` (and its
+/// hard-coded workspace-width shrink, see module head).
+pub fn toggle_inspector_window(cx: &mut App) {
+    let was_open = with_bridge(cx, |bridge| bridge.window.is_some());
+    if was_open {
         close_inspector_window(cx);
+    } else {
+        ensure_inspector_window_open(cx);
     }
 }
 
 fn ensure_inspector_window_open(cx: &mut App) {
-    let existing = with_bridge(cx, |bridge| bridge.window);
-    if existing.is_some() {
-        return;
-    }
-    let Some(inspector) = with_bridge(cx, |bridge| bridge.inspector.clone()) else {
-        log::warn!(
-            "toggle_inspector_window: no inspector entity captured yet — \
-             the workspace must paint at least once with `set_inspector_renderer` \
-             installed before the separate window can mirror it"
-        );
-        return;
-    };
-
     let opts = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
             origin: point(px(40.0), px(40.0)),
@@ -151,12 +134,12 @@ fn ensure_inspector_window_open(cx: &mut App) {
             appears_transparent: false,
             traffic_light_position: None,
         }),
+        focus: true,
+        show: true,
         ..Default::default()
     };
 
-    match cx.open_window(opts, |_window, cx| {
-        cx.new(|cx| InspectorWindow::new(inspector.clone(), cx))
-    }) {
+    match cx.open_window(opts, |_window, cx| cx.new(|_cx| InspectorWindow)) {
         Ok(handle) => {
             with_bridge(cx, move |bridge| {
                 bridge.window = Some(handle);
@@ -183,28 +166,15 @@ fn close_inspector_window(cx: &mut App) {
     }
 }
 
-/// Root view of the separate inspector window.  Observes the
-/// workspace's [`gpui::Inspector`] entity so a pick state change or
-/// active-element update in the workspace re-paints this window.
-pub struct InspectorWindow {
-    inspector: Entity<Inspector>,
-    _observer: Subscription,
-}
-
-impl InspectorWindow {
-    /// Construct the root view + subscribe to the inspector entity.
-    /// The returned `Subscription` is stashed in `_observer` and lives
-    /// as long as the view does; dropping it cancels the observation.
-    pub fn new(inspector: Entity<Inspector>, cx: &mut Context<Self>) -> Self {
-        let observer = cx.observe(&inspector, |_this, _ent, cx| cx.notify());
-        Self {
-            inspector,
-            _observer: observer,
-        }
-    }
-}
-
-impl EventEmitter<()> for InspectorWindow {}
+/// Root view of the separate inspector window.
+///
+/// Renders a static placeholder until the picker integration lands.
+/// The picker rewrite is deferred so 10.1.3 can land the "separate OS
+/// window" half of the ask without coupling it to the larger custom-
+/// mouse-listener + `ui::tree_dump`-query work the picker would need
+/// (since we explicitly opted out of GPUI's per-window `Inspector`
+/// path — see the module head).
+pub struct InspectorWindow;
 
 impl Render for InspectorWindow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -213,10 +183,6 @@ impl Render for InspectorWindow {
         let border = theme.border;
         let fg = theme.foreground;
         let muted = theme.muted_foreground;
-
-        let inspector = self.inspector.read(cx);
-        let is_picking = inspector.is_picking();
-        let active_id = inspector.active_element_id().cloned();
 
         let header = div()
             .flex()
@@ -240,52 +206,27 @@ impl Render for InspectorWindow {
                     .child(SharedString::new_static("⌘⌥I to close")),
             );
 
-        let (picking_label, picking_color) = if is_picking {
-            (
-                SharedString::new_static("Picking: ON — hover an element"),
-                fg,
-            )
-        } else {
-            (SharedString::new_static("Picking: OFF"), muted)
-        };
-        let picking_row = div()
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
             .px(px(10.0))
-            .py(px(6.0))
-            .text_xs()
-            .text_color(picking_color)
-            .child(picking_label);
-
-        let active_row = match active_id {
-            Some(id) => {
-                let global_id_text: SharedString = format!("{:?}", id.path.global_id).into();
-                let source_text: SharedString = format!(
-                    "{}:{}",
-                    id.path.source_location.file(),
-                    id.path.source_location.line()
-                )
-                .into();
+            .py(px(10.0))
+            .child(
                 div()
-                    .px(px(10.0))
-                    .py(px(6.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(fg)
-                            .child(SharedString::new_static("Active element")),
-                    )
-                    .child(div().text_xs().text_color(muted).child(global_id_text))
-                    .child(div().text_xs().text_color(muted).child(source_text))
-            }
-            None => div()
-                .px(px(10.0))
-                .py(px(6.0))
-                .text_xs()
-                .text_color(muted)
-                .child(SharedString::new_static("No element selected")),
-        };
+                    .text_xs()
+                    .text_color(fg)
+                    .child(SharedString::new_static("Element picker: not yet wired")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(SharedString::new_static(
+                        "Worklist 10.1.3 lands the separate OS window.  Picker integration \
+                 (custom mouse listener + tree_dump lookup) is a follow-up.",
+                    )),
+            );
 
         div()
             .size_full()
@@ -294,8 +235,7 @@ impl Render for InspectorWindow {
             .flex()
             .flex_col()
             .child(header)
-            .child(picking_row)
-            .child(active_row)
+            .child(body)
     }
 }
 
@@ -306,16 +246,10 @@ mod tests {
 
     /// Installing `render_tolaria_inspector` via the public
     /// `set_inspector_renderer` boxing path must accept our function
-    /// signature.  Without a working install, gpui's `Inspector::render`
-    /// falls back to `Empty` — see
-    /// `~/.cargo/git/checkouts/.../crates/gpui/src/inspector.rs` around
-    /// `impl Render for Inspector`.
-    ///
-    /// `Inspector::new` is `pub(crate)` in gpui, so we can't construct
-    /// a `Context<Inspector>` in a unit test to invoke the closure
-    /// directly.  Exercising `set_inspector_renderer(Box::new(...))`
-    /// nonetheless catches the signature regression we care about
-    /// (renderer parameters drifting away from `gpui::InspectorRenderer`).
+    /// signature — even though the callback is dormant in 10.1.3's
+    /// architecture, the signature must still match
+    /// `gpui::InspectorRenderer` so a future caller of
+    /// `Window::toggle_inspector` doesn't crash on install.
     #[gpui::test]
     fn render_tolaria_inspector_signature_matches_gpui_renderer(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
@@ -325,68 +259,50 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// Toggling the inspector on a live window must not panic when the
-    /// renderer is installed.  This is the path `Cmd+Alt+I` actually
-    /// drives in production: `cx.set_inspector_renderer(...)` first,
-    /// then `window.toggle_inspector(cx)`.
+    /// `toggle_inspector_window` with no prior state opens a fresh
+    /// bridge and routes to the open branch; on the next call the
+    /// bridge's `window.is_some()` flips and the close branch fires.
+    /// Pins the single-source-of-truth invariant — we never touch
+    /// `Window::toggle_inspector` (no workspace resize) and the
+    /// open/close cycle reads from `bridge.window` alone.
     #[gpui::test]
-    fn toggle_inspector_with_renderer_installed_does_not_panic(cx: &mut TestAppContext) {
+    fn toggle_inspector_window_alternates_open_and_close(cx: &mut TestAppContext) {
         cx.update(gpui_component::init);
         cx.update(|cx| {
-            cx.set_inspector_renderer(Box::new(render_tolaria_inspector));
-        });
-        let (_root, vcx) = cx.add_window_view(|_window, _cx| EmptyRoot);
-        vcx.update(|window, cx| {
-            window.toggle_inspector(cx);
-        });
-        vcx.run_until_parked();
-    }
-
-    /// Worklist 10.1.3 — `toggle_inspector_window(false, …)` with no
-    /// previously-opened window must not panic and must not log an
-    /// error: the bridge starts empty (no inspector captured, no
-    /// window open), so closing is a no-op.  Pins the idempotency
-    /// guard that lets `ToggleElementInspector` call this
-    /// unconditionally after every workspace toggle.
-    #[gpui::test]
-    fn toggle_inspector_window_close_with_no_open_window_is_a_no_op(cx: &mut TestAppContext) {
-        cx.update(gpui_component::init);
-        cx.update(|cx| {
-            toggle_inspector_window(false, cx);
+            toggle_inspector_window(cx);
         });
         cx.run_until_parked();
-    }
-
-    /// Worklist 10.1.3 — `toggle_inspector_window(true, …)` before any
-    /// workspace paint has captured an inspector entity logs a warning
-    /// and returns instead of panicking.  This is the
-    /// "Cmd+Alt+I pressed before the workspace painted its first
-    /// frame" race; the user sees no separate window but the workspace
-    /// still flips into pick mode.
-    #[gpui::test]
-    fn toggle_inspector_window_open_without_captured_entity_warns_and_returns(
-        cx: &mut TestAppContext,
-    ) {
-        cx.update(gpui_component::init);
         cx.update(|cx| {
-            toggle_inspector_window(true, cx);
+            let open = cx
+                .try_global::<InspectorBridge>()
+                .is_some_and(InspectorBridge::is_window_open);
+            assert!(
+                open,
+                "first toggle must open the inspector window (bridge.window = Some)"
+            );
+        });
+        cx.update(|cx| {
+            toggle_inspector_window(cx);
         });
         cx.run_until_parked();
+        cx.update(|cx| {
+            let open = cx
+                .try_global::<InspectorBridge>()
+                .is_some_and(InspectorBridge::is_window_open);
+            assert!(
+                !open,
+                "second toggle must close the inspector window (bridge.window = None)"
+            );
+        });
     }
 
-    /// A minimal root view used solely as the host for the
-    /// `toggle_inspector` regression test.  Renders nothing — the test
-    /// only cares that the toggle flips the inspector on without
-    /// panicking when the Tolaria renderer is installed.
-    struct EmptyRoot;
-
-    impl gpui::Render for EmptyRoot {
-        fn render(
-            &mut self,
-            _window: &mut gpui::Window,
-            _cx: &mut gpui::Context<Self>,
-        ) -> impl gpui::IntoElement {
-            gpui::Empty
-        }
+    /// `InspectorBridge::is_window_open` is the source of truth for the
+    /// View-menu `Show / Hide Inspector` label.  Default is `false`
+    /// (no window open) so menu labels lay down as "Show …" before
+    /// the user ever presses Cmd+Alt+I.
+    #[test]
+    fn inspector_bridge_default_is_closed() {
+        let bridge = InspectorBridge::default();
+        assert!(!bridge.is_window_open());
     }
 }
