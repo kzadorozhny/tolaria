@@ -1038,10 +1038,10 @@ mod macos {
             .with_html(EDITOR_HOST_HTML)
             // Worklist 1.2 diagnostic — enable Safari Web Inspector so
             // the user can attach via Safari → Develop → Tolaria → the
-            // WebView and observe DOM/console state on hover.  Cheap
-            // to leave on in dogfood builds; remove or feature-gate
-            // before any production cut.
-            .with_devtools(true)
+            // WebView and observe DOM/console state on hover.  Gated
+            // on `cfg!(debug_assertions)` so release builds drop the
+            // inspector hook; debug / `cargo run` builds keep it on.
+            .with_devtools(cfg!(debug_assertions))
             // Worklist 2.25 — wrap console.{log,info,warn,error,debug}
             // and global error / unhandledrejection listeners so every
             // editor-side diagnostic flows through `window.ipc.postMessage`
