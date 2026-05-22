@@ -35,6 +35,7 @@
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
 9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
+9.2.15. ⏳ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
 
 ## 3. Low Priority
 
@@ -42,6 +43,8 @@
 9.3.2. Inspector panel should open at least the default width of the sidebar
 9.3.3. Inspector panel header — same height as note header, title reads `Properties`
 9.3.4. Inspector open/close button migrates to the panel header when open
+9.3.5. Inspector toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
+9.3.6. Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
 
 ---
 
@@ -1233,6 +1236,75 @@ display title for the header (current path uses `Note::title` =
 filename stem, which renders as e.g. `"Neighborhood of person-jane"`;
 upgrading to the H1 / frontmatter title needs the async
 `vault.note_content` read and stays a 9.2.14 follow-up).
+
+#### 9.2.15
+
+**Source:** user-reported, 2026-05-21.  **Symptom:** the View menu's
+`Show Inspector` / `Hide Inspector` toggle was repurposed in `9.2.13`
+(commit `2662e935`) to drive the product `InspectorPanel` right-dock
+mount.  The user wants the menu names to follow the actual surface:
+the right-dock panel shows note **Properties** (matching the user's
+Image #6 panel title), so the menu item should read **Show Properties** /
+**Hide Properties**.  The previous **Show Inspector** / **Hide Inspector**
+menu item (which toggled the GPUI element-picker debug overlay) was
+removed during the `2662e935` cleanup — restore it under that name
+so the developer overlay regains a discoverable surface.
+
+**Scope:**
+1. `crates/tolaria/src/menus.rs`: rename the existing `Show/Hide Inspector`
+   View-menu entry to `Show/Hide Properties`, still dispatching
+   `actions::ToggleInspector` (the product right-dock action).  Driver
+   stays the existing `MenuState::inspector_picking` (or whatever the
+   field is named after `2662e935`) — semantics already track the
+   right-dock open state.
+2. Add a separate `Show/Hide Inspector` View-menu entry dispatching
+   `actions::ToggleElementInspector` (the GPUI debug overlay action;
+   `Cmd+Alt+I` accelerator stays).  Driver is
+   `Window::is_inspector_picking` (the GPUI accessor that flips when
+   the debug overlay is active).
+3. `MenuState` may need a second `inspector_overlay_picking: bool`
+   field to drive the new entry's label flip independently from the
+   product panel's state.
+
+**Surface:** `crates/tolaria/src/menus.rs` + the workspace's
+`rebuild_menus_with_workspace` call sites in `tolaria/src/main.rs`.
+**Size:** small.
+
+#### 9.3.5
+
+**Source:** user-reported polish, 2026-05-21.  **Symptom:** the
+Inspector toggle currently lives on the note toolbar.  The user
+wants it in the title bar's right corner, mirroring the sidebar
+toggle that lives in the title bar's left corner — a workspace-level
+chrome affordance, not a per-note one.
+
+**Scope:** add a toggle button to the workspace's title bar
+(`crates/workspace/src/title_bar.rs`) on the right side, glyph
+`IconName::PanelRight`, dispatching `actions::ToggleInspector`
+(the product right-dock action).  Mirror the existing sidebar-toggle
+button shape (icon, hover state, tooltip).  When the user wants
+this, the note-toolbar inspector cell can stay (redundant
+affordance) OR be removed (cleaner) — drop it; the title-bar
+affordance is the new primary.  Coordinates with `9.3.4`
+(toggle migrates to panel header WHEN OPEN) — the title-bar
+button is the closed-state affordance, the panel-header X is the
+open-state affordance.  **Size:** small.  **Deps:** none, but
+coordinate sequencing with `9.3.4`.
+
+#### 9.3.6
+
+**Source:** user-reported polish, 2026-05-21.  **Symptom:** the
+note-toolbar emits `info!`-level logs on every click (added in
+`a71cc191` to make the dispatch chain observable during the four-
+regression debug session).  Now that the dispatch path is wired
+correctly, the per-click traces are noise at `info!`.
+
+**Scope:** downgrade the four `note_item::toolbar` `info!`
+"click registered" log lines (neighborhood, raw, toc, inspector)
+to `debug!`.  Keep the per-handler `info!` traces at
+`tolaria::*` (those are useful when diagnosing a future regression
+and don't fire as often).  Surface: `crates/note_item/src/note_toolbar.rs`
+toolbar cells.  **Size:** trivial.
 
 ### Cross-row notes
 
