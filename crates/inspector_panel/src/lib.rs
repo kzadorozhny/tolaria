@@ -1632,7 +1632,7 @@ fn render_header_strip(cx: &App) -> AnyElement {
     let muted = theme.muted_foreground;
     let cell_tint = gpui::hsla(0.0, 0.0, 0.5, 0.12);
 
-    let toggle_button = div()
+    let icon = div()
         .id("inspector-panel-header-toggle")
         .flex()
         .items_center()
@@ -1640,14 +1640,7 @@ fn render_header_strip(cx: &App) -> AnyElement {
         .h(px(24.0))
         .w(px(24.0))
         .rounded_sm()
-        .cursor_pointer()
-        .text_color(muted)
-        .hover(move |this| this.bg(cell_tint))
-        .on_click(|_, window, cx| {
-            window.dispatch_action(Box::new(actions::ToggleInspector), cx);
-        })
-        .tooltip(|window, cx| Tooltip::new("Hide Inspector").build(window, cx))
-        .child(IconName::PanelRight);
+        .child(IconName::Info);
 
     let close_button = div()
         .id("inspector-panel-header-close")
@@ -1684,7 +1677,7 @@ fn render_header_strip(cx: &App) -> AnyElement {
         .gap(px(8.0))
         .border_b_1()
         .border_color(border_color)
-        .child(toggle_button)
+        .child(icon)
         .child(title)
         .child(close_button)
         .into_any_element()
