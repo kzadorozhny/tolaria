@@ -2,118 +2,71 @@ import { useCallback, useRef } from "react";
 import type { BlockNoteEditor } from "@blocknote/core";
 import { filterSuggestionItems } from "@blocknote/core/extensions";
 import {
-    FormattingToolbarController,
     SideMenuController,
     SuggestionMenuController,
     getDefaultReactSlashMenuItems,
 } from "@blocknote/react";
 import { useBlockNoteSideMenuHoverGuard } from "./blockNoteSideMenuHoverGuard.ts";
-import { useBlockNoteFormattingToolbarHoverGuard } from "./blockNoteFormattingToolbarHoverGuard.ts";
 import { TolariaSideMenu } from "./tolariaBlockNoteSideMenu.tsx";
+import { TolariaFormattingToolbarController } from "./tolariaBlockNoteFormattingToolbar.tsx";
 
 // ---------------------------------------------------------------------------
 // EditorMenus — slash / side / formatting menus + hover guards (Phase 8.25)
 // ---------------------------------------------------------------------------
 //
-// Mounts BlockNote's default menu surfaces (slash-triggered suggestion
-// menu, side drag-handle, selection formatting toolbar) inside the host
-// `<BlockNoteViewRaw>` tree and attaches the two hover-guard hooks
-// ported from the React-era app.
+// Mounts BlockNote's menu surfaces (slash-triggered suggestion menu,
+// side drag-handle, selection formatting toolbar) inside the host
+// `<BlockNoteViewRaw>` tree.
 //
-// 8.25 deliberately uses the *default* item lists / UI shells so this
-// row stays narrow.  Subsequent rows hook in:
-// - 8.26 — wikilink + person-mention SuggestionMenuController (`[[`, `@`)
-//          and link-click routing through `bridge.ts::FromHost::LinkClick`
-// - 8.27 — IME composition guard (suspends the slash menu during
-//          composition)
-// - 8.28 — code-block / table / copy / checklist regressions
-// - 8.30 — formatting toolbar's `isOpen` derivation (focus/hover/grace)
-//
-// For 8.25 we approximate the formatting-toolbar `isOpen` signal with a
-// simple "selection currently has any non-empty range" check.  That's a
-// safe over-approximation: the hover guard adds the mousemove listener
-// whenever a selection exists, which is exactly when the toolbar might
-// be visible.  The richer derivation (composition + focus + grace
-// window) lands with the full controller port in 8.30.
-
-const FILE_BLOCK_TYPES = new Set<string>(["audio", "file", "image", "video"]);
-
-/**
- * Resolve the editor container element that the hover guard listeners
- * scope to.  We walk up from `editor.domElement` looking for a host
- * wrapper, then fall back to the editor element itself — the React-era
- * code does the same dance.
- */
-function resolveEditorContainer(editor: BlockNoteEditor): HTMLElement | null {
-    const dom = editor.domElement;
-    if (!(dom instanceof HTMLElement)) return null;
-    return (
-        (dom.closest(".editor__blocknote-container") as HTMLElement | null) ?? dom
-    );
-}
-
-/**
- * Compute the file-block id that the formatting-toolbar hover guard
- * should re-pin onto.  Phase 8.25 uses the *current selection*; later
- * rows track the toolbar-store bridge id directly.
- */
-function currentFileBlockId(editor: BlockNoteEditor): string | null {
-    let block: { id: string; type: string } | undefined;
-
-    try {
-        block = editor.getSelection()?.blocks[0] as
-            | { id: string; type: string }
-            | undefined;
-    } catch {
-        block = undefined;
-    }
-
-    if (!block) {
-        try {
-            block = editor.getTextCursorPosition().block as {
-                id: string;
-                type: string;
-            };
-        } catch {
-            block = undefined;
-        }
-    }
-
-    if (!block) return null;
-    return FILE_BLOCK_TYPES.has(block.type) ? block.id : null;
-}
+// 8.25 wired the side-menu hover guard.  9.3.1 swapped the default
+// SideMenu for `TolariaSideMenu`.  9.3.7 swaps the default
+// `FormattingToolbarController` for `TolariaFormattingToolbarController`
+// (mantine-free port of `src/components/tolariaEditorFormatting.tsx`),
+// which folds the formatting-toolbar hover-guard wiring + focus /
+// hover / close-grace + composition gating into the controller itself
+// — so this file no longer needs its own copy of those plumbing
+// helpers.
 
 export interface EditorMenusProps {
     editor: BlockNoteEditor;
 }
 
 /**
- * Render the three default BlockNote menu controllers wrapped by their
- * hover guards.  Must be mounted as a child of `<BlockNoteViewRaw>` so
- * the BlockNote React context is in scope.
+ * Resolve the side-menu's host-scope element.  The hover guard's
+ * listeners are bound to whichever wrapper contains the editor (the
+ * editor-host's `.editor-host-container`, or — for legacy compat —
+ * the React shell's `.editor__blocknote-container`), falling back to
+ * the editor element itself when neither is present.
+ */
+function resolveSideMenuContainer(editor: BlockNoteEditor): HTMLElement | null {
+    const dom = editor.domElement;
+    if (!(dom instanceof HTMLElement)) return null;
+    return (
+        dom.closest<HTMLElement>(".editor-host-container") ??
+        dom.closest<HTMLElement>(".editor__blocknote-container") ??
+        dom
+    );
+}
+
+/**
+ * Render the three menu controllers wrapped by their hover guards.
+ * Must be mounted as a child of `<BlockNoteViewRaw>` so the BlockNote
+ * React context is in scope.
  */
 export function EditorMenus({ editor }: EditorMenusProps) {
     // Hold an HTMLElement ref pointing at the editor's host container
     // for the side-menu hover guard.  The ref is updated on every render
     // because BlockNote may reparent its DOM during lifecycle churn.
     const containerRef = useRef<HTMLElement | null>(null);
-    containerRef.current = resolveEditorContainer(editor);
+    containerRef.current = resolveSideMenuContainer(editor);
 
     // Side-menu hover guard: suppresses flicker on the editor / drag
-    // handle bridge gutter.
+    // handle bridge gutter.  The formatting-toolbar hover guard now
+    // lives inside `TolariaFormattingToolbarController` (9.3.7) — it
+    // sees the full `isOpen` signal (composition + focus + close grace),
+    // which the bare "any file block selected" approximation from 8.25
+    // couldn't.
     useBlockNoteSideMenuHoverGuard(containerRef);
-
-    // Formatting-toolbar hover guard: keeps the toolbar pinned when the
-    // pointer crosses from toolbar -> image and back.  For 8.25 we keep
-    // the listener installed whenever a file block is selected; later
-    // rows refine this with the toolbar-store `isOpen` derivation.
-    const selectedFileBlockId = currentFileBlockId(editor);
-    useBlockNoteFormattingToolbarHoverGuard({
-        editor: editor as never,
-        container: containerRef.current,
-        selectedFileBlockId,
-        isOpen: selectedFileBlockId !== null,
-    });
 
     // Slash menu items closure — `getDefaultReactSlashMenuItems` returns
     // a fresh array each call so we memoize via the editor identity to
@@ -145,9 +98,15 @@ export function EditorMenus({ editor }: EditorMenusProps) {
              * .tolaria-block-drag-handle` rule) and the pointer-based
              * reorder gesture takes over from the wonky HTML-5 drag
              * flow that BlockNote's stock control uses.
+             *
+             * Worklist 9.3.7: mount our `TolariaFormattingToolbarController`
+             * instead of the BlockNote default so the selection menu
+             * carries the React-side custom controls (Tolaria-flavoured
+             * BlockTypeSelect, markdown-safe filter, inline-code button
+             * inserted after strike).
              */}
             <SideMenuController sideMenu={TolariaSideMenu} />
-            <FormattingToolbarController />
+            <TolariaFormattingToolbarController />
             <SuggestionMenuController
                 triggerCharacter="/"
                 getItems={getSlashItems}

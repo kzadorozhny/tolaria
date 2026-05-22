@@ -46,7 +46,7 @@
 9.3.4. ✅ Inspector open/close button migrates to the panel header when open
 9.3.5. ⏳ Note properties panel toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
 9.3.6. ✅ Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
-9.3.7. ⏳ Block editor selection menu should have React side styling
+9.3.7. ✅ Block editor selection menu should have React side styling
 
 ---
 
@@ -1487,6 +1487,72 @@ overrides BlockNote's default; port it to `editor-host/`.
 4. Vitest covering wiring (DOM class / mount).
 
 **Surface:** `editor-host/` TS+CSS.  **Size:** medium.
+
+**Closure (commit `<pending>`).**  Mirrored 9.3.1's SideMenu port for
+the BlockNote selection menu / formatting toolbar.  Two new editor-host
+files: `tolariaBlockNoteFormattingToolbar.tsx` (mantine-free port of
+the React `tolariaEditorFormatting.tsx` — `TolariaBasicTextStyleButton`,
+`TolariaBlockTypeSelect`, `TolariaFileDownloadButton`,
+`TolariaFormattingToolbar`, `TolariaFormattingToolbarController`,
+the close-grace + deduped-toolbar-store + hover/focus tracking the
+React controller carries), and the 1-line mount swap in
+`editor-host/src/menus.tsx`.  No `Config.ts` companion file — the
+filter list + block-type rows are <30 lines combined and read
+better co-located with the components that consume them.
+Mantine-free port: the Mantine `<Menu>` powering the
+BlockTypeSelect dropdown swapped to BlockNote's vanilla
+`Components.Generic.Menu.Root/Trigger/Dropdown/Item` (same
+primitives the 9.3.1 SideMenu port uses for its drag-handle menu),
+the Mantine `<Button>` trigger swapped to
+`Components.FormattingToolbar.Button`, and the `MantineCheckIcon`
+swapped to an inline-SVG checkmark.  Filtered keys: `underlineStyleButton`,
+`textAlignLeftButton`, `textAlignCenterButton`, `textAlignRightButton`,
+`colorStyleButton` (all five removed by
+`filterTolariaFormattingToolbarItems` before mount).  Inline-code
+button inserted after the strike button by `insertInlineCodeButton`
+(pinned by a vitest case).  Hover guard: the existing
+`useBlockNoteFormattingToolbarHoverGuard` hook (ported in 8.25 and
+already passing 11 tests) is now driven by the controller's full
+`isOpen` signal (composition + focus + close-grace) instead of the
+"any file block selected" approximation `menus.tsx` previously used;
+the duplicate wiring in `menus.tsx` was removed.  File download:
+`window.open(url, '_blank', 'noopener,noreferrer')` instead of
+the React app's `openEditorAttachmentOrUrl` shell-IPC bridge — TODO
+to wire a `FromHost::OpenAttachment` bridge message and route
+vault-relative URLs through the host when that bridge lands.  CSS:
+no new `bn-formatting-toolbar*` rules needed — the only React-side
+selector (`.editor__blocknote-container :is(.bn-toolbar,
+.bn-formatting-toolbar, .bn-menu-dropdown, .bn-grid-suggestion-menu)
+button svg`) was already mirrored at
+`editor-host/src/style.css:447`; Tolaria-specific CSS hooks
+(`.tolaria-format-{bold,italic,strike,code,file-download}`,
+`.tolaria-block-type-select`) are new but optional — they exist
+for downstream stylesheets to target without depending on
+BlockNote's internal class names.  Phosphor icons replaced with
+six 16-px inline SVGs (Bold, Italic, Strikethrough, Code,
+ExternalLink, CaretDown) plus block-type select icons (Paragraph,
+H1-H6, Quote, BulletList, NumberedList, Checklist, CodeBlock) —
+zero added package weight.  Mount: `editor-host/src/menus.tsx`
+swapped `<FormattingToolbarController />` for
+`<TolariaFormattingToolbarController />`; the file-block hover-guard
+plumbing that 8.25 wired here moved into the controller (which
+sees the richer `isOpen`).  Tests: four new vitest cases in
+`tolariaBlockNoteFormattingToolbar.test.tsx` — (1) `filterTolariaFormattingToolbarItems`
+drops all five unsupported keys and preserves the supported ones in
+order; (2) `insertInlineCodeButton` inserts the inline-code button
+immediately after strike and trails fileDownload; (3) the insert is
+a no-op when no strike button is present; (4) `<TolariaFormattingToolbar />`
+mounts without crashing, the BlockTypeSelect trigger lands as a
+`.tolaria-block-type-select` DOM element, the inline-code button
+lands as a `.tolaria-format-code` DOM element, and no
+`.tolaria-format-underline` element appears.  Tests: 381 → 385.
+Bundle: 2,478.72 kB → 2,491.59 kB (+12.87 kB, +0.52%).
+`pnpm build` + `pnpm test` clean.  Visual diff against the React app
+was not run (no live native build in this session).  Out of scope:
+the file-download bridge (TODO above) and the `floatingUIOptions`
+`onMouseDownCapture` plumbing the React `SingleEditorView` mount
+adds — neither is needed for the visual-parity row, both stay
+deferred until a follow-up task names them.
 
 #### 9.3.5
 
