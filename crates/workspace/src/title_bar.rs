@@ -197,6 +197,23 @@ impl Render for TitleBar {
             .cursor_pointer()
             .hover(|this| this.bg(gpui::hsla(0.0, 0.0, 0.5, 0.12)))
             .on_click(|_, window, cx| {
+                // Worklist 9.2.13 (Reopened-3) — instrument the title-bar
+                // dispatch site so the user (and future triage) can see
+                // the click reach this closure in production logs.  The
+                // companion `info!` logs sit at:
+                //   - `tolaria::main::ToggleInspector` handler entry
+                //     (`tolaria/src/main.rs`, around the `cx.on_action`
+                //     registration block),
+                //   - the right-dock factory closure where the
+                //     `InspectorPanel` is constructed.
+                // Together they let `RUST_LOG=workspace=info,tolaria=info`
+                // confirm whether a non-opening inspector is a missed
+                // dispatch, a missed handler, or a panel that mounts but
+                // renders invisibly.
+                log::info!(
+                    target: "workspace::title_bar",
+                    "title-bar inspector click → dispatching ToggleInspector"
+                );
                 window.dispatch_action(Box::new(actions::ToggleInspector), cx);
             })
             .tooltip(|window, cx| Tooltip::new("Toggle inspector").build(window, cx))

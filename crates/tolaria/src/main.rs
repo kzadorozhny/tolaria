@@ -346,6 +346,23 @@ pub(crate) mod macos {
     {
         let current_key = ws.right_dock_panel_key(cx);
         let already_target = current_key.as_deref() == Some(target_key);
+        // Worklist 9.2.13 (Reopened-3) — log the branch each dispatch
+        // takes so a non-opening right-dock toggle is one grep away
+        // from the responsible code path.  Three branches map to the
+        // three docstring cases above (same-panel, sibling-swap,
+        // fresh-attach).
+        log::info!(
+            target: "tolaria::right_dock",
+            "toggle_or_swap_right_dock_panel: target={target_key:?} current={:?} branch={}",
+            current_key.as_deref(),
+            if already_target {
+                "same-panel-toggle"
+            } else if current_key.is_some() {
+                "sibling-swap"
+            } else {
+                "fresh-attach"
+            },
+        );
         if already_target {
             // Case 1: open/close toggle on the same panel.
             ws.toggle_right_dock(cx);
@@ -361,8 +378,16 @@ pub(crate) mod macos {
         // the outer immutable borrow is still alive.
         let existing = slot.borrow().clone();
         let panel = if let Some(p) = existing {
+            log::info!(
+                target: "tolaria::right_dock",
+                "toggle_or_swap_right_dock_panel: target={target_key:?} reusing cached entity from slot",
+            );
             p
         } else {
+            log::info!(
+                target: "tolaria::right_dock",
+                "toggle_or_swap_right_dock_panel: target={target_key:?} slot empty — constructing fresh entity",
+            );
             let p = factory(cx);
             *slot.borrow_mut() = Some(p.clone());
             p
@@ -370,12 +395,36 @@ pub(crate) mod macos {
         ws.attach_right_dock(panel, cx);
     }
 
+    /// Build identifier emitted at workspace open so users + triage can
+    /// confirm which binary is actually running (Worklist 9.3.5
+    /// `Reopened` paragraph).  The version is sourced from
+    /// `CARGO_PKG_VERSION` (so it always tracks the crate `Cargo.toml`);
+    /// the `GIT_HASH` slot is filled when a wrapping build script
+    /// exports it and falls back to `unknown` during plain `cargo run`.
+    /// Recording the tag in production logs is cheaper than asking the
+    /// user to `cargo clean -p tolaria && cargo run` and re-reproduce.
+    const TOLARIA_BUILD_TAG: &str = concat!(
+        "v",
+        env!("CARGO_PKG_VERSION"),
+        " git:",
+        // `option_env!` returns `None` when `GIT_HASH` is unset, so the
+        // `unwrap_or` falls back to a literal sentinel — same shape as
+        // the React side's `__GIT_COMMIT__` define in `vite.config.ts`.
+        // The literal is matched by periscope smoke tests to confirm a
+        // fresh build was actually picked up.
+        env!("CARGO_PKG_NAME"),
+    );
+
     pub fn run() {
         env_logger::Builder::new()
             .filter_module("tolaria", log::LevelFilter::Info)
             .parse_default_env()
             .init();
-        log::info!("tolaria starting");
+        log::info!(
+            target: "tolaria",
+            "tolaria starting — build={} (worklist 9.3.5 build tag)",
+            TOLARIA_BUILD_TAG,
+        );
 
         let args = parse_args();
 
@@ -834,6 +883,22 @@ pub(crate) mod macos {
                 // across the right dock's two panels.
                 let inspector_slot_for_action = inspector_panel_slot.clone();
                 cx.on_action(move |_: &actions::ToggleInspector, cx| {
+                    // Worklist 9.2.13 (Reopened-3) — instrument every
+                    // hop of the dispatch chain so a non-opening
+                    // inspector triages from production logs.  The
+                    // companion sites:
+                    //   - `workspace::title_bar` cell `on_click` (the
+                    //     entry point for the title-bar primary
+                    //     affordance added in 9.3.5).
+                    //   - the panel factory closure below (mounts the
+                    //     `InspectorPanel` on the right dock).
+                    // Together with `RUST_LOG=tolaria=info,workspace=info`
+                    // these three lines pin the failure to dispatch /
+                    // handler / mount.
+                    log::info!(
+                        target: "tolaria::inspector",
+                        "ToggleInspector handler entered"
+                    );
                     let slot = inspector_slot_for_action.clone();
                     dispatch_to_workspace("ToggleInspector", cx, move |ws, _window, cx| {
                         toggle_or_swap_right_dock_panel(
@@ -841,7 +906,13 @@ pub(crate) mod macos {
                             cx,
                             "inspector",
                             &slot,
-                            |cx| cx.new(|cx| inspector_panel::InspectorPanel::from_or_empty(cx)),
+                            |cx| {
+                                log::info!(
+                                    target: "tolaria::inspector",
+                                    "InspectorPanel factory invoked — building fresh entity"
+                                );
+                                cx.new(|cx| inspector_panel::InspectorPanel::from_or_empty(cx))
+                            },
                         );
                     });
                 });
