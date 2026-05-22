@@ -60,6 +60,103 @@
   GPUI popover anchored over the editor body and verifies the
   popover paints above the editor pixels.
 
+**2026-05-22 diagnostic pass — handed back unresolved.**
+
+*What the architecture actually does (verified by source-reading
+gpui_macos + lb-wry + gpui-component):*
+
+- `gpui_macos::window` mints a custom `native_view` (VIEW_CLASS) +
+  `setWantsLayer(YES)` + `makeBackingLayer` returning the renderer's
+  `CAMetalLayer` (window.rs:783-878).  `native_view` is added as a
+  subview of `NSWindow.contentView` and becomes layer-*hosting* (its
+  layer IS the CAMetalLayer that GPUI renders into via Metal).
+- `gpui_macos` exposes `native_view` (NOT contentView) through
+  `raw_window_handle::AppKitWindowHandle::ns_view`.
+- `lb-wry::WebViewBuilder::build_as_child(&handle)` → calls
+  `ns_view.addSubview(&webview)` (lb-wry-0.53.3 wkwebview/mod.rs:632)
+  where `ns_view` IS GPUI's `native_view`.  So the WKWebView lands as
+  a *child* of GPUI's Metal-hosting view, not a sibling under
+  contentView.
+- Phase 8's `note_item::macos::fix_z_order_send_to_back` calls
+  `parent.addSubview_positioned_relativeTo(wk_view, NSWindowBelow,
+  None)` where `parent = wk_view.superview()` IS `native_view`.  The
+  reorder happens within `native_view`'s subviews array — but
+  WKWebView is the only subview, so the reorder is a no-op for
+  visible compositing.  The original comment ("places this view below
+  every other sibling, so GPUI Metal layer composites above") rests
+  on a mental model where WebView and Metal are *siblings*, which the
+  actual handle plumbing contradicts.
+- GPUI's deferred-draw overlays (Popover, Tooltip, anchored modals)
+  all render into the same Metal layer via `deferred()` + `with_priority()`.
+  CAMetalLayer's contents (the Metal-rendered framebuffer) draws
+  *before* sublayers — which means WKWebView's CALayer (a sublayer of
+  the Metal layer) draws *on top* of whatever GPUI painted into the
+  Metal-rendered region behind it.  Chrome OUTSIDE the WebView frame
+  (toolbar, sidebar, status bar) reads as visible because the
+  WebView's CALayer doesn't extend over those regions — not because
+  Phase 8's z-order swap actually changed compositing.
+
+*Why Phase 8's close-out claim of "tooltips z-order above WebView
+natively" plausibly held in practice:* every tooltip the user
+verified manually was on chrome OUTSIDE the editor-body frame
+(sidebar buttons, toolbar buttons reachable above the editor).
+Tooltips anchored over editor pixels were not exercised because the
+demo vault flows used the toolbar above the editor or status bar
+below it.
+
+*Periscope tooling failed me here:* I could not reliably synthesise a
+click on the toolbar `More` trigger, the status-bar vault chip, or
+the title-bar inspector toggle — none of them mutated visible state
+or fired their `on_mouse_down` / `on_click` log.  Sidebar clicks
+*did* fire but on the row one slot *below* the dump-tree-named
+target (clicking `--id sidebar-all-notes` selected `Archive`), which
+points at a coordinate-mapping bug in `ui::tree_dump` /
+`set_window_y_offset` against macOS Tahoe (Darwin 25.5) — separate
+issue worth its own row, but it blocks any pixel-level z-order
+verification through periscope today.
+
+*Candidate approach re-ranked after the source read:*
+
+1. **Re-parent WKWebView to be a sibling of `native_view` under
+   `contentView`**, ordered NSWindowBelow.  Visual ordering becomes
+   correct (Metal layer composites above WebView via standard sibling
+   sublayer order).  Open problem: `native_view`'s default `hitTest:`
+   returns self for every point inside its bounds, so editor-area
+   clicks no longer reach the WebView.  Needs either a method-swizzle
+   on Zed's `VIEW_CLASS` (fragile against Zed upstream churn) or an
+   intermediate wrapper NSView between contentView and native_view
+   that owns the hitTest fall-through to WebView for editor-body
+   regions.  Net: low-to-medium LOC, but couples us to Zed-class
+   internals.
+2. **Re-introduce a child `NSPanel` (floating window) for every
+   overlay surface** — popover, tooltip, dialog, slash-menu.  This
+   reverses Phase 8's deletion of `OverlayTooltipExt` (632 LOC
+   removed at `649a686c`) and would have to grow to cover popovers +
+   dialogs as well.  Per-overlay cost is high; the routing for focus,
+   Escape, click-outside dismiss, and key-equivalents needs to span
+   the panel + main window.
+3. **Move the editor into a `CAMetalLayer` rendered by GPUI** —
+   loses IME, spell-check, native text editing, WebKit-backed
+   BlockNote rendering.  Off the table per the original worklist
+   filing.
+
+*Open questions for the user before any fix lands:*
+
+- (a) Manual confirmation of which overlays are currently broken.
+  Candidates we expected to see fail: the note-toolbar `More`
+  popover (anchored Top-Right inside the toolbar, expanding down
+  into the editor body), the status-bar vault dropdown (anchored
+  above the status bar, expanding up into the editor body), any
+  Phase 12 dialog covering the editor.
+- (b) Which approach — re-parent (1) vs child `NSPanel` (2) — fits
+  the appetite for touching Zed-class internals.  (1) is cheaper if
+  the wrapper-NSView hitTest pattern is acceptable; (2) is more
+  isolated but rebuilds the surface we just removed.
+
+*Status:* row left in ⏳; no code changes shipped this pass.  Pick
+back up after (a) confirms which overlays we're covering and (b)
+picks the approach.
+
 #### 10.2.1
 
 Consumed by `actions` and Phase 12.1 `command_palette`
