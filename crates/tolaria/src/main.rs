@@ -221,18 +221,32 @@ pub(crate) mod macos {
         // (e.g. `Window::is_inspector_picking`) without re-entering
         // `handle.update` against an already-taken window slot.
         cx.defer(move |cx| {
+            // Worklist 9.2.13 (Reopened-3) — the three early-exit
+            // branches below silently failed at `debug!` level, so a
+            // dispatch that fell through any of them was invisible to
+            // the user under default `cargo run` logging.  Promote to
+            // `warn!`: each branch is a real "the chain broke here"
+            // signal — `cx.active_window()` returning `None` after a
+            // user click means the deferred closure raced the window's
+            // lifetime; a non-`Root` / non-`TolariaWorkspace` window
+            // root means the workspace mount changed shape (very
+            // likely a regression).  None of these should be quiet.
             let Some(handle) = cx.active_window() else {
-                log::debug!("{label}: no active window");
+                log::warn!("{label}: no active window — dispatch dropped");
                 return;
             };
             if let Err(err) = handle.update(cx, |root, window, app_cx| {
                 let Ok(root_entity) = root.downcast::<gpui_component::Root>() else {
-                    log::debug!("{label}: window root is not gpui_component::Root");
+                    log::warn!(
+                        "{label}: window root is not gpui_component::Root — dispatch dropped"
+                    );
                     return;
                 };
                 let inner = root_entity.read(app_cx).view().clone();
                 let Ok(workspace) = inner.downcast::<workspace::TolariaWorkspace>() else {
-                    log::debug!("{label}: Root inner view is not TolariaWorkspace");
+                    log::warn!(
+                        "{label}: Root inner view is not TolariaWorkspace — dispatch dropped"
+                    );
                     return;
                 };
                 // Plain `Entity::update` plus captured `window` is the
