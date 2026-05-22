@@ -39,6 +39,7 @@
 9.2.16. ✅ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
 9.2.17. ✅ The note width toggle (wide/narrow) does not work
 9.2.18. ✅ Add text_overflow ellipsis to note header_strip note titles
+9.2.19. ✅ Add note toolbar button to show/hide (Inspector Panel) pane
 
 ## 3. Low Priority
 
@@ -1313,6 +1314,26 @@ dock at the configured 280pt.  Fixes the TOC panel symptom
 simultaneously since both panels mount through the same right
 dock.  All 41 workspace + 33 tolaria tests stay green.
 
+**Reopened-3 (2026-05-22)** — user confirms manual resize is
+persistent (the 9.3.2 Reopened-2 always-push fix landed cleanly)
+but reports the **default** opening width is still too narrow.
+The React-side `inspector: 280` baseline doesn't carry over
+1-to-1: in the GPUI chrome the inspector renders sections that
+need more horizontal room (property-value pairs + wikilink-pill
+columns are tighter than the React Mantine equivalents), so
+280pt clips real property labels with the 9.2.18 truncate.
+
+**Re-closure-3 (commit `<this-commit>`).**  Bump
+`WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT` from `280.0` to `360.0`.
+Still comfortably under React's `inspector: 500` max-width cap;
+gives property / aliases / "Belongs to" rows enough room to
+render labels alongside wikilink-pill values without immediate
+`…` truncation.  Manual resize remains persistent across
+sessions via the keyed `ResizableState` (untouched by this
+change).  Single-constant edit; `InspectorPanel::default_size`
+reads the constant via the workspace reexport, so the panel
+trait contract stays in lockstep.
+
 #### 9.3.3
 
 **Source:** user-reported polish, 2026-05-21, with attached Image #6.
@@ -1641,6 +1662,41 @@ green.  No new test added — the change is a styling chain that
 GPUI doesn't surface back to test queries; visual confirmation
 needs a periscope screenshot the user can drive in the running
 app.
+
+#### 9.2.19
+
+**Source:** user-filed, 2026-05-22.  **Symptom:** worklist 9.3.5
+moved the inspector toggle off the note toolbar onto the
+workspace title bar.  The user now wants the per-note toolbar
+button back — both surfaces should carry the toggle, mirroring
+the React-era `BreadcrumbBar` which always had this cell, while
+the title-bar primary added in 9.3.5 stays.
+
+**Scope:** restore a `note-toolbar-inspector` cell to the
+note-toolbar's right cluster, just before the
+more-overflow popover.  Same shape as the toc / reveal /
+copy-path cells — plain `toolbar_cell` (no active-state
+treatment since right-dock-open state is workspace-level, not
+per-note), `IconName::PanelRight` glyph (matches the title-bar
+primary), tooltip "Toggle inspector", dispatches
+`actions::ToggleInspector` via `Window::dispatch_action` (the
+re-entrancy-safe route documented in the 9.2.3 / 9.2.6 cells).
+Surface: 1 chained `.child(toolbar_cell(...))` call between
+`note-toolbar-copy-path` and `more_overflow_cell`.  **Size:**
+trivial.
+
+**Closure (commit `<this-commit>`).**  Inserted the
+`note-toolbar-inspector` cell at
+`crates/note_item/src/note_toolbar.rs` between copy-path and
+more.  Glyph: `IconName::PanelRight`; tooltip: "Toggle
+inspector"; dispatch: `Window::dispatch_action(Box::new(
+actions::ToggleInspector), cx)` with the same `debug!` log
+target (`note_item::toolbar`) the other cells use.  Both
+affordances now coexist — the title-bar primary stays (always
+visible regardless of which note is open), the toolbar cell
+sits in per-note context next to the other note-level actions
+(ToC, reveal, copy path).  47 note_item tests + 41 workspace
+tests stay green.
 
 #### 9.3.7
 

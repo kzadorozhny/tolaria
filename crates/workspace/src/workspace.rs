@@ -65,9 +65,18 @@ pub const WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT: f32 = 200.0;
 /// uses `size_full()` and the resizable wrapper owns the width.
 /// Independent from `WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT` (200pt)
 /// because the sidebar (tree rows) and inspector (property-value
-/// pairs) have different content density.  Mirrors the React app's
-/// `inspector: 280` default in `src/hooks/useLayoutPanels.ts:20`.
-pub const WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT: f32 = 280.0;
+/// pairs) have different content density.  Worklist 9.3.2 Reopened-3
+/// (2026-05-22) — the React-side `inspector: 280` default in
+/// `src/hooks/useLayoutPanels.ts:20` was the initial pick, but the
+/// user reports 280 still reads as too narrow on first open in the
+/// GPUI chrome (post-9.2.18 truncate clips real property labels).
+/// Bump to 360pt: still comfortably under React's `inspector: 500`
+/// max-width cap, gives properties / aliases / "Belongs to" labels
+/// enough room to render alongside their wikilink-pill values
+/// without immediate `…` truncation.  Manual resize survives across
+/// sessions via the keyed `ResizableState` (the 9.3.2 Reopened-2 fix
+/// stabilised the panel slot from the first render).
+pub const WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT: f32 = 360.0;
 
 use crate::{
     dock::Dock,
