@@ -1323,7 +1323,7 @@ need more horizontal room (property-value pairs + wikilink-pill
 columns are tighter than the React Mantine equivalents), so
 280pt clips real property labels with the 9.2.18 truncate.
 
-**Re-closure-3 (commit `<this-commit>`).**  Bump
+**Re-closure-3 (commit `0e4f62d1`).**  Bump
 `WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT` from `280.0` to `360.0`.
 Still comfortably under React's `inspector: 500` max-width cap;
 gives property / aliases / "Belongs to" rows enough room to
@@ -1685,7 +1685,7 @@ Surface: 1 chained `.child(toolbar_cell(...))` call between
 `note-toolbar-copy-path` and `more_overflow_cell`.  **Size:**
 trivial.
 
-**Closure (commit `<this-commit>`).**  Inserted the
+**Closure (commit `0e4f62d1`).**  Inserted the
 `note-toolbar-inspector` cell at
 `crates/note_item/src/note_toolbar.rs` between copy-path and
 more.  Glyph: `IconName::PanelRight`; tooltip: "Toggle
