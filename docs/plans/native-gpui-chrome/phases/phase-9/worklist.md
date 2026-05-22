@@ -34,6 +34,7 @@
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
 9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
+9.2.14. ⏳ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
 
 ## 3. Low Priority
 
@@ -1149,6 +1150,41 @@ panel is open (read `workspace.is_right_dock_open(cx)` +
 `right_dock_panel_key == Some("inspector")` — both accessors already
 exist).  When the panel closes, the cell reappears in the toolbar.
 **Deps:** depends on `9.3.3` (header strip) shipping first.  **Size:** small.
+
+#### 9.2.14
+
+**Source:** user-reported, 2026-05-21, against the post-`a71cc191`
+build with neighbourhood working end-to-end.  Two paired polish
+items on the neighbourhood UX:
+
+1. **Toolbar active-state treatment.**  The `note-toolbar-neighborhood`
+   cell currently has no on/off treatment — clicking it sets the
+   note-list scope to `NoteListScope::Neighborhood(id, ids)` but
+   the toolbar glyph stays muted.  Add active-state styling
+   (filled `Map` variant if `gpui-component` has one, OR
+   `ActiveStyle::GlyphColor` with theme accent) when the current
+   note-list scope is `Neighborhood(id, …)` AND the id matches
+   the active item's id.  Mirror the star / organized active-state
+   pattern from `9.2.10` + `9.2.11`.  Reading the workspace's
+   current note-list scope from the toolbar render path requires
+   plumbing — likely a new `&App`-readable accessor on
+   `NoteListPane` exposed via the existing pane handle, or a
+   shared `Rc<RefCell<Option<NoteId>>>` slot updated by the
+   `EnterNeighborhood` handler.
+
+2. **Note-list header shows active note title.**  The `9.2.3`
+   closure (commit `13bbc646`) emits a `SidebarSelectionChangedEvent`
+   with `display_label = "Neighborhood of <title>"`, but per the
+   user's report the header doesn't actually render the note
+   title.  Diagnose path: confirm whether the
+   `SidebarSelectionChangedEvent` reaches the note-list header,
+   and whether the header binds the display_label correctly.
+   May be a sibling of the `a71cc191` toolbar-dispatch fix —
+   the event may emit but the header may not observe.
+
+**Surface:** `crates/note_item/src/note_toolbar.rs` neighbourhood
+cell + `crates/note_list_pane/src/lib.rs` header.  **Size:** small
+each; ship as one commit.
 
 ### Cross-row notes
 
