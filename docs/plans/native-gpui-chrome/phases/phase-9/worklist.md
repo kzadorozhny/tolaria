@@ -1334,6 +1334,48 @@ change).  Single-constant edit; `InspectorPanel::default_size`
 reads the constant via the workspace reexport, so the panel
 trait contract stays in lockstep.
 
+**Reopened-4 (2026-05-22)** ⏳ — user reverted the 360pt bump
+back to `WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT` (200pt) and
+flagged the **real** root cause: when `right_dock_visible` is
+false (initial-launch state, no panel attached), the
+`resizable_panel`'s render returns early as a plain empty `div`
+— skipping both `flex_basis(initial_size)` and `on_prepaint`.
+The panel's `panel_state.size` therefore never gets initialised
+from `initial_size`.  Meanwhile `ResizableState::sync_panels_count`
+extends the new slot's `sizes[]` entry with `PANEL_MIN_SIZE`
+(100pt), and the group's `on_prepaint` runs
+`adjust_to_container_size` which redistributes column widths by
+ratio across every panel.  With four panels at sizes
+`[200, 300, ~1000, 100]` against a 1500pt container, the ratio
+math pins `panels[3].size = Some(94)` before the user ever sees
+the dock.  On first toggle-open, the now-visible
+`resizable_panel` reads `panel_state.size = Some(94)` (which
+wins over the `.size(200)` initial-size hint per the
+`when_some(initial_size, …).map(panel_state.size, …)` chain at
+`gpui-component/.../resizable/panel.rs:309-321`).  Dock renders
+at 94pt.  User's hint: "Read the ResizablePanel source to
+understand the behavior" — exactly: the always-push + invisible
+path doesn't set state, so subsequent ratio math pollutes it.
+
+**Re-closure-4 (commit `<this-commit>`).**  Hold the
+`ResizableState` externally on `TolariaWorkspace`
+(`main_resizable_state: Entity<ResizableState>` — see field doc
+for the full rationale).  Bind via the `with_state(&entity)`
+builder method on `h_resizable("workspace-main-layout")` so the
+workspace owns the source of truth.  Then add an
+`cx.observe_in(&right_dock, window, …)` handler that watches for
+the close → open transition: on the first transition, call
+`state.resize_panel(3, WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT,
+window, cx)` which uses the public resize-handle math
+(`resize_panel_at_handle(2, sizes[2] + delta, …)`) to grow the
+right-dock column to 200pt and shrink the center panel by the
+same delta.  A `right_dock_ever_opened: bool` flag on the
+workspace makes the force-resize fire exactly once per session,
+so subsequent manual drag-resizes are never overwritten —
+matches the user's stated invariant ("stays the same after
+manual resize -- which is great").  519 workspace tests pass;
+clippy clean.
+
 #### 9.3.3
 
 **Source:** user-reported polish, 2026-05-21, with attached Image #6.

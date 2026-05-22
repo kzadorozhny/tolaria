@@ -27,7 +27,7 @@ use gpui::{
     Styled, Window,
 };
 use gpui_component::{
-    resizable::{h_resizable, resizable_panel},
+    resizable::{h_resizable, resizable_panel, ResizableState},
     ActiveTheme,
 };
 use status_bar::StatusBar;
@@ -76,7 +76,7 @@ pub const WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT: f32 = 200.0;
 /// without immediate `…` truncation.  Manual resize survives across
 /// sessions via the keyed `ResizableState` (the 9.3.2 Reopened-2 fix
 /// stabilised the panel slot from the first render).
-pub const WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT: f32 = 360.0;
+pub const WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT: f32 = WORKSPACE_LEFT_DOCK_INITIAL_WIDTH_PT;
 
 use crate::{
     dock::Dock,
@@ -108,6 +108,33 @@ pub struct TolariaWorkspace {
     bottom_dock: Entity<Dock>,
     center_group: Entity<PaneGroup>,
     status_bar: Entity<StatusBar>,
+    /// Externally-managed state for the main workspace row's
+    /// `h_resizable`.  Worklist 9.3.2 Reopened-4 — we need access
+    /// from `cx.observe(&right_dock, …)` to forcibly resize the
+    /// right-dock column to its intended initial width when the
+    /// dock first transitions open.  Backstory: a fresh
+    /// `ResizableState` initialised by `sync_panels_count` extends
+    /// new slots with `PANEL_MIN_SIZE` (100pt), then
+    /// `adjust_to_container_size` redistributes by ratio across
+    /// every panel — including the initially-invisible right dock
+    /// — which overwrites the panel's `panel_state.size` with the
+    /// resulting (small) value before any visible render fires its
+    /// `on_prepaint`.  Without intervention, the right dock then
+    /// renders at `flex_basis(small_value)` on first attach,
+    /// regardless of the `.size(...)` initial-size hint.  The
+    /// observer below uses [`ResizableState::resize_panel`] to
+    /// force `panel_state.size` to the configured initial width on
+    /// the first close → open transition.
+    main_resizable_state: Entity<ResizableState>,
+    /// Tracks whether the right dock has been opened at least once
+    /// in this session — supports the worklist 9.3.2 Reopened-4
+    /// observer.  We force the right-dock's resizable size to
+    /// `WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT` on the **first**
+    /// open only; subsequent toggles preserve whatever width the
+    /// user dragged the column to, because manual resizes write
+    /// through `panel_state.size` and the observer's force-resize
+    /// is gated on this flag staying `false`.
+    right_dock_ever_opened: bool,
 }
 
 impl TolariaWorkspace {
@@ -151,7 +178,40 @@ impl TolariaWorkspace {
         // column appears / disappears in lockstep.  Without this the
         // Dock's own `cx.notify()` only re-runs its inner `render`,
         // never the workspace shell.
-        cx.observe(&right_dock, |_, _, cx| cx.notify()).detach();
+        //
+        // Worklist 9.3.2 Reopened-4 — this observer also enforces
+        // the right-dock's initial opening width.  See the
+        // `main_resizable_state` field doc for the
+        // `ResizableState::sync_panels_count` PANEL_MIN_SIZE
+        // pollution this works around.  We force-resize the
+        // right-dock column to its configured initial width on the
+        // first close → open transition only; after that, any
+        // manual user resize wins.
+        cx.observe_in(&right_dock, window, |this, dock, window, cx| {
+            cx.notify();
+            let is_open = dock.read(cx).has_panel();
+            if is_open && !this.right_dock_ever_opened {
+                this.right_dock_ever_opened = true;
+                let initial = px(WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT);
+                // The right dock is panel index 3 in the main
+                // resizable row: [left, note-list, center, right].
+                // `resize_panel(3, size, …)` shrinks the previous
+                // sibling (center) to make room — matches how a
+                // drag on the resize handle between center and
+                // right would behave.
+                this.main_resizable_state.update(cx, |state, cx| {
+                    state.resize_panel(3, initial, window, cx);
+                });
+            }
+        })
+        .detach();
+
+        // Externally-managed resizable state for the main row.
+        // Initialised empty — `h_resizable("workspace-main-layout")`'s
+        // first render populates it via `sync_panels_count`.  The
+        // right-dock observer above force-resizes the right column
+        // on the first close → open transition (see field doc).
+        let main_resizable_state = cx.new(|_| ResizableState::default());
 
         Self {
             title_bar,
@@ -163,6 +223,8 @@ impl TolariaWorkspace {
             bottom_dock,
             center_group,
             status_bar,
+            main_resizable_state,
+            right_dock_ever_opened: false,
         }
     }
 
@@ -501,11 +563,17 @@ impl Render for TolariaWorkspace {
                 // siblings — title spacer, bottom dock, status bar —
                 // off the bottom of the window and they become
                 // invisible.
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(h_resizable("workspace-main-layout").children(panels))
+                div().flex_1().min_h_0().overflow_hidden().child(
+                    h_resizable("workspace-main-layout")
+                        // Worklist 9.3.2 Reopened-4 — bind to
+                        // our externally-managed state so the
+                        // right-dock observer can call
+                        // `resize_panel(3, …)` on the first
+                        // close → open transition.  See the
+                        // `main_resizable_state` field doc.
+                        .with_state(&self.main_resizable_state)
+                        .children(panels),
+                )
             })
             // Bottom dock (empty placeholder in Phase 2a).
             .child(

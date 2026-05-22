@@ -654,17 +654,13 @@ fn organized_icon_for(active: bool) -> IconName {
     }
 }
 
-/// Convenience wrapper around [`toolbar_cell`] for cells whose
-/// behaviour hasn't been wired yet — logs the stub message on click,
-/// matching the previous helper's body.  Used by the remaining
-/// unwired toolbar cells (notably `note-toolbar-width` and
-/// `note-toolbar-ai`) that need real product work (note-width chrome
-/// knob, AI panel attach) before they can dispatch.
-fn stub_cell(id: &'static str, icon: IconName, tooltip: &'static str) -> AnyElement {
-    toolbar_cell(id, icon, tooltip, move |_, _| {
-        log::info!("note toolbar action stub: {id}");
-    })
-}
+// Worklist 9.2.17 wired `note-toolbar-width` to real
+// `ToggleNoteWidth` dispatch and the `note-toolbar-ai` cell is
+// commented out pending the `ai_panel` provider work (deferred row
+// 9.2.5).  No `stub_cell` callers remain; the helper was removed.
+// If a future toolbar cell needs a stub, copy the
+// `toolbar_cell(... move |_, _| log::debug!(...))` shape inline —
+// the indirection isn't worth carrying for one site.
 
 /// More-overflow popover cell for the `note-toolbar-more` slot
 /// (worklist 9.2.7).  Mirrors React's `BreadcrumbOverflowMenu`
