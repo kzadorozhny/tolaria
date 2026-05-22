@@ -33,10 +33,10 @@
 9.2.10. ✅ Organized toolbar cell needs green-checked colour treatment
 9.2.11. ✅ Star toolbar cell needs orange-filled colour treatment when active
 9.2.12. ✅ Inbox sidebar view must exclude notes with `_organized: true`
-9.2.13. ✅ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
+9.2.13. ⏳ Inspector Panel — Properties, Aliases, Belongs to, Owner, Related to, Has, Info, History sections
 9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
 9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
-9.2.16. Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
+9.2.16. ⏳ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
 
 ## 3. Low Priority
 
@@ -44,9 +44,9 @@
 9.3.2. ✅ Inspector panel should open at least the default width of the sidebar
 9.3.3. ✅ Inspector panel header — same height as note header, title reads `Properties`
 9.3.4. ✅ Inspector open/close button migrates to the panel header when open
-9.3.5. Note properties panel toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
+9.3.5. ⏳ Note properties panel toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
 9.3.6. ✅ Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
-9.3.7. Block editor selection menu should have React side styling
+9.3.7. ⏳ Block editor selection menu should have React side styling
 
 ---
 
@@ -1110,6 +1110,25 @@ turned out to be a single bug; each row's annotation flags the
 shared fix so future triage doesn't re-investigate each cell
 independently.
 
+**Reopened-3 (2026-05-21)** ⏳ — user re-reports "Inspector Panel
+does not open again" after the `d9766aa5` inspector chrome reshape
+(9.3.2 + 9.3.3 + 9.3.4 + 9.3.5).  The toolbar inspector cell was
+removed in that commit; user now opens the panel from the new
+title-bar toggle (`title-bar-toggle-inspector` at
+`workspace/src/title_bar.rs:189`).  Click dispatches
+`actions::ToggleInspector` via `Window::dispatch_action`; the
+handler at `tolaria/src/main.rs:836` runs
+`toggle_or_swap_right_dock_panel`.  Diagnosis path: log
+`RUST_LOG=tolaria=info,workspace=info`, click the title-bar
+Inspector toggle, watch for the dispatch + attach traces.
+If the panel attaches but renders invisibly: confirm the new
+header strip (9.3.3 commit `d9766aa5`) doesn't consume all
+available width OR `Dock::set_panel` reads `starts_open == true`
+(it does — `InspectorPanel::starts_open` at
+`inspector_panel/src/lib.rs:1471` returns `true`).  Could also
+be a fresh regression in the right-dock visibility chain in
+`workspace.rs` after the dock-width constant unification.
+
 #### 9.3.1
 
 **Source:** user-reported polish on the embedded BlockNote editor,
@@ -1377,6 +1396,63 @@ populates both fields — `properties_open` from
 to cover all four state-axis combinations (both closed, both open,
 only properties, only overlay).
 
+#### 9.2.16
+
+**Source:** user-filed, 2026-05-21.  **Symptom:** clicking the
+neighbourhood toolbar button always SETS the neighbourhood scope
+(per `9.2.3`'s `EnterNeighborhood` handler).  There's no way to
+exit neighbourhood mode from the same button — the user has to
+click another sidebar row.  The user wants the toolbar cell to
+behave as a true toggle: click once → enter neighbourhood; click
+again → exit back to the previous scope.
+
+**Scope:**
+1. The `EnterNeighborhood` handler at `tolaria/src/main.rs:1019`
+   currently always writes `NoteListScope::Neighborhood(id, …)`.
+   Add an "exit if currently in this neighbourhood" branch:
+   read the current `NoteListScope`; if it's
+   `Neighborhood(active_id, …)` matching the active note's id,
+   pop back to whatever the previous scope was (or default to
+   `NoteListScope::Inbox` / `AllNotes` — pick whichever feels
+   natural; React's `useNeighborhoodSelection` pops via
+   `nav_history`).
+2. The `NeighborhoodAnchor` global (introduced in `9.2.14` /
+   commit `7d697f5a`) flips alongside the scope — when exiting,
+   set `*anchor = None` so the toolbar cell deactivates.
+3. The previous-scope memory: simplest is a small `Rc<RefCell<NoteListScope>>`
+   slot updated by the handler before setting Neighborhood, and
+   read on exit to restore.  Acceptable size; Phase 10's
+   `nav_history` will replace it.
+4. The note-list header should also pop back from "Neighborhood of <title>"
+   to the previous scope's header label on exit.
+
+**Surface:** `tolaria/src/main.rs` `EnterNeighborhood` handler;
+optional small state in `note_item` or a new slot.  **Size:** small.
+
+#### 9.3.7
+
+**Source:** user-filed, 2026-05-21.  **Symptom:** the BlockNote
+selection menu (the floating formatting toolbar that appears when
+the user selects text) renders with BlockNote's stock styling
+instead of the React app's polished treatment (custom colours,
+spacing, hover states).  Mirror the 9.3.1 work: the React side has
+a custom `tolariaBlockNoteFormattingToolbar*` (or similar) that
+overrides BlockNote's default; port it to `editor-host/`.
+
+**Scope:**
+1. Find the React-side custom formatting toolbar — likely
+   `src/components/blockNoteFormattingToolbar*` (the worklist
+   `8.2.25` work referenced `blockNoteFormattingToolbarHoverGuard`).
+2. Port to `editor-host/src/` if the React component supplants
+   BlockNote's default toolbar.  If only CSS, port the styles to
+   `editor-host/src/style.css`.
+3. Mount via `FormattingToolbarController` in
+   `editor-host/src/menus.tsx` (same shape as the `SideMenuController`
+   mount for `9.3.1`).
+4. Vitest covering wiring (DOM class / mount).
+
+**Surface:** `editor-host/` TS+CSS.  **Size:** medium.
+
 #### 9.3.5
 
 **Source:** user-reported polish, 2026-05-21.  **Symptom:** the
@@ -1411,6 +1487,29 @@ same commit — title-bar = closed-state primary, panel header =
 open-state primary (per `9.3.4`).  Updated the actions docstring
 and the `tolaria::main` mount comment so future grep traces land
 on the new dispatch sites.
+
+**Reopened (2026-05-21)** ⏳ — user reports "the icon is still in
+the note toolbar."  Source code at `crates/note_item/src/note_toolbar.rs`
+no longer adds a `note-toolbar-inspector` cell (verified by
+greppping); the cell list ends at `note-toolbar-copy-path` +
+the More-overflow popover.  Likely causes:
+1. **Stale binary.**  User testing against a pre-`d9766aa5` build;
+   `cargo run` should pick up the fresh source but a stale
+   incremental build cache could be returning the old binary.
+   Fix path: ask the user to `cargo clean -p tolaria && cargo run`.
+2. **Title-bar toggle invisible at user's window size.**  The
+   `title-bar-toggle-inspector` is in the right cluster at
+   `title_bar.rs:189`; if the title-bar's right cluster is clipped
+   by some other element OR the title-bar wraps, the user might
+   not see it and conclude the inspector "is still in the toolbar"
+   when they actually mean "the toolbar is the only place I can
+   see it."
+3. **Some other cell paints with the inspector glyph.**
+   `IconName::PanelRight` is the same glyph the sidebar-toggle
+   uses on the left — confusion with that is possible.
+Diagnosis: confirm via screenshot whether (a) the title-bar
+button is visible OR (b) any toolbar cell uses
+`IconName::PanelRight`.
 
 #### 9.3.6
 
