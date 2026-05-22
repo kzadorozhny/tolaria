@@ -515,7 +515,7 @@ pub(crate) mod macos {
         // perceives as "the click did nothing": the scope swaps but
         // the filter hides every entry.  The warn log makes the root
         // cause discoverable from the live log without enabling debug.
-        log::info!(
+        log::debug!(
             target: "tolaria::neighborhood",
             "EnterNeighborhood: id={id:?} title={title:?} resolved {count} neighbour(s)",
         );
@@ -980,7 +980,7 @@ pub(crate) mod macos {
                     };
                     let id = item.read(cx).id();
                     let pre_raw = item.read(cx).raw_mode();
-                    log::info!(
+                    log::debug!(
                         target: "tolaria::raw_editor",
                         "ToggleRawEditor: id={id:?} raw_mode {pre_raw} → {}",
                         !pre_raw,
