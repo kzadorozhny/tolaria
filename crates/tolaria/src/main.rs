@@ -330,9 +330,34 @@ pub(crate) mod macos {
     /// window close and reopen) `dispatch_to_workspace` is a no-op,
     /// which leaves the previously-set labels in place — matching the
     /// `"Show …"` default we lay down before window open.
-    fn rebuild_menus(cx: &mut App) {
-        dispatch_to_workspace("rebuild_menus", cx, |ws, window, cx| {
-            rebuild_menus_with_workspace(ws, window, cx);
+    pub(crate) fn rebuild_menus(cx: &mut App) {
+        // Worklist 10.1.3 follow-up — the previous implementation went
+        // through `dispatch_to_workspace`, which uses
+        // `cx.active_window()` to find the workspace.  That broke as
+        // soon as the inspector window from 10.1.3 became focusable:
+        // after opening the inspector window the active window is the
+        // inspector (not the workspace), the
+        // `Root → TolariaWorkspace` downcast fails, and the menu
+        // never rebuilds — the user reported "Menu states `Show
+        // Inspector` when window is open".  Iterate every open window
+        // and update the one whose root downcasts to the workspace
+        // shape; the inspector window's `InspectorWindow` root fails
+        // the downcast and is silently skipped.
+        cx.defer(|cx| {
+            for handle in cx.windows() {
+                let _ = handle.update(cx, |root, window, app_cx| {
+                    let Ok(root_entity) = root.downcast::<gpui_component::Root>() else {
+                        return;
+                    };
+                    let inner = root_entity.read(app_cx).view().clone();
+                    let Ok(workspace) = inner.downcast::<workspace::TolariaWorkspace>() else {
+                        return;
+                    };
+                    workspace.update(app_cx, |ws, cx| {
+                        rebuild_menus_with_workspace(ws, window, cx)
+                    });
+                });
+            }
         });
     }
 

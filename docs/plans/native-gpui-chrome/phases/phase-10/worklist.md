@@ -378,6 +378,32 @@ toggle through `bridge.window`'s open → close cycle) and
 `inspector_bridge_default_is_closed` (pins the default-label
 invariant for the menu rebuild path).
 
+**2026-05-22 second follow-up — menu rebuild + system-close-button
+sync (user-reported regressions on the revised cut).**
+
+1. *"Menu states `Show Inspector` when window is open."*
+   `rebuild_menus` was wired through `dispatch_to_workspace`, which
+   uses `cx.active_window()` to find the workspace.  As soon as the
+   inspector window opens with `focus: true`, the active window
+   *is* the inspector — the `Root → TolariaWorkspace` downcast fails
+   and the menu never rebuilds.  Rewrote `rebuild_menus` to iterate
+   `cx.windows()` and run the workspace update against every window
+   whose root downcasts to the workspace shape (the inspector
+   window's `InspectorWindow` root fails the downcast and is silently
+   skipped).  Now the menu label tracks the bridge regardless of
+   which window is focused at rebuild time.
+
+2. *"Closing window using system close button does not update the
+   state."*  The macOS traffic-light close button bypasses our toggle
+   path entirely — AppKit closes the window and the bridge's
+   `WindowHandle` stays `Some(stale)`.  The next Cmd+Alt+I sees
+   `is_some()`, takes the close branch, and does nothing visible.
+   Registered `Window::on_window_should_close` inside
+   `ensure_inspector_window_open` so the close callback (a) clears
+   `bridge.window = None` and (b) fires `crate::macos::rebuild_menus`
+   so the View-menu label flips back to "Show Inspector" the moment
+   the user clicks the X.
+
 #### 10.2.1
 
 Consumed by `actions` and Phase 12.1 `command_palette`

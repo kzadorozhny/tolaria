@@ -139,7 +139,25 @@ fn ensure_inspector_window_open(cx: &mut App) {
         ..Default::default()
     };
 
-    match cx.open_window(opts, |_window, cx| cx.new(|_cx| InspectorWindow)) {
+    match cx.open_window(opts, |window, cx| {
+        // Worklist 10.1.3 follow-up — register a should-close hook so
+        // the bridge state stays in sync when the user dismisses the
+        // window via the macOS traffic-light close button (rather
+        // than via Cmd+Alt+I).  Without this, `bridge.window` keeps a
+        // stale handle, the next Cmd+Alt+I sees `is_some()`, takes
+        // the close branch, and does nothing visible — the user
+        // reported "Closing window using system close button does not
+        // update the state".  The closure also fires the menu rebuild
+        // so `View → Show Inspector` reads correctly after the close.
+        window.on_window_should_close(cx, |_window, app_cx| {
+            with_bridge(app_cx, |bridge| {
+                bridge.window = None;
+            });
+            crate::macos::rebuild_menus(app_cx);
+            true
+        });
+        cx.new(|_cx| InspectorWindow)
+    }) {
         Ok(handle) => {
             with_bridge(cx, move |bridge| {
                 bridge.window = Some(handle);
