@@ -193,14 +193,15 @@ impl TolariaWorkspace {
             if is_open && !this.right_dock_ever_opened {
                 this.right_dock_ever_opened = true;
                 let initial = px(WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT);
-                // The right dock is panel index 3 in the main
-                // resizable row: [left, note-list, center, right].
-                // `resize_panel(3, size, …)` shrinks the previous
-                // sibling (center) to make room — matches how a
-                // drag on the resize handle between center and
-                // right would behave.
+                // `resize_panel(idx, size, …)` shrinks the previous
+                // sibling (center) to make room — matches how a drag
+                // on the resize handle between center and right would
+                // behave.  The index is derived from the optional
+                // note-list slot because the panels vec is built
+                // conditionally in `Render` (see [`right_dock_panel_index`]).
+                let idx = this.right_dock_panel_index();
                 this.main_resizable_state.update(cx, |state, cx| {
-                    state.resize_panel(3, initial, window, cx);
+                    state.resize_panel(idx, initial, window, cx);
                 });
             }
         })
@@ -372,6 +373,28 @@ impl TolariaWorkspace {
     /// Re-attaching replaces the previous occupant.
     pub fn attach_note_list_column<V: Render + 'static>(&mut self, view: gpui::Entity<V>) {
         self.note_list_column = Some(view.into());
+    }
+
+    /// Index of the right-dock slot inside the main resizable row.
+    ///
+    /// Mirrors the conditional `panels.push(...)` order in [`Self::render`]:
+    /// the left dock is always pushed (index 0); the note-list column
+    /// is pushed only when [`Self::attach_note_list_column`] has set
+    /// `note_list_column`; the center is always pushed; the right
+    /// dock is always pushed last.  So the right dock lives at index
+    /// 3 when a note-list column is attached and index 2 otherwise.
+    ///
+    /// Used by the right-dock open observer in [`Self::new`] to call
+    /// `ResizableState::resize_panel(idx, …)` against the correct
+    /// slot — a hardcoded `3` was wrong for headless / test
+    /// workspaces that never call `attach_note_list_column`.  The
+    /// render path enforces the invariant via `debug_assert!`.
+    pub(crate) fn right_dock_panel_index(&self) -> usize {
+        if self.note_list_column.is_some() {
+            3
+        } else {
+            2
+        }
     }
 
     /// Append `item` to the center [`PaneGroup`]'s active [`Pane`].
@@ -556,6 +579,14 @@ impl Render for TolariaWorkspace {
                                 .dump_as("workspace-right-dock"),
                         ),
                 );
+                // Anchor the right-dock-index invariant: the observer
+                // installed in `Self::new` calls `resize_panel(idx, …)`
+                // against this slot, where `idx` is computed by
+                // [`Self::right_dock_panel_index`].  Any future
+                // re-ordering of the panel pushes above must update
+                // that helper in lockstep — this assertion trips a
+                // test if the two ever drift.
+                debug_assert_eq!(panels.len() - 1, self.right_dock_panel_index());
                 // `min_h_0` + `overflow_hidden` is the classic flex
                 // trick that lets this row shrink below its content's
                 // natural height.  Without it, an overflowing panel
@@ -568,9 +599,10 @@ impl Render for TolariaWorkspace {
                         // Worklist 9.3.2 Reopened-4 — bind to
                         // our externally-managed state so the
                         // right-dock observer can call
-                        // `resize_panel(3, …)` on the first
-                        // close → open transition.  See the
-                        // `main_resizable_state` field doc.
+                        // `resize_panel(right_dock_panel_index(), …)`
+                        // on the first close → open transition.
+                        // See the `main_resizable_state` field doc
+                        // and [`Self::right_dock_panel_index`].
                         .with_state(&self.main_resizable_state)
                         .children(panels),
                 )

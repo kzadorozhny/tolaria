@@ -297,6 +297,50 @@ mod tests {
         cx.run_until_parked();
     }
 
+    /// Phase 10.3.1 regression — `right_dock_panel_index` must mirror
+    /// the conditional `panels.push(...)` order in
+    /// `TolariaWorkspace::render`.  When no note-list column is
+    /// attached the right dock lives at index 2 (panels = [left,
+    /// center, right]); attaching a note-list column shifts it to
+    /// index 3 (panels = [left, note-list, center, right]).  The
+    /// observer in `TolariaWorkspace::new` calls
+    /// `ResizableState::resize_panel(idx, …)` with this index, so a
+    /// drift here misresizes (or panics out-of-bounds via `Vec::get`)
+    /// the right column on the first close → open transition.  Worklist
+    /// 9.3.2 Reopened-4 originally hardcoded `3` and shipped the bug;
+    /// this test pins both arms of the conditional.
+    #[gpui::test]
+    fn right_dock_panel_index_tracks_note_list_column(cx: &mut TestAppContext) {
+        install_theme(cx);
+        let window = cx.add_window(TolariaWorkspace::empty);
+
+        // No note-list column attached: right dock at index 2.
+        window
+            .update(cx, |workspace, _window, _cx| {
+                assert_eq!(
+                    workspace.right_dock_panel_index(),
+                    2,
+                    "right dock must be at index 2 when no note-list column is attached"
+                );
+            })
+            .unwrap();
+
+        // After attaching a note-list column the index shifts to 3.
+        // `DummyModal` from the carry-over tests already implements
+        // `Render`; `attach_note_list_column` only needs that bound.
+        window
+            .update(cx, |workspace, _window, cx| {
+                let view = cx.new(|_| DummyModal);
+                workspace.attach_note_list_column(view);
+                assert_eq!(
+                    workspace.right_dock_panel_index(),
+                    3,
+                    "right dock must be at index 3 when a note-list column is attached"
+                );
+            })
+            .unwrap();
+    }
+
     // -----------------------------------------------------------------------
     // Phase 2a: Dock tests
     // -----------------------------------------------------------------------
