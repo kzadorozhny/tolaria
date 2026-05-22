@@ -324,12 +324,6 @@ pub(crate) fn render(
                 window.dispatch_action(Box::new(actions::ToggleNoteWidth), cx);
             },
         ))
-        // Defeered
-        // .child(stub_cell(
-        //     "note-toolbar-ai",
-        //     IconName::Asterisk,
-        //     "Open AI assistant",
-        // ))
         // Worklist 9.2.19 — restore the per-note inspector toggle on
         // the toolbar alongside the title-bar primary added in 9.3.5.
         // The two affordances complement each other: the title-bar
@@ -413,8 +407,7 @@ pub(crate) fn render(
 /// the cell is clicked.
 ///
 /// Single source of truth for the cell's visual chain (size, hover
-/// background, `dump_as`, `tooltip`) — see [`stub_cell`] for the
-/// log-only default used by the seven still-unwired cells.  Wraps
+/// background, `dump_as`, `tooltip`).  Wraps
 /// [`toolbar_cell_with_active`] in the `active = false` case so the
 /// active-state treatment is opt-in.
 fn toolbar_cell(
@@ -653,14 +646,6 @@ fn organized_icon_for(active: bool) -> IconName {
         IconName::CircleCheck
     }
 }
-
-// Worklist 9.2.17 wired `note-toolbar-width` to real
-// `ToggleNoteWidth` dispatch and the `note-toolbar-ai` cell is
-// commented out pending the `ai_panel` provider work (deferred row
-// 9.2.5).  No `stub_cell` callers remain; the helper was removed.
-// If a future toolbar cell needs a stub, copy the
-// `toolbar_cell(... move |_, _| log::debug!(...))` shape inline —
-// the indirection isn't worth carrying for one site.
 
 /// More-overflow popover cell for the `note-toolbar-more` slot
 /// (worklist 9.2.7).  Mirrors React's `BreadcrumbOverflowMenu`
