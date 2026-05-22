@@ -186,16 +186,6 @@ impl Render for TitleBar {
                 "title-bar-search",
                 IconName::Search,
                 "Search",
-            ))
-            .child(title_bar_cell(
-                "title-bar-language",
-                IconName::Globe,
-                "Language",
-            ))
-            .child(title_bar_cell(
-                "title-bar-profile",
-                IconName::CircleUser,
-                "Profile",
             ));
 
         // Vertically centre the action clusters within the strip
