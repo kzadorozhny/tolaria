@@ -37,6 +37,7 @@
 9.2.14. ✅ Neighbourhood — toolbar active-state treatment + note-list header shows the active note's title
 9.2.15. ✅ System menu View — rename "Show Inspector" to "Show Properties"; restore "Show Inspector" toggling the GPUI element overlay
 9.2.16. ✅ Neighbourhood buttom shoud be a toggle to activate/deactivate the neighbourhood view
+9.2.17. The note width toggle (wide/narrow) does not work
 
 ## 3. Low Priority
 
@@ -47,6 +48,7 @@
 9.3.5. ✅ Note properties panel toggle button moves to title-bar right corner (mirror sidebar toggle on opposite side)
 9.3.6. ✅ Downgrade note-toolbar logging introduced in Phase 9 to `debug!` level
 9.3.7. ✅ Block editor selection menu should have React side styling
+9.3.8. The Note List eighbourhood mode title reads `Neighbourhood`of <note-is>. It should be `Note title` (same as in Note List)
 
 ---
 
@@ -1239,29 +1241,6 @@ lines of fixtures); duplicating them in the host would just bind
 the same logic to the same shape.  The smoke test pins the
 *wiring* (CSS hook + DOM shape), not the math.
 
-**Reopened (2026-05-22)** ⏳ — user reports drag-handle styling is
-still missing after `fa740de6`.  Root cause: the
-`TolariaSideMenu` component mounted correctly with the
-`.tolaria-block-drag-handle` class, but `editor-host/src/style.css`
-imported `@blocknote/react/style.css` (the headless variant) while
-the host uses `@blocknote/shadcn`'s `<BlockNoteView>`.  Shadcn
-ships 16 `.bn-shadcn`-prefixed rules — SVG sizing, side-menu
-alignment, button sizing (`.bn-shadcn .bn-side-menu .bn-button
-{ padding: 0; height: 24px }`), toolbar overflow, dropdown
-heights — that the react variant doesn't include.  Without those
-rules the side menu rendered with BlockNote's base layout but
-none of the shadcn chrome polish, which is what the
-`TolariaSideMenu` port expected.
-
-**Re-closure (commit `5e8cc075`).**  Swap `@import
-"@blocknote/react/style.css"` → `"@blocknote/shadcn/style.css"`
-in `editor-host/src/style.css`.  The shadcn import transitively
-pulls in the base react styles, so this is additive, not
-exclusive.  Confirmed via `dist/index.html` grep: all 16
-`.bn-shadcn` rules now land in the inlined bundle.  Bundle grew
-+1.05 kB (2,491.59 → 2,492.64).  All 385 vitest cases stay
-green; `cargo clippy --workspace` clean.
-
 #### 9.3.2
 
 **Source:** user-reported polish on the right-dock Inspector panel,
@@ -1284,29 +1263,6 @@ all read from one source of truth.  The right dock used to mount at
 `px(240.0)` and the inspector panel reported `default_size` =
 `px(320.0)`; both now resolve to the sidebar's 200-pt baseline so
 the user's muscle memory carries across.
-
-**Reopened (2026-05-22)** ⏳ — user reports "side dock panel is too
-narrow" after `d9766aa5`.  The fix literally satisfied the row
-spec ("at least the default width of the sidebar"), but 200pt
-isn't enough column width for the inspector's property-value
-pairs to render comfortably — labels wrap, values get cut off.
-React's app defaults to **280pt** for the inspector
-(`src/hooks/useLayoutPanels.ts:20` `inspector: 280`), which is
-the muscle-memory width users carry over.  The sidebar (tree
-rows, dense) and inspector (property-value pairs, sparser) have
-different content density and shouldn't share one knob.
-
-**Re-closure (commit `5e8cc075`).**  Add a new
-`workspace::workspace::WORKSPACE_RIGHT_DOCK_INITIAL_WIDTH_PT`
-constant (`280.0`) independent from the sidebar's 200pt knob.
-The workspace render's right-dock `resizable_panel().size(...)`
-call now reads the new constant, and `InspectorPanel::default_size`
-reads the same constant via `workspace::workspace::` reexport so
-both surfaces stay in lockstep.  The
-`default_size_matches_left_dock_initial_width` test was renamed
-to `default_size_matches_right_dock_initial_width` and now
-asserts against the new right-dock constant.  31 inspector_panel
-tests + 41 workspace tests stay green.
 
 #### 9.3.3
 
