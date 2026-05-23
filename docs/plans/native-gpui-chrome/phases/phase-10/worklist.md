@@ -18,6 +18,7 @@
 10.1.2. ✅ ToggleElementInspector update failed: window not found
 10.1.3. ✅ ToggleElementInspector window shoud be a separate os window.
 10.1.4. ✅ Wire element-picker integration into the inspector pane (grow main window by 30 rems, use GPUI's built-in inspector — option A)
+10.1.5. ✅ restore native GPUI inspector panel functionality inside inspector view (port Zed's `inspector_ui::inspector::render_inspector` shape — pick toggle button, "GPUI Inspector" label, element-ID metadata block, `render_inspector_states` slot)
 
 ## 2. High Priority
 
@@ -539,6 +540,62 @@ element with `dump_as` (sidebar row, toolbar button, status-bar chip,
 etc.) → "Active element" row updates with the `GlobalElementId` debug
 chain and source-line.  Cmd+Alt+I again → workspace shrinks back to
 its prior size; inspector pane gone.
+
+#### 10.1.5
+
+User clarification: *"I meant the panel built by Zed"* — the panel
+shape `inspector_ui::inspector::render_inspector` builds in Zed's
+source (`zed.git@8ca194d/crates/inspector_ui/src/inspector.rs:55`),
+not a GPUI built-in (GPUI ships only the `Inspector` entity + the
+`set_inspector_renderer` callback hook — no default UI; `Render for
+Inspector` returns `Empty` when no callback is set).
+
+Ported the core of Zed's `render_inspector` into
+`crates/tolaria/src/inspector_renderer.rs`:
+
+- **Header strip.**  `gpui_component::Button` icon button on the
+  left (pick-mode toggle, `IconName::Inspector`) with
+  `selected(inspector.is_picking())` so its style flips when picking
+  is active; `cx.listener(|inspector, _, window, _| {
+  inspector.start_picking(); window.refresh(); })` mirrors Zed's
+  `inspector_ui::inspector` click handler exactly.  "GPUI Inspector"
+  text on the right.
+- **Element-ID metadata block.**  Three rows mirroring Zed's
+  `render_inspector_id`: "Element ID" + `Instance N`, the source
+  location (`file:line` in a tinted box), the global ID
+  (`InspectorElementId::path::global_id::to_string`).  Dropped the
+  Zed-CLI "click to open" affordance from Zed's version since
+  Tolaria doesn't ship a CLI to forward to — read-only display.
+- **`render_inspector_states` slot.**  Body's `.children(...)` call
+  yields every per-element-type renderer registered via
+  `cx.register_inspector_element`.  Today no type-renderers are
+  registered (porting Zed's `DivInspector` would pull in
+  `project::Project` + LSP, which the original 3.1 doc-comment
+  already called out as out-of-scope for Tolaria); when future code
+  registers a stripped-down element renderer it slots in below the
+  ID block automatically.
+
+The picker no longer auto-starts on every paint — the user clicks
+the toolbar pick button to enter pick mode, same as in Zed.  Without
+that, hovering elements just leaves the panel inert; with picking
+on, the active-element block updates per hover.
+
+Switched the renderer to use `gpui_component` primitives (`Button`,
+`h_flex`, `v_flex`, `IconName::Inspector`, `Selectable`, `Sizable`,
+`ButtonVariants`) so the in-pane chrome inherits the same theme +
+typography as the rest of Tolaria's surfaces.  Wired the
+`gpui::prelude::FluentBuilder`, `InteractiveElement`, and
+`StatefulInteractiveElement` traits explicitly so the body div
+gains `.id(...)` + `.overflow_y_scroll()` + `.when_some(...)` for
+the scroll container.
+
+`cargo test -p tolaria`: 34 passed; `cargo clippy -p tolaria`: clean.
+
+User manual validation: Cmd+Alt+I → pane on right shows the Zed-
+style header (pick button + "GPUI Inspector" title).  Click the
+pick icon → it highlights (selected state) and picking activates.
+Hover any workspace element → the Element ID / Source / Global ID
+block populates.  Cmd+Alt+I again → pane closes.
 
 #### 10.2.1
 

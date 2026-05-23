@@ -47,10 +47,14 @@
 #![cfg(debug_assertions)]
 
 use gpui::{
-    div, px, rems, AnyElement, Context, Inspector, IntoElement, ParentElement, Pixels,
-    SharedString, Styled, Window,
+    div, prelude::FluentBuilder as _, px, rems, AnyElement, App, Context, Inspector,
+    InspectorElementId, InteractiveElement as _, IntoElement, ParentElement, Pixels, SharedString,
+    StatefulInteractiveElement as _, Styled, Window,
 };
-use gpui_component::ActiveTheme;
+use gpui_component::{
+    button::{Button, ButtonVariants as _},
+    h_flex, v_flex, ActiveTheme, IconName, Selectable as _, Sizable as _,
+};
 
 /// Width GPUI's `draw_roots` carves off the workspace's root layout
 /// while the inspector is open — `rems(30.0).to_pixels(rem_size)`.
@@ -76,103 +80,131 @@ pub(crate) fn inspector_pane_width(window: &Window) -> Pixels {
 /// it cleanly.
 pub fn render_tolaria_inspector(
     inspector: &mut Inspector,
-    _window: &mut Window,
+    window: &mut Window,
     cx: &mut Context<Inspector>,
 ) -> AnyElement {
-    // Auto-enable picking so the user doesn't have to find a "start"
-    // button — Cmd+Alt+I → hover any element → "Active element" row
-    // populates.  `start_picking` flips a `bool` on the entity;
-    // calling it when already picking is a no-op (cheap to run on
-    // every paint).
-    if !inspector.is_picking() {
-        inspector.start_picking();
-    }
-
     let theme = cx.theme();
     let bg = theme.background;
     let border = theme.border;
     let fg = theme.foreground;
-    let muted = theme.muted_foreground;
 
-    let header = div()
-        .flex()
-        .flex_row()
-        .items_center()
+    // Header strip — picker toggle on the left, "GPUI Inspector"
+    // label on the right.  Mirrors Zed's `inspector_ui::inspector::
+    // render_inspector` toolbar (the panel built by Zed the user
+    // referred to in worklist 10.1.4 — "blocker: restore native GPUI
+    // inspector panel functionality inside inspector view").  We use
+    // a `gpui_component::Button` instead of Zed's `IconButton` since
+    // Tolaria's chrome standardises on the gpui_component primitives;
+    // visually equivalent (icon-only ghost button toggling between
+    // un-selected and selected states).
+    let pick_btn = Button::new("inspector-pick-toggle")
+        .icon(IconName::Inspector)
+        .ghost()
+        .small()
+        .selected(inspector.is_picking())
+        .on_click(cx.listener(|this, _event, window, _cx| {
+            this.start_picking();
+            window.refresh();
+        }));
+    let header = h_flex()
         .justify_between()
-        .px(px(10.0))
-        .py(px(8.0))
+        .items_center()
+        .px(px(8.0))
+        .py(px(4.0))
+        .h(px(36.0))
         .border_b_1()
         .border_color(border)
+        .child(pick_btn)
         .child(
             div()
-                .text_color(fg)
                 .text_sm()
-                .child(SharedString::new_static("Inspector — Tolaria")),
-        )
-        .child(
-            div()
-                .text_color(muted)
-                .text_xs()
-                .child(SharedString::new_static("⌘⌥I to close")),
+                .text_color(fg)
+                .child(SharedString::new_static("GPUI Inspector")),
         );
 
-    let (picking_label, picking_color) = if inspector.is_picking() {
-        (
-            SharedString::new_static("Picking: ON — hover an element"),
-            fg,
-        )
-    } else {
-        (SharedString::new_static("Picking: OFF"), muted)
-    };
-    let picking_row = div()
-        .px(px(10.0))
-        .py(px(6.0))
-        .text_xs()
-        .text_color(picking_color)
-        .child(picking_label);
+    // Body — element-ID metadata block followed by every per-element-
+    // type renderer registered via `cx.register_inspector_element`.
+    // Today no type-renderers are registered (porting Zed's
+    // `DivInspector` would pull in `project::Project` + LSP), so
+    // `render_inspector_states` returns an empty `Vec`; the panel
+    // gracefully degrades to "element ID only".  When future code
+    // registers element renderers (e.g. a stripped-down DivInspector)
+    // they slot in below the ID block automatically.
+    let active_id = inspector.active_element_id().cloned();
+    let element_states = inspector.render_inspector_states(window, cx);
+    let body = v_flex()
+        .id("tolaria-inspector-body")
+        .size_full()
+        .overflow_y_scroll()
+        .gap(px(8.0))
+        .px(px(8.0))
+        .py(px(8.0))
+        .when_some(active_id, |this, id: InspectorElementId| {
+            this.child(render_element_id_block(&id, cx))
+        })
+        .children(element_states);
 
-    let active_row = match inspector.active_element_id() {
-        Some(id) => {
-            let global_id_text: SharedString = format!("{:?}", id.path.global_id).into();
-            let source_text: SharedString = format!(
-                "{}:{}",
-                id.path.source_location.file(),
-                id.path.source_location.line()
-            )
-            .into();
-            div()
-                .px(px(10.0))
-                .py(px(6.0))
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(fg)
-                        .child(SharedString::new_static("Active element")),
-                )
-                .child(div().text_xs().text_color(muted).child(global_id_text))
-                .child(div().text_xs().text_color(muted).child(source_text))
-        }
-        None => div()
-            .px(px(10.0))
-            .py(px(6.0))
-            .text_xs()
-            .text_color(muted)
-            .child(SharedString::new_static("No element selected")),
-    };
-
-    div()
+    v_flex()
         .size_full()
         .bg(bg)
         .text_color(fg)
-        .flex()
-        .flex_col()
         .child(header)
-        .child(picking_row)
-        .child(active_row)
+        .child(body)
         .into_any_element()
+}
+
+/// Element-ID metadata block — "Element ID / Instance N" / source
+/// location / global id.  Mirrors the shape of Zed's
+/// `render_inspector_id` (`inspector_ui::inspector::render_inspector_id`)
+/// without the Zed-CLI "click to open by running Zed CLI" affordance
+/// (Tolaria doesn't ship a CLI to forward to).  Read-only display —
+/// the picker keeps populating this on hover when picking is enabled.
+fn render_element_id_block(id: &InspectorElementId, cx: &App) -> gpui::Div {
+    let theme = cx.theme();
+    let fg = theme.foreground;
+    let muted = theme.muted_foreground;
+    let panel_bg = theme.muted;
+
+    let source_location: SharedString = format!(
+        "{}:{}",
+        id.path.source_location.file(),
+        id.path.source_location.line()
+    )
+    .into();
+    let global_id: SharedString = id.path.global_id.to_string().into();
+    let instance: SharedString = format!("Instance {}", id.instance_id).into();
+
+    v_flex()
+        .gap(px(4.0))
+        .child(
+            h_flex()
+                .justify_between()
+                .items_center()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(fg)
+                        .child(SharedString::new_static("Element ID")),
+                )
+                .child(div().text_xs().text_color(muted).child(instance)),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(fg)
+                .bg(panel_bg)
+                .px(px(6.0))
+                .py(px(3.0))
+                .rounded(px(3.0))
+                .child(source_location),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .min_h(px(40.0))
+                .child(global_id),
+        )
 }
 
 /// Process-global flag tracking whether the workspace's GPUI
